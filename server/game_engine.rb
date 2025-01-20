@@ -29,7 +29,7 @@ class GameEngine
     input
   end
 
-  def substitute_alias(alias_value, args, offset = -1)
+  def substitute_alias(alias_value, args, offset = 1)
     alias_value.gsub(/%(?<index>\d+)/) do
       args[Regexp.last_match[:index].to_i - offset]
     end
@@ -77,11 +77,11 @@ class GameEngine
         if action.transform
           args = args.map { |arg| action.transform.call(arg) }
         end
-        commands = parse(substitute_alias(action.command, args, 0))
+        commands = substitute_alias(action.command, args, 0)
         if action.button
-          line.buttons += commands
+          line.buttons += commands.split(';')
         else
-          line.commands += commands
+          line.commands += parse(commands)
         end
         break if action.final
       end
