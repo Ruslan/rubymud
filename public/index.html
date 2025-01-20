@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WebSocket App</title>
+  <script src="https://cdn.jsdelivr.net/npm/ansi_up@5.0.0/ansi_up.min.js"></script>
+  <script src="https://unpkg.com/hotkeys-js/dist/hotkeys.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;700&display=swap" rel="stylesheet">
+  <style>
+    body {
+      font-family: 'Fira Code', monospace; /* Apply Fira Code font */
+      background-color: #2e2e2e; /* Dark background to mimic terminal */
+      color: #f5f5f5; /* Light text color */
+      line-height: 1.5; /* Increase line height for readability */
+      margin: 0;
+      padding: 5px;
+    }
+    .output {
+      white-space: pre-wrap; /* Keep line breaks and spaces */
+      font-size: 16px; /* Set font size for better readability */
+      word-wrap: break-word; /* Prevent long words from overflowing */
+    }
+    .container {
+      display: flex;
+      height: 100vh; /* Full viewport height */
+    }
+
+    .left-column {
+      display: flex;
+      flex-direction: column;
+      width: 80%; /* 80% of the container width */
+    }
+
+    .top-section {
+      flex-grow: 1;
+      padding: 10px;
+      overflow: scroll;
+    }
+
+    .bottom-section {
+      height: 40px;
+      padding: 10px;
+    }
+
+    .right-column {
+      display: flex;
+      flex-direction: column;
+      width: 20%; /* 20% of the container width */
+    }
+
+    .section {
+      flex-grow: 1;
+      padding: 10px;
+      border-bottom: 1px solid #ccc;
+    }
+    .section:last-child {
+      border-bottom: none; /* No border on the last section */
+    }
+
+    #main_output {
+      height: 100%;
+      font-size: 80%;
+    }
+
+    input#input-text {
+      width: 100%; /* Full width */
+      height: 40px; /* Adjusted height */
+      padding: 10px 15px; /* Good padding for top/bottom and sides */
+      font-family: 'Fira Code', monospace; /* Apply Fira Code font */
+      background-color: #2e2e2e; /* Dark background to mimic terminal */
+      color: #f5f5f5; /* Light text color */
+      border: 1px solid #444; /* Subtle border */
+      border-radius: 5px; /* Rounded corners */
+      font-size: 16px; /* Adjust font size for readability */
+      box-sizing: border-box; /* Include padding and border in the element's total width/height */
+    }
+
+    input#input-text:focus {
+      outline: none; /* Remove default focus outline */
+      border-color: #4e9f3d; /* Greenish focus border (like terminal) */
+    }
+
+    .server-line__hint {
+      font-size: 80%;
+      color: #aaa;
+      font-style: italic;
+    }
+
+    .client-line {
+      font-size: 80%;
+      color: #aaa;
+      font-style: italic;
+    }
+
+    .server-line__button {
+      display: inline-block; /* Makes it an inline element while behaving like a button */
+      padding: 1px 10px; /* Add some padding for a button-like appearance */
+      border: 1px solid #f5f5f5; /* Light border for contrast */
+      border-radius: 4px; /* Rounded corners */
+      background-color: #4a4a4a; /* Slightly lighter than the container for distinction */
+      color: #f5f5f5; /* Matches the container's text color */
+      text-decoration: none; /* Remove underline */
+      font-size: 70%; /* Font size */
+      cursor: pointer; /* Pointer cursor for interactivity */
+      transition: background-color 0.2s, color 0.2s, border-color 0.2s; /* Smooth transition for hover/active states */
+    }
+
+    .server-line__button:hover {
+      background-color: #5c5c5c; /* Lighter gray for hover effect */
+      color: #ffffff; /* Slightly brighter text on hover */
+      border-color: #ffffff; /* Brighter border for hover effect */
+    }
+
+    .server-line__button:active {
+      background-color: #707070; /* Even lighter gray for pressed effect */
+      color: #ffffff; /* Keep brighter text */
+      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5); /* Add inset shadow for a pressed effect */
+    }
+
+    .server-line__button_disabled {
+      border: 1px solid #4a4a4a; /* Dull border to indicate disabled state */
+      background-color: #2e2e2e; /* Match the container background */
+      color: #6c6c6c; /* Gray text to signify inactivity */
+      opacity: 0.6; /* Reduced opacity for a disabled effect */
+      pointer-events: none; /* Disable interactions */
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <div class="left-column">
+      <div class="top-section">
+        <div class="output" id="main_output"></div>
+      </div>
+      <div class="bottom-section">
+        <input type="text" id="input-text">
+      </div>
+    </div>
+    <div class="right-column">
+      <div class="section">Section 1</div>
+      <div class="section">Section 2</div>
+      <div class="section">Section 3</div>
+    </div>
+  </div>
+
+  <script>
+    const ansiUp = new AnsiUp();
+    const mainOut = document.getElementById('main_output');
+
+    // Initialize history and current input
+    let history = [];
+    let historyIndex = -1;
+    let autoButtons = [];
+    let autoButtonsIndex = 0;
+
+    function configure(config){
+      hotkeys.unbind()
+      config['keys'].forEach((key) => {
+        hotkeys(key[0], function (event, handler) {
+          event.preventDefault();
+          SendToServer(key[1])
+        })
+      });
+
+      [...Array(10).keys()].forEach(i => {
+        hotkeys(`alt+${i}`, () => {
+          event.preventDefault();
+          clickAutoButton(i);
+        });
+      })
+    }
+
+    // Connect to WebSocket server
+    const socket = new WebSocket('ws://localhost:4567/ws');
+
+    // Handle messages from the server
+    socket.onmessage = function (event) {
+      console.log('Received:', event.data);
+      data = JSON.parse(event.data)
+      if (data.method == "config") {
+        configure(data.value)
+      } else if (data.method == "output") {
+        console.info('output', data.value)
+        data.value.forEach(line => {
+          const text = line.line
+          const htmlOutput = text ? ansiUp.ansi_to_html(text) : '&nbsp;'
+          const div = document.createElement("div")
+          div.classList.add("server-line")
+          div.innerHTML = htmlOutput
+          if (line.commands.length > 0) {
+            line.commands.forEach(command => {
+              const spanHint = document.createElement("span")
+              spanHint.classList.add("server-line__hint")
+              spanHint.innerText = `-> ${command}`
+              div.append(spanHint)
+            });
+          }
+          if (line.buttons.length > 0) {
+            line.buttons.forEach(command => {
+              const spanHint = document.createElement("span")
+              spanHint.classList.add("server-line__button")
+              autoButtonsIndex = (autoButtonsIndex + 1) % 10
+              spanHint.innerText = `[alt+${autoButtonsIndex}] ${command}`
+              const handler = () => {
+                if (spanHint.classList.contains("server-line__button_disabled")) return
+                SendToServer(command)
+                spanHint.classList.add("server-line__button_disabled")
+                setTimeout(() => spanHint.classList.remove("server-line__button_disabled"), 1000)
+              }
+              spanHint.addEventListener("click", handler)
+              autoButtons[autoButtonsIndex] = handler
+              div.append(spanHint)
+            });
+          }
+          MainAppend(div)
+        });
+      }
+    };
+
+    // Handle connection open
+    socket.onopen = function () {
+      console.log('Connected to WebSocket server.');
+    };
+
+    // Handle connection close
+    socket.onclose = function () {
+      console.log('Disconnected from WebSocket server.');
+    };
+
+    // Handle errors
+    socket.onerror = function (error) {
+      console.error('WebSocket error:', error);
+    };
+
+    function SendToServer(value) {
+      socket.send(JSON.stringify({ method: "send", value: value }))
+
+      const div = document.createElement("div")
+      div.classList.add("client-line")
+      div.innerText = `-> ${value}`
+      MainAppend(div)
+    }
+
+    function MainAppend(div) {
+      const shouldScroll = Math.abs(mainOut.parentNode.scrollTop - (mainOut.scrollHeight - mainOut.parentNode.offsetHeight)) < 20;
+      mainOut.append(div)
+      if (shouldScroll) {
+        mainOut.parentNode.scrollTop = mainOut.scrollHeight;
+      }
+    }
+
+    // Function to send the text (you'll define how SendText behaves)
+    function SendText(value) {
+      console.log('Sending text:', value);
+      // Add value to history
+      history.push(value);
+      historyIndex = history.length; // Reset history index after sending text
+      SendToServer(value)
+    }
+
+    function clickAutoButton(i) {
+      if (autoButtons[i]) {
+        autoButtons[i]()
+      }
+    }
+
+    // Function to handle history up (ArrowUp)
+    function historyUp(currentValue) {
+      if (historyIndex > 0) {
+        historyIndex--;
+        return history[historyIndex];
+      }
+      return currentValue;
+    }
+
+    // Function to handle history down (ArrowDown)
+    function historyDown(currentValue) {
+      if (historyIndex < history.length - 1) {
+        historyIndex++;
+        return history[historyIndex];
+      }
+      return currentValue;
+    }
+
+    // Function to handle search in history (Ctrl+R)
+    async function searchHistory(currentValue) {
+      // This is a placeholder, you can define your search behavior here
+      // For now, let's just log the search attempt
+      console.log('Searching history for:', currentValue);
+      return currentValue; // You can modify this to return the search result
+    }
+
+    hotkeys.filter = function (event) {
+      return true;
+    }
+
+    // Attach event handlers to the input field
+    document.getElementById('input-text').addEventListener('keydown', async function (event) {
+      const inputField = event.target;
+
+      // 1. On Enter, clear text and run SendText(value)
+      if (event.key === 'Enter') {
+        const value = inputField.value;
+        inputField.value = ''; // Clear the input field
+        SendText(value); // Send the text
+      }
+
+      // 2. On Arrow Up, update value from history
+      if (event.key === 'ArrowUp') {
+        const currentValue = inputField.value;
+        inputField.value = historyUp(currentValue); // Update with the previous history value
+      }
+
+      // 3. On Arrow Down, update value from history
+      if (event.key === 'ArrowDown') {
+        const currentValue = inputField.value;
+        inputField.value = historyDown(currentValue); // Update with the next history value
+      }
+
+      // 4. On Ctrl+R, search history
+      if (event.ctrlKey && event.key === 'r') {
+        const currentValue = inputField.value;
+        inputField.value = await searchHistory(currentValue); // Perform search in history
+      }
+    });
+  </script>
+</body>
+
+</html>
