@@ -191,7 +191,7 @@
       } else if (data.method == "output") {
         console.info('output', data.value)
         data.value.forEach(line => {
-          const text = line.line.replace(/</g, '&lt;')
+          const text = line.line
           const htmlOutput = line.pure_line ? ansiUp.ansi_to_html(text) : '&nbsp;'
           const div = document.createElement("div")
           div.classList.add("server-line")
@@ -264,6 +264,7 @@
       // Add value to history
       history.push(value);
       historyIndex = history.length; // Reset history index after sending text
+      saveHistory()
       SendToServer(value)
     }
 
@@ -273,22 +274,50 @@
       }
     }
 
+    function saveHistory() {
+      localStorage.setItem('commandHistory', JSON.stringify(history));
+    }
+
+    function loadHistory() {
+      const storedHistory = localStorage.getItem('commandHistory');
+      if (storedHistory) {
+        history = JSON.parse(storedHistory);
+        historyIndex = history.length; // Set the index to the end of the restored history
+      }
+    }
+
+    loadHistory()
+
     // Function to handle history up (ArrowUp)
     function historyUp(currentValue) {
-      if (historyIndex > 0) {
-        historyIndex--;
-        return history[historyIndex];
+      if (historyDirection == 1) { historyViewed = [] }
+      historyDirection = -1
+      // Start searching from the current history index
+      for (let i = historyIndex - 1; i >= 0; i--) {
+        if (history[i].startsWith(currentValue) && !historyViewed.includes(history[i])) {
+          historyIndex = i; // Update the history index
+          historyViewed.push(history[historyIndex])
+          return history[historyIndex]; // Return the matched command
+        }
       }
-      return currentValue;
+      historyIndex = 0; // Reset to the begin if no match is found
+      return currentValue; // Return the current value if no match is found
     }
 
     // Function to handle history down (ArrowDown)
     function historyDown(currentValue) {
-      if (historyIndex < history.length - 1) {
-        historyIndex++;
-        return history[historyIndex];
+      if (historyDirection == -1) { historyViewed = [] }
+      historyDirection = 1
+      // Start searching from the current history index
+      for (let i = historyIndex + 1; i < history.length; i++) {
+        if (history[i].startsWith(currentValue) && !historyViewed.includes(history[i])) {
+          historyIndex = i; // Update the history index
+          historyViewed.push(history[historyIndex])
+          return history[historyIndex]; // Return the matched command
+        }
       }
-      return currentValue;
+      historyIndex = history.length; // Reset to the end if no match is found
+      return currentValue; // Return the current value if no match is found
     }
 
     // Function to handle search in history (Ctrl+R)
@@ -303,9 +332,16 @@
       return true;
     }
 
+    let historyValue = null
+    let historyViewed = []
+    let historySearch = false
+    let historyDirection = null
+
     // Attach event handlers to the input field
     document.getElementById('input-text').addEventListener('keydown', async function (event) {
       const inputField = event.target;
+      const currentValue = inputField.value;
+      let isHistorySearch = false
 
       // 1. On Enter, clear text and run SendText(value)
       if (event.key === 'Enter') {
@@ -316,20 +352,40 @@
 
       // 2. On Arrow Up, update value from history
       if (event.key === 'ArrowUp') {
-        const currentValue = inputField.value;
-        inputField.value = historyUp(currentValue); // Update with the previous history value
+        isHistorySearch = true
+        inputField.value = historyUp(historyValue ||currentValue); // Update with the previous history value
+
+        const length = inputField.value.length;
+        inputField.setSelectionRange(length, length);
+        event.preventDefault()
       }
 
       // 3. On Arrow Down, update value from history
       if (event.key === 'ArrowDown') {
-        const currentValue = inputField.value;
-        inputField.value = historyDown(currentValue); // Update with the next history value
+        isHistorySearch = true
+        inputField.value = historyDown(historyValue || currentValue); // Update with the next history value
+        const length = inputField.value.length;
+        inputField.setSelectionRange(length, length);
+        event.preventDefault()
       }
 
       // 4. On Ctrl+R, search history
       if (event.ctrlKey && event.key === 'r') {
-        const currentValue = inputField.value;
+        isHistorySearch = true
         inputField.value = await searchHistory(currentValue); // Perform search in history
+        const length = inputField.value.length;
+        inputField.setSelectionRange(length, length);
+        event.preventDefault()
+      }
+
+      if (isHistorySearch) {
+        historyValue = historyValue || currentValue
+      } else {
+        historyValue = null
+        historyIndex = history.length
+        historySearch = false
+        historyViewed = []
+        historyDirection = null
       }
     });
   </script>
