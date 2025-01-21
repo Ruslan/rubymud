@@ -1,10 +1,9 @@
 require 'bundler'
 Bundler.require
 
-require './server/mud_client.rb'
-require './server/configurable.rb'
-require './server/game_engine.rb'
-require './server/web_server.rb'
+loader = Zeitwerk::Loader.new
+loader.push_dir(File.join(__dir__, 'server'))
+loader.setup
 
 config_file = File.exist?('./config.rb') ? './config.rb' : './config.example.rb'
 require config_file

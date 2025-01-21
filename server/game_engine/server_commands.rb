@@ -8,13 +8,21 @@ module GameEngine::ServerCommands
   def out_transfrom_line(line_str)
     line = GameEngine::ServerLineParsed.new(line_str)
     config.acts.each do |action|
+
       if line.pure_line =~ action.regexp
-        # TODO: support of block?
+        # Retrive arguments and prepare it
         args = Regexp.last_match.to_a
         if action.transform
           args = args.map { |arg| action.transform.call(arg) }
         end
-        commands = substitute_alias(action.command, args, 0)
+
+        commands = []
+        if action.block
+          commands = vm.instance_exec(&action.block)
+        elsif action.command
+          commands = substitute_alias(action.command, args, 0)
+        end
+
         if action.button
           line.buttons += commands.split(';')
         else
@@ -22,6 +30,7 @@ module GameEngine::ServerCommands
         end
         break if action.final
       end
+
       # TODO: Can transform lines here
     end
     line

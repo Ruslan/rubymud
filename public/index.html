@@ -183,10 +183,15 @@
       data = JSON.parse(event.data)
       if (data.method == "config") {
         configure(data.value)
+      } else if (data.method == "echo") {
+        const div = document.createElement("div")
+        div.classList.add("echo-line")
+        div.innerText = data.value
+        MainAppend(div)
       } else if (data.method == "output") {
         console.info('output', data.value)
         data.value.forEach(line => {
-          const text = line.line
+          const text = line.line.replace(/</g, '&lt;')
           const htmlOutput = line.pure_line ? ansiUp.ansi_to_html(text) : '&nbsp;'
           const div = document.createElement("div")
           div.classList.add("server-line")

@@ -19,7 +19,11 @@ module Configurable
   end
 
   def aliass(name, command = nil, &block)
-    aliases[name] = [command, block]
+    alias_object = Alias.new
+    alias_object.name = name
+    alias_object.command = command
+    alias_object.block = block
+    aliases[name] = alias_object
   end
 
   def variables
@@ -28,10 +32,6 @@ module Configurable
 
   def var(key, value)
     variables[key] = value
-  end
-
-  class Action
-    attr_accessor :regexp, :command, :final, :button, :block, :transform
   end
 
   def acts

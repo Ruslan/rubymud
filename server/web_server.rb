@@ -5,6 +5,9 @@ class WebServer
   def initialize
     @websockets = []
     @game_engine = GameEngine.new
+    @game_engine.on_echo do |string|
+      broadcast({method: "echo", value: string}.to_json)
+    end
   end
 
   def setup(ws)

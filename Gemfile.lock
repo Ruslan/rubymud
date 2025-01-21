@@ -41,6 +41,7 @@ GEM
       base64
       websocket-extensions (>= 0.1.0)
     websocket-extensions (0.1.5)
+    zeitwerk (2.7.1)
 
 PLATFORMS
   arm64-darwin-23
@@ -53,6 +54,7 @@ DEPENDENCIES
   rackup (~> 2.2)
   sinatra
   webrick
+  zeitwerk
 
 BUNDLED WITH
    2.5.17

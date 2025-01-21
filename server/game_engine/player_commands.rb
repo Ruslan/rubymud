@@ -1,6 +1,7 @@
 module GameEngine::PlayerCommands
   # Parse client command to real server command
   def parse(user_input)
+    return [] unless user_input
     user_input.split(';').flat_map do |input|
       parse_line(substitute_vars(input))
     end
@@ -10,11 +11,11 @@ module GameEngine::PlayerCommands
   def parse_line(input)
     cmd, *args = input.split(/\s+/)
     if config.aliases[cmd]
-      alias_value, alias_block = config.aliases[cmd]
-      if alias_block
-        alias_block.call(self, args)
+      aliass = config.aliases[cmd]
+      if aliass.block
+        parse(vm.instance_exec(*args, &aliass.block))
       else
-        parse(substitute_alias(alias_value, args))
+        parse(substitute_alias(aliass.command, args))
       end
     else
       input
@@ -31,7 +32,7 @@ module GameEngine::PlayerCommands
 
   def substitute_vars(string)
     string.gsub(/\$(?<var>[[:word:]]+)/) do
-      config.variables[Regexp.last_match[:var]]
+      vm.variables[Regexp.last_match[:var]]
     end
   end
 end

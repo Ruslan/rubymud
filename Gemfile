@@ -8,6 +8,7 @@ source "https://rubygems.org"
 gem 'webrick'
 gem 'faye-websocket'
 gem 'sinatra'
+gem 'zeitwerk'
 
 gem "rackup", "~> 2.2"
 gem "puma", "~> 6.5"
