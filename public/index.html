@@ -187,7 +187,7 @@
         console.info('output', data.value)
         data.value.forEach(line => {
           const text = line.line
-          const htmlOutput = text ? ansiUp.ansi_to_html(text) : '&nbsp;'
+          const htmlOutput = line.pure_line ? ansiUp.ansi_to_html(text) : '&nbsp;'
           const div = document.createElement("div")
           div.classList.add("server-line")
           div.innerHTML = htmlOutput

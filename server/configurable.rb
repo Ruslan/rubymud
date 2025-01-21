@@ -1,4 +1,11 @@
 module Configurable
+  def self.extended(base)
+    base.instance_variable_set(:@keys, {})
+    base.instance_variable_set(:@aliases, {})
+    base.instance_variable_set(:@variables, {})
+    base.instance_variable_set(:@acts, [])
+  end
+
   def keys
     @keys ||= {}
   end
