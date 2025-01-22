@@ -175,7 +175,7 @@
     }
 
     // Connect to WebSocket server
-    const socket = new WebSocket('ws://localhost:4567/ws');
+    const socket = new WebSocket('/ws');
 
     // Handle messages from the server
     socket.onmessage = function (event) {

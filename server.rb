@@ -10,38 +10,49 @@ require config_file
 
 web_server = WebServer.new
 
-get '/' do
-  File.read('public/index.html')
-end
+class MyApp < Sinatra::Base
+  configure do
+    set :web_server, nil
+    set :host_authorization, { permitted_hosts: [] }
+  end
 
-get '/ws' do
-  if Faye::WebSocket.websocket?(request.env)
-    ws = Faye::WebSocket.new(request.env)
+  def web_server
+    settings.web_server
+  end
 
-    ws.on(:open) do |event|
-      web_server.websockets << ws
-      web_server.reload
-      web_server.setup(ws)
-      web_server.restore_history
-    end
+  get '/' do
+    File.read('public/index.html')
+  end
 
-    ws.on(:message) do |msg|
-      puts "WS input: #{msg.data}"
-      begin
-        web_server.incoming(JSON.parse(msg.data))
-      rescue StandardError => e
-        puts "Error: #{e.inspect}"
-        puts e.backtrace
+  get '/ws' do
+    if Faye::WebSocket.websocket?(request.env)
+      ws = Faye::WebSocket.new(request.env)
+
+      ws.on(:open) do |event|
+        web_server.websockets << ws
+        web_server.reload
+        web_server.setup(ws)
+        web_server.restore_history
       end
-    end
 
-    ws.on(:close) do |event|
-      web_server.websockets.delete(ws)
-    end
+      ws.on(:message) do |msg|
+        puts "WS input: #{msg.data}"
+        begin
+          web_server.incoming(JSON.parse(msg.data))
+        rescue StandardError => e
+          puts "Error: #{e.inspect}"
+          puts e.backtrace
+        end
+      end
 
-    ws.rack_response
-  else
-    erb :index
+      ws.on(:close) do |event|
+        web_server.websockets.delete(ws)
+      end
+
+      ws.rack_response
+    else
+      'Socket not supported'
+    end
   end
 end
 
@@ -54,3 +65,6 @@ Thread.new do
   end
   mud.connect
 end
+
+MyApp.settings.web_server = web_server
+MyApp.run!
