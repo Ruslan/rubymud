@@ -1,5 +1,5 @@
   class GameEngine::ServerLineParsed
-    attr_accessor :commands, :buttons
+    attr_accessor :commands, :buttons, :window
     attr_reader :pure_line, :line
 
     def initialize(line, commands: [], buttons: [])
@@ -14,6 +14,6 @@
     end
 
     def as_json
-      { line:, commands:, buttons:, pure_line: }
+      { line:, commands:, buttons:, pure_line:, window: }
     end
   end

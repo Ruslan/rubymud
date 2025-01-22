@@ -10,6 +10,8 @@ require config_file
 
 web_server = WebServer.new
 
+use Rack::Static, urls: ["/assets"], root: "public/assets"
+
 class MyApp < Sinatra::Base
   configure do
     set :web_server, nil

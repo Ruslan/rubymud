@@ -11,7 +11,21 @@ class GameEngine::Vm
   attr_reader :engine, :variables
 
   def echo(string)
-    engine.echo(string)
+    engine.echo(:default, string)
+    nil
+  end
+
+  def wecho(window, string)
+    engine.echo(window, string)
+    nil
+  end
+
+  def say(str, voice = 'Milena')
+    Thread.new do
+      IO.popen("say -v '#{voice}'", "w+") do |io|
+        io.write(str)
+      end
+    end
   end
 
   # Handles undefined methods dynamically

@@ -45,6 +45,7 @@ module Configurable
     action.final = options[:final]
     action.button = options[:button]
     action.transform = options[:transform]
+    action.window = options[:window]
     action.block = block
     acts.push(action)
   end

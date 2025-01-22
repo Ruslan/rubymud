@@ -14,8 +14,10 @@ module GameEngine::Vmable
     @echo_handlers << block
   end
 
-  def echo(string)
+  def echo(window, string)
     message = substitute_vars(string)
+    message = GameEngine::ServerLineParsed.new(message)
+    message.window = window
     @echo_handlers&.each do |handler|
       handler.call(message)
     end

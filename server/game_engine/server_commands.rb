@@ -16,9 +16,15 @@ module GameEngine::ServerCommands
           args = args.map { |arg| action.transform.call(arg) }
         end
 
-        commands = []
+        commands = ''
         if action.block
-          commands = vm.instance_exec(&action.block)
+          commands = if action.block.parameters.size == 2
+            vm.instance_exec(line, args, &action.block)
+          elsif action.block.parameters.size == 1
+            vm.instance_exec(args, &action.block)
+          else
+            vm.instance_exec(&action.block)
+          end
         elsif action.command
           commands = substitute_alias(action.command, args, 0)
         end
@@ -27,6 +33,10 @@ module GameEngine::ServerCommands
           line.buttons += commands.split(';')
         else
           line.commands += parse(commands)
+        end
+
+        if action.window
+          line.window = action.window
         end
         break if action.final
       end
