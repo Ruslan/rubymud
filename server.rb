@@ -34,6 +34,7 @@ class MyApp < Sinatra::Base
         web_server.websockets << ws
         web_server.reload
         web_server.setup(ws)
+        web_server.restore_log
         web_server.restore_history
       end
 

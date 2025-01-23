@@ -18,12 +18,10 @@ module GameEngine::ServerCommands
 
         commands = ''
         if action.block
-          commands = if action.block.parameters.size == 2
-            vm.instance_exec(line, args, &action.block)
-          elsif action.block.parameters.size == 1
-            vm.instance_exec(args, &action.block)
+          commands = if action.block.parameters[0] && action.block.parameters[0][1] == :line
+            vm.instance_exec(line, *args, &action.block)
           else
-            vm.instance_exec(&action.block)
+            vm.instance_exec(*args, &action.block)
           end
         elsif action.command
           commands = substitute_alias(action.command, args, 0)

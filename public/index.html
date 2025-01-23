@@ -11,6 +11,7 @@
   <link rel="stylesheet" href="/assets/css/style.css">
   <script src="/assets/js/buffers.js"></script>
   <script src="/assets/js/input_history.js"></script>
+  <script src="/assets/js/input_field.js"></script>
 </head>
 
 <body>
@@ -27,12 +28,24 @@
       <div class="section">
         <div class="section__buffer-select"><select class="window-changer">
           <option value="">-</option>
-          <option value="test1">test1</option>
+          <option value="test1" selected>test1</option>
         </select></div>
         <div class="output-wrapper"></div>
       </div>
-      <div class="section">Section 2</div>
-      <div class="section">Section 3</div>
+      <div class="section">
+        <div class="section__buffer-select"><select class="window-changer">
+            <option value="">-</option>
+            <option value="chat" selected>chat</option>
+          </select></div>
+        <div class="output-wrapper"></div>
+      </div>
+      <div class="section">
+        <div class="section__buffer-select"><select class="window-changer">
+            <option value="">-</option>
+            <option value="battle" selected>battle</option>
+          </select></div>
+        <div class="output-wrapper"></div>
+      </div>
     </div>
   </div>
 
@@ -40,30 +53,17 @@
     const ansiUp = new AnsiUp();
     const buffers = new Buffers()
     const history = new InputHistory()
+    const inputField = new InputField(history)
 
     let autoButtons = [];
     let autoButtonsIndex = 0;
-
-    function showWindow(select) {
-      let wrap = select.closest(".section").querySelector('.output-wrapper')
-      let currentOut = wrap.querySelector('.output')
-      if (currentOut) wrap.removeChild(currentOut)
-      if (select.value && buffers.getBuffer(select.value)) {
-        wrap.append(buffers.getBuffer(select.value))
-      }
-    }
-
-    document.querySelectorAll('.window-changer').forEach((e) => {
-      e.addEventListener('change', () => { showWindow(e) })
-      showWindow(e)
-    })
 
     function configure(config){
       hotkeys.unbind()
       config['keys'].forEach((key) => {
         hotkeys(key[0], function (event, handler) {
           event.preventDefault();
-          SendToServer(key[1])
+          SendToServer(key[1], 'key')
         })
       });
 
@@ -80,15 +80,12 @@
 
     // Handle messages from the server
     socket.onmessage = function (event) {
-      console.log('Received:', event.data);
+      // console.log('Received:', event.data);
       data = JSON.parse(event.data)
       if (data.method == "config") {
         configure(data.value)
-      } else if (data.method == "echo") {
-        // const div = document.createElement("div")
-        // div.classList.add("echo-line")
-        // div.innerText = data.value
-        // MainAppend('default', div)
+      } else if (data.method == "history") {
+        history.merge(data.value)
       } else if (data.method == "output") {
         // console.info('output', data.value)
         data.value.forEach(line => {
@@ -115,7 +112,7 @@
               spanHint.innerText = `[alt+${autoButtonsIndex}] ${command}`
               const handler = () => {
                 if (spanHint.classList.contains("server-line__button_disabled")) return
-                SendToServer(command)
+                SendToServer(command, 'abutton')
                 spanHint.classList.add("server-line__button_disabled")
                 setTimeout(() => spanHint.classList.remove("server-line__button_disabled"), 1000)
               }
@@ -144,8 +141,8 @@
       console.error('WebSocket error:', error);
     };
 
-    function SendToServer(value) {
-      socket.send(JSON.stringify({ method: "send", value: value }))
+    function SendToServer(value, source) {
+      socket.send(JSON.stringify({ method: "send", value: value, source: source }))
 
       const div = document.createElement("div")
       div.classList.add("client-line")
@@ -158,7 +155,7 @@
       console.log('Sending text:', value);
       // Add value to history
       history.push(value);
-      SendToServer(value)
+      SendToServer(value, 'input')
     }
 
     function clickAutoButton(i) {
@@ -170,45 +167,6 @@
     hotkeys.filter = function (event) {
       return true;
     }
-
-    // Attach event handlers to the input field
-    document.getElementById('input-text').addEventListener('keydown', async function (event) {
-      const inputField = event.target;
-      const currentValue = inputField.value;
-
-      // 1. On Enter, clear text and run SendText(value)
-      if (event.key === 'Enter') {
-        const value = inputField.value;
-        inputField.value = ''; // Clear the input field
-        SendText(value); // Send the text
-      }
-
-      // 2. On Arrow Up, update value from history
-      if (event.key === 'ArrowUp') {
-        inputField.value = history.up(currentValue); // Update with the previous history value
-
-        const length = inputField.value.length;
-        inputField.setSelectionRange(length, length);
-        event.preventDefault()
-      }
-
-      // 3. On Arrow Down, update value from history
-      if (event.key === 'ArrowDown') {
-        inputField.value = history.down(currentValue); // Update with the next history value
-        const length = inputField.value.length;
-        inputField.setSelectionRange(length, length);
-        event.preventDefault()
-      }
-
-      // 4. On Ctrl+R, search history
-      if (event.ctrlKey && event.key === 'r') {
-        isHistorySearch = true
-        inputField.value = await searchHistory(currentValue); // Perform search in history
-        const length = inputField.value.length;
-        inputField.setSelectionRange(length, length);
-        event.preventDefault()
-      }
-    });
   </script>
 </body>
 

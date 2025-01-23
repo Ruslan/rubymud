@@ -1,8 +1,8 @@
 class InputHistory {
-  constructor(skipLoad) {
+  constructor() {
     this.history = [];
     this.historyIndex = -1;
-    if (!skipLoad) this.loadHistory()
+    this.loadHistory()
 
     this.historyValue = null
     this.historyViewed = []
@@ -13,11 +13,22 @@ class InputHistory {
   push(value) {
     this.history.push(value)
     this.historyIndex = this.history.length; // Reset history index after sending text
+    this.historyViewed = []
     this.saveHistory()
   }
 
   saveHistory() {
-    localStorage.setItem('commandHistory', JSON.stringify(this.history));
+    if (this.historyLoaded) {
+      localStorage.setItem('commandHistory', JSON.stringify(this.history));
+    }
+  }
+
+  merge(remoteHistory) {
+    this.history = [...this.history, ...remoteHistory].filter((value, index, self) => {
+      return self.indexOf(value) === index;
+    });
+    this.historyIndex = this.history.length;
+    this.historyViewed = []
   }
 
   loadHistory() {
@@ -26,6 +37,7 @@ class InputHistory {
       this.history = JSON.parse(storedHistory);
       this.historyIndex = this.history.length; // Set the index to the end of the restored history
     }
+    this.historyLoaded = true
   }
 
   // Function to handle history up (ArrowUp)
@@ -44,7 +56,7 @@ class InputHistory {
     // Start searching from the current history index
     for (let i = this.historyIndex - 1; i >= 0; i--) {
       let value = this.history[i]
-      if (value.startsWith(currentValue) && !this.historyViewed.includes(value)) {
+      if (value && value.startsWith(currentValue) && !this.historyViewed.includes(value)) {
         this.historyIndex = i; // Update the history index
         this.historyViewed.push(value)
         this.lastResult = value
@@ -71,7 +83,7 @@ class InputHistory {
     // Start searching from the current history index
     for (let i = this.historyIndex + 1; i < this.history.length; i++) {
       let value = this.history[i]
-      if (value.startsWith(currentValue) && !this.historyViewed.includes(value)) {
+      if (value && value.startsWith(currentValue) && !this.historyViewed.includes(value)) {
         this.historyIndex = i; // Update the history index
         this.historyViewed.push(value)
         this.lastResult = value

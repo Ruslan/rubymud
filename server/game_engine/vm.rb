@@ -15,7 +15,7 @@ class GameEngine::Vm
     nil
   end
 
-  def wecho(window, string)
+  def wecho(window, string, **options)
     engine.echo(window, string)
     nil
   end
