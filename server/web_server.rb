@@ -8,6 +8,8 @@ class WebServer
   def initialize
     @websockets = []
 
+    @storage = Storage.new
+
     @file_mutex = Mutex.new
     load_log_from_file
     load_history_from_file
@@ -59,7 +61,7 @@ class WebServer
   def incoming(payload)
     case payload['method']
     when 'send'
-      append_to_history(payload['value']) if payload['source'] == 'input'
+      append_to_history(payload)
       result = game_engine.parse(payload['value'])
       result.each do |line|
         mud.write(line)
@@ -74,66 +76,35 @@ class WebServer
   end
 
   def append_to_log(buffer)
-    @file_mutex.synchronize do
-      @log_file ||= File.open(LOG_FILE, 'a')
-      @log_file.puts(buffer.to_json)
-      @log_file.flush
-    end
+    @storage.append_logs(buffer)
 
     @log ||= []
     @log << buffer
     if @log.size > 5000
       @log.shift while @log.size > 1000
-      @log_file.close
-      truncate_log_file
+      @storage.truncate_logs # Remove from sqlite to avoid db grow? Where to store full logs?
     end
   end
 
   def load_log_from_file
-    return unless File.exist?(LOG_FILE)
-    @file_mutex.synchronize do
-      @log ||= File.readlines(LOG_FILE).map { |line| JSON.parse(line) }
-    end
-  end
-
-  def truncate_log_file
-    @file_mutex.synchronize do
-      # Read all lines from the file
-      lines = File.readlines(LOG_FILE)
-
-      # Keep only the last 1000 lines
-      last_1000_lines = lines.last(1000)
-
-      # Write back the last 1000 lines to the file
-      File.open(LOG_FILE, 'w') do |file|
-        file.puts(last_1000_lines)
-      end
-    end
+    @log = @storage.read_logs
   end
 
   def restore_log
     return unless @log
-    @log[-100..-1].each do |log_item|
-      broadcast({method: "output", value: log_item}.to_json)
+    @log.last(1000).each_slice(100) do |log_group|
+      broadcast({ method: "output", value: log_group }.to_json)
     end
   end
 
   def load_history_from_file
-    return unless File.exist?(HISTORY_FILE)
-    @file_mutex.synchronize do
-      @history ||= File.readlines(HISTORY_FILE).map { |line| JSON.parse(line) }.reverse.uniq.reverse
-    end
+    @history = @storage.load_history
   end
 
-  def append_to_history(buffer)
-    @file_mutex.synchronize do
-      @history_file ||= File.open(HISTORY_FILE, 'a')
-      @history_file.puts(buffer.to_json)
-      @history_file.flush
-    end
-
+  def append_to_history(input_object)
     @history ||= []
-    @history << buffer
+    @storage.append_history(input_object)
+    @history << input_object['value'] if input_object['source'] == 'input'
   end
 
   def restore_history

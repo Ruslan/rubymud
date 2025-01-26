@@ -2,3 +2,4 @@ config.rb
 variables.json
 log.jsonl
 history.jsonl
+data

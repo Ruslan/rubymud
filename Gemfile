@@ -9,6 +9,8 @@ gem 'webrick'
 gem 'faye-websocket'
 gem 'sinatra'
 gem 'zeitwerk'
+gem 'sequel'
+gem 'sqlite3'
 
 gem "rackup", "~> 2.2"
 gem "puma", "~> 6.5"
