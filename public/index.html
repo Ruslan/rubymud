@@ -8,10 +8,11 @@
   <script src="https://cdn.jsdelivr.net/npm/ansi_up@5.0.0/ansi_up.min.js"></script>
   <script src="https://unpkg.com/hotkeys-js/dist/hotkeys.min.js"></script>
   <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/assets/css/style.css">
-  <script src="/assets/js/buffers.js"></script>
-  <script src="/assets/js/input_history.js"></script>
-  <script src="/assets/js/input_field.js"></script>
+  <link rel="stylesheet" href="/assets/css/style.css?1">
+  <script src="/assets/js/buffers.js?1"></script>
+  <script src="/assets/js/input_history.js?1"></script>
+  <script src="/assets/js/input_field.js?1"></script>
+  <script src="/assets/js/keyboard.js?1"></script>
 </head>
 
 <body>
@@ -19,6 +20,11 @@
     <div class="left-column">
       <div class="top-section output-wrapper">
         <div class="output" id="main_output"></div>
+      </div>
+      <div class="">
+        <div class="virtual-keyboard">
+
+        </div>
       </div>
       <div class="bottom-section">
         <input type="text" id="input-text">
@@ -54,6 +60,7 @@
     const buffers = new Buffers()
     const history = new InputHistory()
     const inputField = new InputField(history)
+    const keyboard = new Keyboard()
 
     let autoButtons = [];
     let autoButtonsIndex = 0;
@@ -62,7 +69,7 @@
       hotkeys.unbind()
       config['keys'].forEach((key) => {
         hotkeys(key[0], function (event, handler) {
-          event.preventDefault();
+          if (event) event.preventDefault();
           SendToServer(key[1], 'key')
         })
       });
@@ -73,6 +80,8 @@
           clickAutoButton(i);
         });
       })
+
+      keyboard.render(config['keys'])
     }
 
     // Connect to WebSocket server
@@ -144,10 +153,10 @@
     function SendToServer(value, source) {
       socket.send(JSON.stringify({ method: "send", value: value, source: source }))
 
-      const div = document.createElement("div")
-      div.classList.add("client-line")
+      const div = document.createElement("span")
+      div.classList.add("server-line__hint")
       div.innerText = `-> ${value}`
-      buffers.appendTo('default', div)
+      buffers.appendToLastLine('default', div)
     }
 
     // Function to send the text (you'll define how SendText behaves)

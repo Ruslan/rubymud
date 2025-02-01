@@ -79,10 +79,10 @@ class WebServer
     @storage.append_logs(buffer)
 
     @log ||= []
-    @log << buffer
+    @log += buffer
     if @log.size > 5000
-      @log.shift while @log.size > 1000
-      @storage.truncate_logs # Remove from sqlite to avoid db grow? Where to store full logs?
+      @log.shift while @log.size > 1000 # TODO: remove only 1000 per window
+      @storage.truncate_logs # TODO: Remove from sqlite to avoid db grow? Where to store full logs?
     end
   end
 
@@ -92,8 +92,10 @@ class WebServer
 
   def restore_log
     return unless @log
-    @log.last(1000).each_slice(100) do |log_group|
-      broadcast({ method: "output", value: log_group }.to_json)
+    @log.group_by { _1[:window].to_s == 'default' ? '' : _1[:window].to_s }.each do |_window, logs|
+      logs.last(1000).each_slice(100) do |log_group|
+        broadcast({ method: "output", value: log_group }.to_json)
+      end
     end
   end
 

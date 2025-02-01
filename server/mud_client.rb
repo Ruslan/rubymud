@@ -30,21 +30,34 @@ class MudClient
 
   private
 
+  PACKET_END = "\xff\xf9".force_encoding('ASCII-8BIT')
+
   def start_reading
     Thread.new do
+      packet = ""
       loop do
         begin
           # Read data in chunks, allowing for incomplete lines
           # Read big chunk as possible to avoid UTF-8 symbol breaks
-          chunk = @socket.recv(1024 * 100)
-          if chunk.empty?
-            puts "Connection closed by server."
-            break
+          while !(packet.end_with?(PACKET_END) || packet.include?(PACKET_END))
+            chunk = @socket.recv(1024 * 100)
+            if chunk.empty?
+              puts "Connection closed by server."
+              break
+            end
+            packet += chunk
+          end
+
+          if packet.end_with?(PACKET_END)
+            current_packet, packet = packet.split(PACKET_END, 2)
+          else
+            current_packet, packet = packet, ""
           end
 
           processed_chunk = ""
-          chunk.chomp!("\xff\xf9".force_encoding('ASCII-8BIT'))
-          str = chunk.force_encoding('UTF-8')
+          current_packet.chomp!(PACKET_END)
+          current_packet.gsub!(PACKET_END, '') # TODO: can this break UTF8 chars?
+          str = current_packet.force_encoding('UTF-8')
           str.chars.each do |char|
             if char.valid_encoding?
               processed_chunk << char  # Keep valid UTF-8 characters as they are
@@ -58,8 +71,8 @@ class MudClient
 
           print processed_chunk
           @income_handler.call(processed_chunk)
-        rescue IOError
-          puts "Error reading from server."
+        rescue IOError, Errno::ECONNRESET => e
+          puts "Error reading from server: #{e.message}."
           break
         end
       end

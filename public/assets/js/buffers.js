@@ -40,6 +40,20 @@ class Buffers {
     }
   }
 
+  appendToLastLine(name, div) {
+    const currentOut = this.getBuffer(name)
+    if (currentOut.children.length > 0) {
+      const lastChild = currentOut.children[currentOut.children.length - 1];
+
+      lastChild.append(div);
+    } else {
+      const divWrap = document.createElement("div")
+      divWrap.classList.add("client-line")
+      divWrap.append(div)
+      this.appendTo(name, divWrap)
+    }
+  }
+
   scrollBufferBottom(name) {
     const currentOut = this.getBuffer(name)
     if (currentOut.parentNode) {

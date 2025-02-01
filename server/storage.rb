@@ -49,6 +49,10 @@ class Storage
     results.reverse.uniq.reverse
   end
 
+  def truncate_logs
+    # TODO
+  end
+
   private
 
   def serialize_log(log)
@@ -57,7 +61,7 @@ class Storage
       pure_line: log[:pure_line]&.to_s,
       commands: log[:commands]&.any? ? log[:commands].to_json : nil,
       buttons: log[:buttons]&.any? ? log[:buttons].to_json : nil,
-      window: log[:window]&.to_s
+      window: log[:window].to_s == 'default' ? nil : log[:window]&.to_s
     }
   end
 

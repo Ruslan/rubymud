@@ -81,6 +81,11 @@ body {
   /* No border on the last section */
 }
 
+.virtual-keyboard {
+  height: 0;
+  overflow: hidden;
+}
+
 input#input-text {
   width: 100%;
   /* Full width */

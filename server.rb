@@ -10,7 +10,7 @@ require config_file
 
 web_server = WebServer.new
 
-use Rack::Static, urls: ["/assets"], root: "public/assets"
+# use Rack::Static, urls: ["/assets"], root: "public/assets"
 
 class MyApp < Sinatra::Base
   configure do
@@ -71,3 +71,4 @@ end
 
 MyApp.settings.web_server = web_server
 MyApp.run!
+exit

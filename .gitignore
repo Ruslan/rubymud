@@ -3,3 +3,5 @@ variables.json
 log.jsonl
 history.jsonl
 data
+mud-mux
+log/
