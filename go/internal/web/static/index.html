@@ -54,9 +54,33 @@
       color: #97a4b3;
     }
 
+    .hotkeys-panel__meta {
+      display: inline-flex;
+      gap: 10px;
+      align-items: center;
+    }
+
     .hotkeys-panel__state {
       font-size: 12px;
       color: #97a4b3;
+    }
+
+    #connection-status {
+      font-size: 12px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      background: #1f252c;
+      color: #97a4b3;
+    }
+
+    #connection-status.status-connected {
+      background: #1c3325;
+      color: #9ece6a;
+    }
+
+    #connection-status.status-disconnected {
+      background: #40242a;
+      color: #f7768e;
     }
 
     #hotkeys {
@@ -291,7 +315,10 @@
     <div id="hotkeys-panel" class="hotkeys-panel hotkeys-panel_collapsed">
       <button id="hotkeys-toggle" class="hotkeys-panel__toggle" type="button">
         <span class="hotkeys-panel__title">Hotkeys</span>
-        <span id="hotkeys-toggle-state" class="hotkeys-panel__state">show</span>
+        <span class="hotkeys-panel__meta">
+          <span id="connection-status">connecting</span>
+          <span id="hotkeys-toggle-state" class="hotkeys-panel__state">show</span>
+        </span>
       </button>
       <div id="hotkeys"></div>
     </div>
@@ -396,6 +423,7 @@
     const hotkeysBox = document.getElementById('hotkeys')
     const hotkeysToggle = document.getElementById('hotkeys-toggle')
     const hotkeysToggleState = document.getElementById('hotkeys-toggle-state')
+    const connectionStatus = document.getElementById('connection-status')
     const input = document.getElementById('input')
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const socket = new WebSocket(`${protocol}//${window.location.host}/ws`)
@@ -404,6 +432,9 @@
     ansiUp.use_classes = true
 
     let configuredHotkeys = []
+    let restoreInProgress = false
+    const maxRenderedLines = 2000
+    const pruneRenderedLines = 500
 
     function setHotkeysCollapsed(collapsed) {
       hotkeysPanel.classList.toggle('hotkeys-panel_collapsed', collapsed)
@@ -412,6 +443,23 @@
 
     function sendCommand(value, source = 'input') {
       socket.send(JSON.stringify({ method: 'send', value: value, source: source }))
+    }
+
+    function updateConnectionStatus(status) {
+      connectionStatus.textContent = status
+      connectionStatus.classList.toggle('status-connected', status === 'connected')
+      connectionStatus.classList.toggle('status-disconnected', status === 'disconnected')
+    }
+
+    function shouldStickToBottom() {
+      return Math.abs(output.scrollTop - (output.scrollHeight - output.clientHeight)) < output.clientHeight / 2
+    }
+
+    function trimRenderedLines() {
+      if (output.children.length <= maxRenderedLines) return
+      for (let i = 0; i < pruneRenderedLines && output.firstChild; i++) {
+        output.removeChild(output.firstChild)
+      }
     }
 
     function renderHotkeys(items) {
@@ -527,6 +575,7 @@
     }
 
     function appendEntry(entry) {
+      const shouldScroll = shouldStickToBottom()
       const line = document.createElement('div')
       line.className = 'output-line'
 
@@ -542,6 +591,10 @@
       })
 
       output.appendChild(line)
+      trimRenderedLines()
+      if (shouldScroll && !restoreInProgress) {
+        output.scrollTop = output.scrollHeight
+      }
     }
 
     function appendCommandHint(command) {
@@ -558,24 +611,36 @@
 
     socket.onopen = () => {
       console.log('websocket connected')
+      updateConnectionStatus('connected')
     }
 
     socket.onmessage = (event) => {
       console.log('websocket message', event.data.length)
       const message = JSON.parse(event.data)
 
-      if (message.type === 'restore') {
+      if (message.type === 'status') {
+        updateConnectionStatus(message.status || 'connected')
+      }
+
+      if (message.type === 'restore_begin') {
+        restoreInProgress = true
         clearOutput()
-        ;(message.entries || []).forEach(appendEntry)
         history.merge(message.history || [])
         configureHotkeys(message.hotkeys || [])
+      }
+
+      if (message.type === 'restore_chunk') {
+        ;(message.entries || []).forEach(appendEntry)
+      }
+
+      if (message.type === 'restore_end') {
+        restoreInProgress = false
+        output.scrollTop = output.scrollHeight
       }
 
       if (message.type === 'output') {
         ;(message.entries || []).forEach(appendEntry)
       }
-
-      output.scrollTop = output.scrollHeight
     }
 
     socket.onerror = (event) => {
@@ -584,6 +649,7 @@
 
     socket.onclose = () => {
       console.log('websocket disconnected')
+      updateConnectionStatus('disconnected')
       appendEntry({ text: '[disconnected]' })
     }
 
