@@ -12,6 +12,8 @@ The chosen direction is:
 4. Move most user scripting into out-of-process plugins.
 5. Ship the first Go version with a Ruby compatibility plugin so scripting power is not lost.
 
+**Update (v0.0.3):** The built-in Go VM now handles aliases, triggers, variables, and highlights directly. This covers 90%+ of daily scripting needs without plugins. The out-of-process plugin path remains for future advanced use (TTS, LLM, custom windows).
+
 ## Main Product Shape
 
 Target product:
@@ -33,117 +35,129 @@ This is a differentiator versus classic desktop clients.
 
 ## Current Active Milestone
 
-Current active milestone: `Iteration 1`.
+Current active milestone: `v0.0.3 — built-in VM with TinTin syntax`.
 
-Iteration 1 is not feature parity. It is the smallest Go runtime that proves the shared-session architecture.
-
-Iteration 1 scope:
-
-1. one Go binary
-2. one direct TCP connection to a MUD
-3. one HTTP server
-4. one WebSocket endpoint
-5. one shared live session
-6. multiple attached browser clients
-7. MUD output broadcast to all clients
-8. browser input sent back to the same MUD session
-
-Iteration 1 explicitly excludes:
-
-1. plugins
-2. SQLite
-3. aliases
-4. triggers
-5. buttons
-6. windows/buffers
-7. history restore
-8. reconnect logic
-9. multi-session
-10. external mux
-
-Why no mux in Iteration 1:
-
-1. The Go host itself already acts as the session host.
-2. One TCP connection plus many browser attachments is the behavior we want to prove first.
-
-Iteration 1 success means:
-
-1. Go process starts.
-2. Browser opens localhost UI.
-3. MUD output appears.
-4. Browser input reaches the MUD.
-5. A second browser tab sees the same live stream.
+Completed milestones:
+- `v0.0.1` — Go session host, TCP+WebSocket, basic relay
+- `v0.0.2` — SQLite persistence, restore, hotkeys, ANSI rendering, history
+- `v0.0.3` — Built-in VM: aliases, triggers, highlights, variables, speedwalk, button overlays
 
 ## Files To Read First Tomorrow
 
 Read these first before doing any design or code work:
 
 1. `docs/go-migration-plan.md`
-2. `docs/next-session-handoff.md`
-3. `server.rb`
-4. `server/web_server.rb`
-5. `server/mud_client.rb`
-6. `server/game_engine/player_commands.rb`
-7. `server/game_engine/server_commands.rb`
-8. `server/game_engine/vm.rb`
-9. `public/index.html`
+2. `docs/next-session-handoff.md` (this file)
+3. `docs/release-0.0.3.md` — latest release notes
+4. `docs/vm-design-v2.md` — current VM design
+5. `docs/vm-example-jmc.md` — JMC reference
+6. `docs/vm-example-tortilla.md` — Tortilla reference
 
-## What Exists In The Ruby App Today
+## What The Go App Does Today (v0.0.3)
 
-The current Ruby app already does all of this:
+### Runtime
 
-1. Runs a browser client over WebSocket.
-2. Holds one shared live MUD connection in the backend.
-3. Lets more than one browser attach to the same session.
-4. Stores logs and input history in SQLite.
-5. Supports variables, aliases, regex triggers, buttons, and window routing.
-6. Restores history and logs when a browser reconnects.
+1. One Go binary session host
+2. Direct TCP connection to the MUD
+3. Browser UI served by Go over localhost
+4. Shared live session across multiple browser clients
+5. Built-in VM for aliases, triggers, highlights, variables, speedwalk
 
-Important implementation detail:
+### VM Commands (TinTin Syntax)
 
-1. The current app is effectively `one MUD session runtime -> many browser clients`.
-2. This should be preserved in the Go design.
+1. `#alias {name} {template}` — aliases with `%0`–`%9`, semicolons, recursion
+2. `#var {name} {value}` — variables with `$varname` substitution (Cyrillic OK)
+3. `#action {regex} {cmd} [group] [button]` — regex triggers, capture groups, button overlays
+4. `#highlight {color} {pattern} [group]` — full ANSI SGR injection
+5. `#nop`, `#N {cmd}` — comment and repeat
+6. Speedwalk: `3nw2e` → `n;n;n;w;e;e`
+7. Abbreviations: `#ali`, `#act`, `#high`, `#unact`, etc.
 
-## Important Problems In The Ruby App
+### Storage
 
-These are not to be copied directly into Go:
+1. SQLite at `data/mudhost.db`
+2. Tables: `sessions`, `log_entries`, `log_overlays`, `history_entries`, `variables`, `alias_rules`, `trigger_rules`, `highlight_rules`
+3. All rules persisted per session
+4. Button overlays persisted in `log_overlays`
 
-1. Global mutable config class.
-2. Unsafe reload behavior.
-3. Tight coupling between runtime and arbitrary Ruby execution.
-4. Weak separation of transport, state, UI sync, and scripting.
-5. Hard distribution story for Windows users.
+### Browser UI
+
+1. Dark theme, ANSI rendering via ansi_up
+2. Restore on reconnect (logs + history + hotkeys)
+3. Inline command hints
+4. Trigger buttons as clickable green chips
+5. Hotkeys panel
+6. Connection status indicator
+
+## Discoveries From JMC/Tortilla Source
+
+1. JMC = C++/Win32 DLL by "Jaba" (nickname), derived from TinTin++
+2. Tortilla = JMC3 + extensions (PCRE regex, `#if`, `#math`, `#wait`, `#antisub`, `%(...)` ops)
+3. JMC processing order (default): antisub → sub → action → highlight
+4. JMC gag = `#substitute {pattern} .` — lines equal "." are suppressed
+5. JMC has two alias modes: simple (exact word) and regex (`/pattern/`)
+6. JMC has 27 built-in variables (`$DATE`, `$TIME`, `$INPUT`, `$COMMAND`, etc.)
+7. `%%1` inside alias = outer alias argument (different from `%1` in triggers)
+8. `splitBraceArg` needs double call for `#alias {name} {template}` — template retains braces otherwise
+9. In Go raw string literals (backticks), `\\.` = two backslashes + dot, not `\.` for regex
+10. ansi_up v5.1+ supports bold, faint, italic, underline natively
+11. `$var` substitution must be Unicode-aware: `\$([\p{L}\p{N}_]+)` for Cyrillic
+12. Profile vs Session: profile = persistent config, session = ephemeral connection. Currently all bound to session_id, migrate to profile_id in v0.0.10
+
+## What Is Still Missing
+
+### VM Commands (Priority Order)
+
+1. `#substitute` / `#gag` / `#antisub` — replace/suppress MUD text
+2. `#group enable/disable` — toggle rule groups
+3. `#if` / `#else` — conditionals (JMC-style expression evaluator)
+4. `#math` — arithmetic
+5. `#wait` — delayed commands
+6. `#read` — load TinTin-compatible script files
+7. `#output` / `#woutput` — echo/window output
+8. `#timer` / `#tickset` — timer scheduler
+
+### Infrastructure
+
+1. Profile entity (profile vs session separation) — v0.0.10
+2. CRUD admin UI in browser
+3. JMC `.set` file importer
+4. Tortilla XML importer
+5. Out-of-process plugin protocol (still needed for TTS, LLM, advanced)
+
+### Advanced Features
+
+1. `%%1` — nested alias argument references
+2. `/regex/` — PCRE aliases
+3. `$var*` — multi-variable matching
+4. `%(...)` — substring operations (Tortilla)
+5. Raw/Color action types (JMC `Action_RAW`, `Action_COLOR`)
 
 ## Chosen Architecture Direction
 
 ### Go Core Owns
 
-1. TCP/Telnet transport.
-2. Browser HTTP/WebSocket server.
-3. Shared session runtime.
-4. Attached client management.
-5. SQLite persistence.
-6. Event bus.
-7. Timer scheduler infrastructure.
-8. Plugin lifecycle.
-9. Effect execution.
-10. Session restore behavior.
+1. TCP/Telnet transport
+2. Browser HTTP/WebSocket server
+3. Shared session runtime
+4. Attached client management
+5. SQLite persistence
+6. Built-in VM (aliases, triggers, highlights, variables, speedwalk)
+7. Event bus
+8. Timer scheduler infrastructure
+9. Plugin lifecycle
+10. Effect execution
+11. Session restore behavior
 
 ### Plugins Own
 
-1. User aliases.
-2. User triggers.
-3. User variable logic.
-4. TTS.
-5. LLM features.
-6. Most custom automation.
-7. Optional timer logic built on top of core scheduler support.
+1. TTS
+2. LLM features
+3. Most custom automation beyond built-in VM
+4. Optional timer logic built on top of core scheduler support
+5. Custom window routing beyond defaults
 
-Important nuance:
-
-1. Scheduler infrastructure should stay in Go.
-2. Plugin logic may request timers.
-3. Timer firing comes back as an event.
+**Key insight:** The built-in VM covers the daily scripting needs of most players. Plugins are for power-user extensions, not basic scripting.
 
 ## Storage Decision
 
@@ -158,13 +172,11 @@ Reason:
 
 Do not switch storage stacks unless there is a concrete need.
 
-Likely Go DB approach:
+Go DB approach (confirmed working):
 
-1. `database/sql` or `sqlx`
-2. explicit SQL
-3. explicit migrations
-
-Avoid defaulting to GORM unless a concrete benefit appears.
+1. `database/sql` with `modernc.org/sqlite` (pure Go, no CGO)
+2. Explicit SQL queries
+3. Explicit migrations in `go/sqlite/migrations/`
 
 ## Event Model Decision
 
@@ -178,8 +190,6 @@ Chosen direction:
 2. Persisted event log.
 3. SQLite projections/tables for fast reads.
 4. Optional snapshots.
-
-This is event-driven, but not pure replay-only architecture.
 
 ## Plugin Runtime Decision
 
@@ -198,126 +208,25 @@ Preferred transport order:
 2. Unix sockets / named pipes later.
 3. TCP only if remote plugins become necessary.
 
-## First Release Constraints
+## Build Sequence
 
-The first Go release should be considered successful only if:
+Do not try to build all of this at once. Sequence matters.
 
-1. It runs locally as a Windows `.exe`.
-2. It serves the browser UI.
-3. It keeps one live MUD session.
-4. More than one browser can attach to the same session.
-5. SQLite persists log/history.
-6. It supports out-of-process plugins.
-7. It ships with a Ruby compatibility plugin path.
-
-## Why Ruby Compatibility Plugin Matters
-
-The Ruby implementation itself is not the main asset.
-
-The real asset is the scripting behavior users already rely on:
-
-1. aliases
-2. triggers
-3. variables
-4. buttons
-5. windows
-6. local output helpers
-
-If the first Go version ships without this power, it will feel weaker than the current app.
-
-## Immediate Next Documents To Write
-
-When continuing, write these next:
-
-1. `docs/go-architecture.md`
-2. `docs/plugin-protocol.md`
-3. `docs/sqlite-schema.md`
-
-## What `docs/go-architecture.md` Should Contain
-
-Define the Go runtime modules.
-
-Expected sections:
-
-1. package layout
-2. session lifecycle
-3. websocket client lifecycle
-4. mud connection lifecycle
-5. event bus responsibilities
-6. timer scheduler responsibilities
-7. plugin host responsibilities
-8. storage layer responsibilities
-
-## What `docs/plugin-protocol.md` Should Contain
-
-Define the protocol between Go core and plugins.
-
-Expected sections:
-
-1. plugin startup handshake
-2. capability declaration
-3. event envelope JSON
-4. effect envelope JSON
-5. lifecycle messages
-6. error handling
-7. restart behavior
-8. minimum Ruby plugin support target
-
-## What `docs/sqlite-schema.md` Should Contain
-
-Define the first-pass schema.
-
-Expected tables:
-
-1. `sessions`
-2. `clients`
-3. `events`
-4. `history_entries`
-5. `variables`
-6. `snapshots`
-7. `plugins`
-
-## First Engineering Milestone After Docs
-
-The first implementation milestone should be a tiny Go session host with no real plugin logic yet.
-
-It should support:
-
-1. one MUD TCP connection
-2. one browser websocket endpoint
-3. multiple attached browser clients
-4. broadcast output
-5. input from browser to MUD
-
-Only after that should plugin protocol work begin.
-
-## Important Scope Reminder
-
-Do not try to build all of this at once:
-
-1. local runtime
-2. plugin platform
-3. LLM advisor
-4. Windows packaging
-5. Rails control plane
-6. cloud orchestration
-
-Sequence matters.
-
-Build in this order:
-
-1. docs
-2. Go session host
-3. plugin protocol
-4. Ruby compatibility plugin
-5. Windows packaging
-6. JS plugins
-7. LLM advisor
-8. hosted/cloud control plane
+1. ~~docs~~ ✅
+2. ~~Go session host~~ ✅ (v0.0.1)
+3. ~~SQLite + restore + ANSI~~ ✅ (v0.0.2)
+4. ~~Built-in VM~~ ✅ (v0.0.3)
+5. VM expansion: `#sub`, `#gag`, `#group`, `#if`, `#math`, `#wait`, `#read`, `#timer` ← **current**
+6. Plugin protocol
+7. Ruby compatibility plugin
+8. Windows packaging
+9. JS plugins
+10. LLM advisor
+11. Hosted/cloud control plane
 
 ## Short Reminder To Future Session
 
-Tomorrow, do not reopen the language debate first.
+Do not reopen the language debate first.
 
 The decisions already made are:
 
@@ -325,7 +234,7 @@ The decisions already made are:
 2. Browser UI.
 3. SQLite stays.
 4. Plugins are out-of-process.
-5. Ruby compatibility plugin for v1.
+5. Built-in VM covers TinTin syntax natively.
 6. Typed events, but not full event sourcing.
 
-Start from architecture and protocol design, not from re-arguing fundamentals.
+Start from the next VM command (`#substitute`), not from re-arguing fundamentals.

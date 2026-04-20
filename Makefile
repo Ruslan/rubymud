@@ -2,7 +2,7 @@ GO_DIR := go
 MUD ?= 127.0.0.1:4000
 LISTEN ?= :8080
 DB_PATH ?= data/mudhost.db
-DB_INIT_SQL := go/sqlite/migrations/001_init.sql
+MIGRATION_DIR := go/sqlite/migrations
 
 .PHONY: help run build tidy db-init db-schema
 
@@ -25,7 +25,7 @@ tidy:
 
 db-init:
 	mkdir -p "$(dir $(DB_PATH))"
-	sqlite3 "$(DB_PATH)" < "$(DB_INIT_SQL)"
+	for f in $(MIGRATION_DIR)/*.sql; do sqlite3 "$(DB_PATH)" < "$$f"; done
 
 db-schema:
 	sqlite3 "$(DB_PATH)" ".schema"

@@ -23,10 +23,21 @@ type SessionRecord struct {
 	Status  string
 }
 
+type ButtonOverlay struct {
+	Label   string `json:"label"`
+	Command string `json:"command"`
+}
+
 type LogEntry struct {
 	ID       int64
 	RawText  string
 	Commands []string
+	Buttons  []ButtonOverlay
+}
+
+type Variable struct {
+	Key   string
+	Value string
 }
 
 type commandOverlayPayload struct {
@@ -242,6 +253,18 @@ func (s *Store) RecentInputHistory(sessionID int64, limit int) ([]string, error)
 	return history, nil
 }
 
+func (s *Store) AppendButtonOverlay(logEntryID int64, label, command string) error {
+	payload, err := json.Marshal(map[string]string{"label": label, "command": command})
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(`
+		INSERT INTO log_overlays(log_entry_id, overlay_type, payload_json, source_type)
+		VALUES(?, 'button', ?, 'trigger')
+	`, logEntryID, string(payload))
+	return err
+}
+
 func reverseLogs(entries []LogEntry) {
 	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
 		entries[i], entries[j] = entries[j], entries[i]
@@ -293,4 +316,11 @@ func (s *Store) loadCommandOverlays(entries []LogEntry) error {
 	}
 
 	return rows.Err()
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

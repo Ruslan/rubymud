@@ -157,6 +157,35 @@
       opacity: 0.9;
     }
 
+    .trigger-buttons {
+      display: inline-flex;
+      gap: 4px;
+      margin-left: 8px;
+    }
+
+    .trigger-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 10px;
+      border: 1px solid #4a6a30;
+      border-radius: 999px;
+      background: #1c3325;
+      color: #9ece6a;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background-color 0.15s ease, border-color 0.15s ease;
+    }
+
+    .trigger-button:hover {
+      background: #244a30;
+      border-color: #5a8a40;
+    }
+
+    .trigger-button:active {
+      background: #2c5a38;
+    }
+
     #input {
       border: 0;
       border-top: 1px solid #232a31;
@@ -305,6 +334,26 @@
 
     .ansi-strikethrough {
       text-decoration: line-through;
+    }
+
+    .ansi-italic {
+      font-style: italic;
+    }
+
+    .ansi-faint {
+      opacity: 0.7;
+    }
+
+    .ansi-blink {
+      animation: ansi-blink 1s step-end infinite;
+    }
+
+    @keyframes ansi-blink {
+      50% { opacity: 0; }
+    }
+
+    .ansi-conceal {
+      visibility: hidden;
     }
   </style>
 </head>
@@ -589,6 +638,22 @@
         hint.textContent = `-> ${command}`
         line.appendChild(hint)
       })
+
+      if (entry.buttons && entry.buttons.length > 0) {
+        const btns = document.createElement('span')
+        btns.className = 'trigger-buttons'
+        entry.buttons.forEach((btn) => {
+          const b = document.createElement('button')
+          b.className = 'trigger-button'
+          b.type = 'button'
+          b.textContent = btn.label
+          b.addEventListener('click', () => {
+            sendCommand(btn.command, 'button')
+          })
+          btns.appendChild(b)
+        })
+        line.appendChild(btns)
+      }
 
       output.appendChild(line)
       trimRenderedLines()
