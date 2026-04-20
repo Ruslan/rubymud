@@ -5,3 +5,6 @@ history.jsonl
 data
 mud-mux
 log/
+.DS_Store
+mudhost
+tmp

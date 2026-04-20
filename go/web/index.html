@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>mudhost</title>
+  <style>
+    body {
+      margin: 0;
+      background: #111;
+      color: #ddd;
+      font: 16px/1.4 monospace;
+    }
+
+    .app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    #output {
+      flex: 1;
+      overflow: auto;
+      white-space: pre-wrap;
+      padding: 12px;
+    }
+
+    #input {
+      border: 0;
+      border-top: 1px solid #333;
+      background: #181818;
+      color: #fff;
+      padding: 12px;
+      font: inherit;
+      outline: none;
+    }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <div id="output"></div>
+    <input id="input" type="text" placeholder="Type a command and press Enter">
+  </div>
+
+  <script>
+    const output = document.getElementById('output')
+    const input = document.getElementById('input')
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+    const socket = new WebSocket(`${protocol}//${window.location.host}/ws`)
+
+    socket.onmessage = (event) => {
+      output.textContent += event.data
+      output.scrollTop = output.scrollHeight
+    }
+
+    socket.onclose = () => {
+      output.textContent += '\n[disconnected]\n'
+    }
+
+    input.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter') return
+
+      const value = input.value.trim()
+      if (!value) return
+
+      socket.send(value)
+      input.value = ''
+    })
+  </script>
+</body>
+</html>

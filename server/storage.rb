@@ -12,6 +12,8 @@ class Storage
 
   def append_logs(logs)
     @db[:logs].multi_insert(logs.map { |log| serialize_log(log) })
+  rescue SQLite3::SQLException => e
+    p e
   end
 
   def read_logs(limit_default: 1000, limit_named: 200)
