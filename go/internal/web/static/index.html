@@ -4,11 +4,12 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>mudhost</title>
+  <script src="https://cdn.jsdelivr.net/npm/ansi_up@5.0.0/ansi_up.min.js"></script>
   <style>
     body {
       margin: 0;
-      background: #111;
-      color: #ddd;
+      background: #111315;
+      color: #e8edf2;
       font: 16px/1.4 monospace;
     }
 
@@ -18,21 +19,268 @@
       height: 100vh;
     }
 
+    .hotkeys-panel {
+      display: flex;
+      flex-direction: column;
+      border-top: 1px solid #232a31;
+      background: #15191e;
+    }
+
+    .hotkeys-panel_collapsed #hotkeys {
+      display: none;
+    }
+
+    .hotkeys-panel__toggle {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      background: #15191e;
+      color: #b8c4d0;
+      border: 0;
+      cursor: pointer;
+      font: inherit;
+      text-align: left;
+    }
+
+    .hotkeys-panel__toggle:hover {
+      background: #1a2027;
+    }
+
+    .hotkeys-panel__title {
+      font-size: 12px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: #97a4b3;
+    }
+
+    .hotkeys-panel__state {
+      font-size: 12px;
+      color: #97a4b3;
+    }
+
+    #hotkeys {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      padding: 8px 12px;
+      background: #15191e;
+    }
+
+    .hotkey-chip {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      padding: 3px 8px;
+      border: 1px solid #2a3440;
+      border-radius: 999px;
+      background: #1a2027;
+      color: #b8c4d0;
+      font-size: 12px;
+      cursor: pointer;
+      transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    }
+
+    .hotkey-chip:hover {
+      background: #202833;
+      border-color: #3b4959;
+      color: #e8edf2;
+    }
+
+    .hotkey-chip:active {
+      background: #27313d;
+    }
+
+    .hotkey-chip button {
+      all: unset;
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      cursor: pointer;
+    }
+
+    .hotkey-chip kbd {
+      font: inherit;
+      color: #eef3f8;
+      background: #252d37;
+      border-radius: 4px;
+      padding: 1px 5px;
+    }
+
     #output {
       flex: 1;
       overflow: auto;
-      white-space: pre-wrap;
       padding: 12px;
+      background: #111315;
+    }
+
+    .output-line {
+      min-height: 1.4em;
+      white-space: pre-wrap;
+      word-break: break-word;
+      margin: 0;
+    }
+
+    .output-line span {
+      white-space: pre-wrap;
+    }
+
+    .output-hint {
+      margin-left: 8px;
+      color: #97a4b3;
+      font-size: 80%;
+      font-style: italic;
+      opacity: 0.9;
     }
 
     #input {
       border: 0;
-      border-top: 1px solid #333;
-      background: #181818;
-      color: #fff;
+      border-top: 1px solid #232a31;
+      background: #171b20;
+      color: #eef3f8;
       padding: 12px;
       font: inherit;
       outline: none;
+    }
+
+    #input::placeholder {
+      color: #798694;
+    }
+
+    .ansi-black-fg,
+    .ansi-bright-black-fg {
+      color: #8b98a7;
+    }
+
+    .ansi-red-fg {
+      color: #f7768e;
+    }
+
+    .ansi-green-fg {
+      color: #9ece6a;
+    }
+
+    .ansi-yellow-fg {
+      color: #e0af68;
+    }
+
+    .ansi-blue-fg {
+      color: #7aa2f7;
+    }
+
+    .ansi-magenta-fg {
+      color: #bb9af7;
+    }
+
+    .ansi-cyan-fg {
+      color: #7dcfff;
+    }
+
+    .ansi-white-fg {
+      color: #e8edf2;
+    }
+
+    .ansi-bright-red-fg {
+      color: #ff899d;
+    }
+
+    .ansi-bright-green-fg {
+      color: #b4f071;
+    }
+
+    .ansi-bright-yellow-fg {
+      color: #f7c97f;
+    }
+
+    .ansi-bright-blue-fg {
+      color: #8db0ff;
+    }
+
+    .ansi-bright-magenta-fg {
+      color: #c7a6ff;
+    }
+
+    .ansi-bright-cyan-fg {
+      color: #9fe3ff;
+    }
+
+    .ansi-bright-white-fg {
+      color: #f7fbff;
+    }
+
+    .ansi-black-bg,
+    .ansi-bright-black-bg {
+      background-color: #1f252c;
+    }
+
+    .ansi-red-bg {
+      background-color: #5a2630;
+    }
+
+    .ansi-green-bg {
+      background-color: #2f4a27;
+    }
+
+    .ansi-yellow-bg {
+      background-color: #5a4726;
+    }
+
+    .ansi-blue-bg {
+      background-color: #2b3f63;
+    }
+
+    .ansi-magenta-bg {
+      background-color: #4a3465;
+    }
+
+    .ansi-cyan-bg {
+      background-color: #224b5a;
+    }
+
+    .ansi-white-bg {
+      background-color: #bcc6d0;
+      color: #111315;
+    }
+
+    .ansi-bright-red-bg {
+      background-color: #6b2e3a;
+    }
+
+    .ansi-bright-green-bg {
+      background-color: #355329;
+    }
+
+    .ansi-bright-yellow-bg {
+      background-color: #6a5428;
+    }
+
+    .ansi-bright-blue-bg {
+      background-color: #314a73;
+    }
+
+    .ansi-bright-magenta-bg {
+      background-color: #573d77;
+    }
+
+    .ansi-bright-cyan-bg {
+      background-color: #29596a;
+    }
+
+    .ansi-bright-white-bg {
+      background-color: #d8e0e8;
+      color: #111315;
+    }
+
+    .ansi-bold {
+      font-weight: 700;
+    }
+
+    .ansi-underline {
+      text-decoration: underline;
+    }
+
+    .ansi-strikethrough {
+      text-decoration: line-through;
     }
   </style>
 </head>
@@ -40,24 +288,293 @@
   <div class="app">
     <div id="output"></div>
     <input id="input" type="text" placeholder="Type a command and press Enter">
+    <div id="hotkeys-panel" class="hotkeys-panel hotkeys-panel_collapsed">
+      <button id="hotkeys-toggle" class="hotkeys-panel__toggle" type="button">
+        <span class="hotkeys-panel__title">Hotkeys</span>
+        <span id="hotkeys-toggle-state" class="hotkeys-panel__state">show</span>
+      </button>
+      <div id="hotkeys"></div>
+    </div>
   </div>
 
   <script>
+    class InputHistory {
+      constructor() {
+        this.history = []
+        this.historyIndex = -1
+        this.historyViewed = []
+        this.historyDirection = null
+        this.lastResult = null
+        this.arrowQuery = ''
+        this.loadHistory()
+      }
+
+      push(value) {
+        if (!value) return
+        this.history.push(value)
+        this.historyIndex = this.history.length
+        this.historyViewed = []
+        this.saveHistory()
+      }
+
+      merge(remoteHistory) {
+        this.history = [...this.history, ...(remoteHistory || [])].filter((value, index, self) => {
+          return self.indexOf(value) === index
+        })
+        this.historyIndex = this.history.length
+        this.historyViewed = []
+        this.saveHistory()
+      }
+
+      loadHistory() {
+        const storedHistory = localStorage.getItem('commandHistory')
+        if (storedHistory) {
+          this.history = JSON.parse(storedHistory)
+          this.historyIndex = this.history.length
+        }
+      }
+
+      saveHistory() {
+        localStorage.setItem('commandHistory', JSON.stringify(this.history))
+      }
+
+      up(currentValue) {
+        if (currentValue === this.lastResult) {
+          currentValue = this.arrowQuery
+        } else {
+          this.arrowQuery = currentValue
+        }
+
+        if (this.historyDirection !== -1) {
+          this.historyViewed = []
+          this.historyDirection = -1
+        }
+
+        for (let i = this.historyIndex - 1; i >= 0; i--) {
+          const value = this.history[i]
+          if (value && value.startsWith(currentValue) && !this.historyViewed.includes(value)) {
+            this.historyIndex = i
+            this.historyViewed.push(value)
+            this.lastResult = value
+            return value
+          }
+        }
+
+        this.historyIndex = 0
+        return currentValue
+      }
+
+      down(currentValue) {
+        if (currentValue === this.lastResult) {
+          currentValue = this.arrowQuery
+        } else {
+          this.arrowQuery = currentValue
+        }
+
+        if (this.historyDirection !== 1) {
+          this.historyViewed = []
+          this.historyDirection = 1
+        }
+
+        for (let i = this.historyIndex + 1; i < this.history.length; i++) {
+          const value = this.history[i]
+          if (value && value.startsWith(currentValue) && !this.historyViewed.includes(value)) {
+            this.historyIndex = i
+            this.historyViewed.push(value)
+            this.lastResult = value
+            return value
+          }
+        }
+
+        this.historyIndex = this.history.length
+        return currentValue
+      }
+    }
+
     const output = document.getElementById('output')
+    const hotkeysPanel = document.getElementById('hotkeys-panel')
+    const hotkeysBox = document.getElementById('hotkeys')
+    const hotkeysToggle = document.getElementById('hotkeys-toggle')
+    const hotkeysToggleState = document.getElementById('hotkeys-toggle-state')
     const input = document.getElementById('input')
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
     const socket = new WebSocket(`${protocol}//${window.location.host}/ws`)
+    const history = new InputHistory()
+    const ansiUp = new AnsiUp()
+    ansiUp.use_classes = true
+
+    let configuredHotkeys = []
+
+    function setHotkeysCollapsed(collapsed) {
+      hotkeysPanel.classList.toggle('hotkeys-panel_collapsed', collapsed)
+      hotkeysToggleState.textContent = collapsed ? 'show' : 'hide'
+    }
+
+    function sendCommand(value, source = 'input') {
+      socket.send(JSON.stringify({ method: 'send', value: value, source: source }))
+    }
+
+    function renderHotkeys(items) {
+      hotkeysBox.innerHTML = ''
+      ;(items || []).forEach((item) => {
+        const chip = document.createElement('span')
+        chip.className = 'hotkey-chip'
+
+        const button = document.createElement('button')
+        button.type = 'button'
+        button.addEventListener('click', () => {
+          appendCommandHint(item.command)
+          output.scrollTop = output.scrollHeight
+          sendCommand(item.command, 'key')
+        })
+
+        const key = document.createElement('kbd')
+        key.textContent = item.shortcut
+        button.appendChild(key)
+
+        const label = document.createElement('span')
+        label.textContent = item.command
+        button.appendChild(label)
+
+        chip.appendChild(button)
+
+        hotkeysBox.appendChild(chip)
+      })
+
+      hotkeysPanel.style.display = items && items.length ? 'flex' : 'none'
+    }
+
+    function configureHotkeys(items) {
+      configuredHotkeys = items || []
+      renderHotkeys(configuredHotkeys)
+    }
+
+    function normalizeShortcut(shortcut) {
+      return shortcut
+        .toLowerCase()
+        .split('+')
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .join('+')
+    }
+
+    function eventToShortcut(event) {
+      const parts = []
+      if (event.ctrlKey) parts.push('ctrl')
+      if (event.altKey) parts.push('alt')
+      if (event.metaKey) parts.push('command')
+      if (event.shiftKey) parts.push('shift')
+
+      const key = normalizeEventKey(event)
+      if (!key) return ''
+      parts.push(key)
+      return parts.join('+')
+    }
+
+    function normalizeEventKey(event) {
+      const key = (event.key || '').toLowerCase()
+      const code = event.code || ''
+
+      if (/^Key[A-Z]$/.test(code)) return code.slice(3).toLowerCase()
+      if (/^Digit[0-9]$/.test(code)) return code.slice(5)
+
+      if (/^f\d{1,2}$/.test(key)) return key
+      if (key === 'pageup') return 'pageup'
+      if (key === 'pagedown') return 'pagedown'
+      if (key === 'home') return 'home'
+      if (key === 'end') return 'end'
+      if (key === 'arrowup') return 'up'
+      if (key === 'arrowdown') return 'down'
+      if (key === 'arrowleft') return 'left'
+      if (key === 'arrowright') return 'right'
+
+      if (event.code && event.code.startsWith('Numpad')) {
+        const suffix = event.code.replace('Numpad', '').toLowerCase()
+        if (/^[0-9]$/.test(suffix)) return `num_${suffix}`
+        if (suffix === 'add') return 'num_+'
+        if (suffix === 'subtract') return 'num_-'
+        if (suffix === 'multiply') return 'num_*'
+        if (suffix === 'divide') return 'num_/'
+        if (suffix === 'decimal') return 'num_.'
+        if (suffix === 'enter') return 'enter'
+      }
+
+      if (key.length === 1) return key
+      return key
+    }
+
+    function handleHotkey(event) {
+      const shortcut = normalizeShortcut(eventToShortcut(event))
+      if (!shortcut) return
+
+      const match = configuredHotkeys.find((item) => normalizeShortcut(item.shortcut) === shortcut)
+      if (!match) return
+
+      event.preventDefault()
+      appendCommandHint(match.command)
+      output.scrollTop = output.scrollHeight
+      sendCommand(match.command, 'key')
+    }
+
+    window.addEventListener('keydown', handleHotkey)
+    hotkeysToggle.addEventListener('click', () => {
+      setHotkeysCollapsed(!hotkeysPanel.classList.contains('hotkeys-panel_collapsed'))
+    })
+    setHotkeysCollapsed(true)
+
+    function clearOutput() {
+      output.innerHTML = ''
+    }
+
+    function appendEntry(entry) {
+      const line = document.createElement('div')
+      line.className = 'output-line'
+
+      const span = document.createElement('span')
+      span.innerHTML = entry.text ? ansiUp.ansi_to_html(entry.text) : '&nbsp;'
+      line.appendChild(span)
+
+      ;(entry.commands || []).forEach((command) => {
+        const hint = document.createElement('span')
+        hint.className = 'output-hint'
+        hint.textContent = `-> ${command}`
+        line.appendChild(hint)
+      })
+
+      output.appendChild(line)
+    }
+
+    function appendCommandHint(command) {
+      const line = output.lastElementChild
+      if (!line) return
+
+      const hint = document.createElement('span')
+      hint.className = 'output-hint'
+      hint.textContent = `-> ${command}`
+      line.appendChild(hint)
+    }
 
     console.log('connecting websocket', `${protocol}//${window.location.host}/ws`)
 
     socket.onopen = () => {
       console.log('websocket connected')
-      output.textContent += '[connected]\n'
     }
 
     socket.onmessage = (event) => {
       console.log('websocket message', event.data.length)
-      output.textContent += event.data
+      const message = JSON.parse(event.data)
+
+      if (message.type === 'restore') {
+        clearOutput()
+        ;(message.entries || []).forEach(appendEntry)
+        history.merge(message.history || [])
+        configureHotkeys(message.hotkeys || [])
+      }
+
+      if (message.type === 'output') {
+        ;(message.entries || []).forEach(appendEntry)
+      }
+
       output.scrollTop = output.scrollHeight
     }
 
@@ -67,17 +584,36 @@
 
     socket.onclose = () => {
       console.log('websocket disconnected')
-      output.textContent += '\n[disconnected]\n'
+      appendEntry({ text: '[disconnected]' })
     }
 
     input.addEventListener('keydown', (event) => {
+      if (event.key === 'ArrowUp') {
+        event.preventDefault()
+        input.value = history.up(input.value)
+        const length = input.value.length
+        input.setSelectionRange(length, length)
+        return
+      }
+
+      if (event.key === 'ArrowDown') {
+        event.preventDefault()
+        input.value = history.down(input.value)
+        const length = input.value.length
+        input.setSelectionRange(length, length)
+        return
+      }
+
       if (event.key !== 'Enter') return
 
       const value = input.value.trim()
       if (!value) return
 
       console.log('sending command', value)
-      socket.send(value)
+      history.push(value)
+      appendCommandHint(value)
+      output.scrollTop = output.scrollHeight
+      sendCommand(value, 'input')
       input.value = ''
     })
   </script>

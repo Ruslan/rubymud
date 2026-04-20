@@ -5,32 +5,44 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"strings"
 	"sync"
 	"unicode/utf8"
 
-	"github.com/gorilla/websocket"
+	"rubymud/go/internal/storage"
 )
 
 var packetEnd = []byte{0xff, 0xf9}
 
-type Session struct {
-	mudAddr string
-	conn    net.Conn
-	clients map[*websocket.Conn]struct{}
-	mu      sync.Mutex
-	closed  bool
+type clientSink struct {
+	id   int
+	name string
+	send func(storage.LogEntry) error
 }
 
-func New(mudAddr string) (*Session, error) {
+type Session struct {
+	sessionID    int64
+	mudAddr      string
+	conn         net.Conn
+	store        *storage.Store
+	clients      map[int]clientSink
+	nextClientID int
+	mu           sync.Mutex
+	closed       bool
+}
+
+func New(sessionID int64, mudAddr string, store *storage.Store) (*Session, error) {
 	conn, err := net.Dial("tcp", mudAddr)
 	if err != nil {
 		return nil, err
 	}
 
 	return &Session{
-		mudAddr: mudAddr,
-		conn:    conn,
-		clients: make(map[*websocket.Conn]struct{}),
+		sessionID: sessionID,
+		mudAddr:   mudAddr,
+		conn:      conn,
+		store:     store,
+		clients:   make(map[int]clientSink),
 	}, nil
 }
 
@@ -67,40 +79,54 @@ func (s *Session) RunReadLoop() {
 				continue
 			}
 
-			s.Broadcast(processed)
+			for _, line := range splitLinesForLogs(processed) {
+				id, err := s.store.AppendLogEntry(s.sessionID, line, line)
+				if err != nil {
+					log.Printf("append log entry failed: %v", err)
+					continue
+				}
+
+				s.Broadcast(storage.LogEntry{ID: id, RawText: line})
+			}
 		}
 	}
 }
 
-func (s *Session) AttachClient(ws *websocket.Conn) {
+func (s *Session) AttachClient(name string, send func(storage.LogEntry) error) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.clients[ws] = struct{}{}
-	log.Printf("client attached: %s, total clients=%d", ws.RemoteAddr(), len(s.clients))
+	s.nextClientID++
+	id := s.nextClientID
+	s.clients[id] = clientSink{id: id, name: name, send: send}
+	log.Printf("client attached: %s, total clients=%d", name, len(s.clients))
+	return id
 }
 
-func (s *Session) DetachClient(ws *websocket.Conn) {
+func (s *Session) DetachClient(id int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	delete(s.clients, ws)
-	log.Printf("client detached: %s, total clients=%d", ws.RemoteAddr(), len(s.clients))
+	name := "unknown"
+	if client, ok := s.clients[id]; ok {
+		name = client.name
+	}
+	delete(s.clients, id)
+	log.Printf("client detached: %s, total clients=%d", name, len(s.clients))
 }
 
-func (s *Session) Broadcast(message string) {
+func (s *Session) Broadcast(entry storage.LogEntry) {
 	s.mu.Lock()
-	clients := make([]*websocket.Conn, 0, len(s.clients))
-	for ws := range s.clients {
-		clients = append(clients, ws)
+	clients := make([]clientSink, 0, len(s.clients))
+	for _, client := range s.clients {
+		clients = append(clients, client)
 	}
 	s.mu.Unlock()
 
-	log.Printf("broadcasting %d bytes to %d clients", len(message), len(clients))
+	log.Printf("broadcasting log entry %d to %d clients", entry.ID, len(clients))
 
-	for _, ws := range clients {
-		if err := ws.WriteMessage(websocket.TextMessage, []byte(message)); err != nil {
-			log.Printf("websocket write error to %s: %v", ws.RemoteAddr(), err)
-			s.DetachClient(ws)
-			_ = ws.Close()
+	for _, client := range clients {
+		if err := client.send(entry); err != nil {
+			log.Printf("client send error to %s: %v", client.name, err)
+			s.DetachClient(client.id)
 		}
 	}
 }
@@ -127,10 +153,28 @@ func normalizePacket(packet []byte) string {
 	return out.String()
 }
 
-func (s *Session) SendCommand(command string) error {
-	log.Printf("sending command to MUD: %q", command)
+func (s *Session) SendCommand(command string, source string) error {
+	if source == "" {
+		source = "input"
+	}
+
+	log.Printf("sending command to MUD: %q (source=%s)", command, source)
+	if err := s.store.AppendHistoryEntry(s.sessionID, source, command); err != nil {
+		log.Printf("append history entry failed: %v", err)
+	}
+	if err := s.store.AppendCommandHintToLatestLogEntry(s.sessionID, command); err != nil {
+		log.Printf("append command hint failed: %v", err)
+	}
 	_, err := s.conn.Write([]byte(command + "\n"))
 	return err
+}
+
+func (s *Session) RecentLogs(limit int) ([]storage.LogEntry, error) {
+	return s.store.RecentLogs(s.sessionID, limit)
+}
+
+func (s *Session) RecentInputHistory(limit int) ([]string, error) {
+	return s.store.RecentInputHistory(s.sessionID, limit)
 }
 
 func (s *Session) Close() error {
@@ -140,18 +184,17 @@ func (s *Session) Close() error {
 		return nil
 	}
 	s.closed = true
-	clients := make([]*websocket.Conn, 0, len(s.clients))
-	for ws := range s.clients {
-		clients = append(clients, ws)
+	clients := make([]clientSink, 0, len(s.clients))
+	for _, client := range s.clients {
+		clients = append(clients, client)
 	}
-	s.clients = map[*websocket.Conn]struct{}{}
+	s.clients = map[int]clientSink{}
 	s.mu.Unlock()
 
-	for _, ws := range clients {
-		_ = ws.Close()
-	}
-
 	log.Printf("closing session for %s", s.mudAddr)
+	if err := s.store.MarkSessionDisconnected(s.sessionID); err != nil {
+		log.Printf("mark session disconnected failed: %v", err)
+	}
 	return s.conn.Close()
 }
 
@@ -159,4 +202,14 @@ func (s *Session) isClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+func splitLinesForLogs(text string) []string {
+	parts := strings.Split(text, "\n")
+	lines := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSuffix(part, "\r")
+		lines = append(lines, part)
+	}
+	return lines
 }
