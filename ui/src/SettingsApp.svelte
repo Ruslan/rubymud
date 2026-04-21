@@ -43,6 +43,7 @@
   // Initialize from hash or default to variables
   let currentTab = window.location.hash.slice(1) || 'variables';
   let loading = true;
+  let formError = '';
 
   window.onhashchange = () => {
     currentTab = window.location.hash.slice(1) || 'variables';
@@ -81,11 +82,124 @@
   const defaultHighlight = (): Highlight => ({ pattern: '', fg: '', bg: '', bold: false, faint: false, italic: false, underline: false, strikethrough: false, blink: false, reverse: false, enabled: true, group_name: '' });
   let highlightEditor: Highlight = defaultHighlight();
 
+  type RGB = { r: number; g: number; b: number };
+
+  const ansiBasePalette: RGB[] = [
+    { r: 0, g: 0, b: 0 },
+    { r: 128, g: 0, b: 0 },
+    { r: 0, g: 128, b: 0 },
+    { r: 128, g: 128, b: 0 },
+    { r: 0, g: 0, b: 128 },
+    { r: 128, g: 0, b: 128 },
+    { r: 0, g: 128, b: 128 },
+    { r: 192, g: 192, b: 192 },
+    { r: 128, g: 128, b: 128 },
+    { r: 255, g: 0, b: 0 },
+    { r: 0, g: 255, b: 0 },
+    { r: 255, g: 255, b: 0 },
+    { r: 0, g: 0, b: 255 },
+    { r: 255, g: 0, b: 255 },
+    { r: 0, g: 255, b: 255 },
+    { r: 255, g: 255, b: 255 },
+  ];
+
+  function ansi256ToRGB(index: number): RGB {
+    if (index >= 0 && index < 16) return ansiBasePalette[index] ?? ansiBasePalette[0]!;
+    if (index >= 16 && index <= 231) {
+      const cube = index - 16;
+      const steps = [0, 95, 135, 175, 215, 255];
+      const r = steps[Math.floor(cube / 36) % 6] ?? 0;
+      const g = steps[Math.floor(cube / 6) % 6] ?? 0;
+      const b = steps[cube % 6] ?? 0;
+      return {
+        r,
+        g,
+        b,
+      };
+    }
+    const gray = 8 + (index - 232) * 10;
+    return { r: gray, g: gray, b: gray };
+  }
+
+  function rgbToHex({ r, g, b }: RGB): string {
+    const toHex = (value: number) => value.toString(16).padStart(2, '0');
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+  }
+
+  function parseHexColor(value: string): RGB | null {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized.startsWith('#')) return null;
+    let hex = normalized.slice(1);
+    if (hex.length === 3) {
+      hex = `${hex[0]}${hex[0]}${hex[1]}${hex[1]}${hex[2]}${hex[2]}`;
+    }
+    if (!/^[0-9a-f]{6}$/.test(hex)) return null;
+    return {
+      r: parseInt(hex.slice(0, 2), 16),
+      g: parseInt(hex.slice(2, 4), 16),
+      b: parseInt(hex.slice(4, 6), 16),
+    };
+  }
+
+  function colorValueToHex(value: string): string {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return '#cccccc';
+    const parsedHex = parseHexColor(normalized);
+    if (parsedHex) return rgbToHex(parsedHex);
+    if (normalized.startsWith('256:')) {
+      const index = Number.parseInt(normalized.slice(4), 10);
+      if (!Number.isNaN(index) && index >= 0 && index <= 255) {
+        return rgbToHex(ansi256ToRGB(index));
+      }
+    }
+    return '#cccccc';
+  }
+
+  function colorValueToCss(value: string, fallback: string): string {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return fallback;
+    if (parseHexColor(normalized)) return rgbToHex(parseHexColor(normalized)!);
+    if (normalized.startsWith('256:')) {
+      const index = Number.parseInt(normalized.slice(4), 10);
+      if (!Number.isNaN(index) && index >= 0 && index <= 255) {
+        return rgbToHex(ansi256ToRGB(index));
+      }
+    }
+    return fallback;
+  }
+
+  function nearestAnsi256Index(rgb: RGB): number {
+    let bestIndex = 0;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    for (let i = 0; i <= 255; i += 1) {
+      const candidate = ansi256ToRGB(i);
+      const dr = rgb.r - candidate.r;
+      const dg = rgb.g - candidate.g;
+      const db = rgb.b - candidate.b;
+      const distance = dr * dr + dg * dg + db * db;
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestIndex = i;
+      }
+    }
+    return bestIndex;
+  }
+
+  function setHighlightColor(field: 'fg' | 'bg', hex: string) {
+    const rgb = parseHexColor(hex);
+    if (!rgb) return;
+    highlightEditor = {
+      ...highlightEditor,
+      [field]: `256:${nearestAnsi256Index(rgb)}`,
+    };
+  }
+
   // Sessions State
   let sessions: any[] = [];
 
   async function fetchData() {
     loading = true;
+    formError = '';
     // @ts-ignore
     const token = window.API_TOKEN || '';
     try {
@@ -106,6 +220,13 @@
   }
 
   async function saveItem(domain: string, item: any, resetFn: () => void) {
+    const validationError = validateItem(domain, item);
+    if (validationError) {
+      formError = validationError;
+      return;
+    }
+
+    formError = '';
     const isUpdate = !!item.id || domain === 'variables';
     let url = `/api/${domain}`;
     if (isUpdate && domain !== 'variables') url += `/${item.id}`;
@@ -122,6 +243,28 @@
     });
     resetFn();
     await fetchData();
+  }
+
+  function validateItem(domain: string, item: any): string {
+    if (domain === 'variables') {
+      if (!newVarKey.trim()) return 'Variable key is required.';
+      return '';
+    }
+    if (domain === 'aliases') {
+      if (!item.name?.trim()) return 'Alias name is required.';
+      if (!item.template?.trim()) return 'Alias template is required.';
+      return '';
+    }
+    if (domain === 'triggers') {
+      if (!item.pattern?.trim()) return 'Trigger pattern is required.';
+      if (!item.command?.trim()) return 'Trigger command is required.';
+      return '';
+    }
+    if (domain === 'highlights') {
+      if (!item.pattern?.trim()) return 'Highlight pattern is required.';
+      return '';
+    }
+    return '';
   }
 
   async function deleteItem(domain: string, id: string | number) {
@@ -156,8 +299,9 @@
     {#if currentTab === 'variables'}
       <header class="content-header"><h2>Variables</h2><p class="description">Global state variables.</p></header>
       <div class="editor-box">
+        {#if formError}<div class="form-error">{formError}</div>{/if}
         <div class="form-row">
-          <input type="text" bind:value={newVarKey} placeholder="Key" />
+          <input type="text" bind:value={newVarKey} placeholder="Key" required />
           <input type="text" bind:value={newVarValue} placeholder="Value" />
           <button class="btn-primary" on:click={() => saveItem('variables', {}, () => { newVarKey = ''; newVarValue = ''; })}>Save</button>
         </div>
@@ -180,9 +324,10 @@
     {:else if currentTab === 'aliases'}
       <header class="content-header"><h2>Aliases</h2><p class="description">Command shortcuts.</p></header>
       <div class="editor-box">
+        {#if formError}<div class="form-error">{formError}</div>{/if}
         <div class="form-row">
-          <input type="text" bind:value={aliasEditor.name} placeholder="Name" />
-          <input type="text" bind:value={aliasEditor.template} placeholder="Template" />
+          <input type="text" bind:value={aliasEditor.name} placeholder="Name" required />
+          <input type="text" bind:value={aliasEditor.template} placeholder="Template" required />
           <label class="checkbox-label"><input type="checkbox" bind:checked={aliasEditor.enabled} /> Enabled</label>
           <button class="btn-primary" on:click={() => saveItem('aliases', aliasEditor, () => aliasEditor = { name: '', template: '', enabled: true })}>
             {aliasEditor.id ? 'Update' : 'Add'}
@@ -208,9 +353,10 @@
     {:else if currentTab === 'triggers'}
       <header class="content-header"><h2>Triggers</h2><p class="description">Automatic reactions.</p></header>
       <div class="editor-box">
+        {#if formError}<div class="form-error">{formError}</div>{/if}
         <div class="form-grid">
-          <div class="form-row"><input type="text" bind:value={triggerEditor.name} placeholder="Trigger Name" /><input type="text" bind:value={triggerEditor.pattern} placeholder="Pattern (Regex)" /></div>
-          <div class="form-row"><input type="text" bind:value={triggerEditor.command} placeholder="Command" /><input type="text" bind:value={triggerEditor.group_name} placeholder="Group Name" /></div>
+          <div class="form-row"><input type="text" bind:value={triggerEditor.name} placeholder="Trigger Name" /><input type="text" bind:value={triggerEditor.pattern} placeholder="Pattern (Regex)" required /></div>
+          <div class="form-row"><input type="text" bind:value={triggerEditor.command} placeholder="Command" required /><input type="text" bind:value={triggerEditor.group_name} placeholder="Group Name" /></div>
           <div class="form-row options-row">
             <label class="checkbox-label"><input type="checkbox" bind:checked={triggerEditor.enabled} /> Enabled</label>
             <label class="checkbox-label"><input type="checkbox" bind:checked={triggerEditor.is_button} /> Is Button</label>
@@ -250,14 +396,23 @@
     {:else if currentTab === 'highlights'}
       <header class="content-header"><h2>Highlights</h2><p class="description">Visual formatting.</p></header>
       <div class="editor-box">
+        {#if formError}<div class="form-error">{formError}</div>{/if}
         <div class="form-grid">
           <div class="form-row">
-            <input type="text" bind:value={highlightEditor.pattern} placeholder="Pattern (Regex)" />
+            <input type="text" bind:value={highlightEditor.pattern} placeholder="Pattern (Regex)" required />
             <input type="text" bind:value={highlightEditor.group_name} placeholder="Group Name" />
           </div>
           <div class="form-row">
-            <input type="text" bind:value={highlightEditor.fg} placeholder="FG (e.g. #ff0000)" />
-            <input type="text" bind:value={highlightEditor.bg} placeholder="BG (e.g. #000033)" />
+            <label class="color-field">
+              <span>FG</span>
+              <input type="color" value={colorValueToHex(highlightEditor.fg)} on:input={(event) => setHighlightColor('fg', (event.currentTarget as HTMLInputElement).value)} />
+              <code>{highlightEditor.fg || 'default'}</code>
+            </label>
+            <label class="color-field">
+              <span>BG</span>
+              <input type="color" value={colorValueToHex(highlightEditor.bg)} on:input={(event) => setHighlightColor('bg', (event.currentTarget as HTMLInputElement).value)} />
+              <code>{highlightEditor.bg || 'default'}</code>
+            </label>
           </div>
           <div class="form-row options-row">
             <label class="checkbox-label"><input type="checkbox" bind:checked={highlightEditor.enabled} /> Enabled</label>
@@ -283,15 +438,15 @@
               <td class="key-cell">{h.pattern}</td>
               <td class="dim-cell">
                 <div class="color-preview">
-                  <span class="color-chip" style="background: {h.fg || '#ccc'}"></span> {h.fg || 'def'}
-                  <span class="color-chip" style="background: {h.bg || '#333'}"></span> {h.bg || 'def'}
+                  <span class="color-chip" style="background: {colorValueToCss(h.fg, '#cccccc')}"></span> {h.fg || 'def'}
+                  <span class="color-chip" style="background: {colorValueToCss(h.bg, '#333333')}"></span> {h.bg || 'def'}
                 </div>
               </td>
               <td class="dim-cell">{h.group_name || '-'}</td>
               <td class="value-cell">
                 <span style="
-                  color: {h.reverse ? (h.bg || '#111') : (h.fg || '#eee')};
-                  background: {h.reverse ? (h.fg || '#eee') : (h.bg || 'transparent')};
+                  color: {h.reverse ? colorValueToCss(h.bg, '#111111') : colorValueToCss(h.fg, '#eeeeee')};
+                  background: {h.reverse ? colorValueToCss(h.fg, '#eeeeee') : colorValueToCss(h.bg, 'transparent')};
                   font-weight: {h.bold ? 'bold' : 'normal'};
                   opacity: {h.faint ? '0.6' : '1'};
                   font-style: {h.italic ? 'italic' : 'normal'};
@@ -344,12 +499,17 @@
   .nav-links li.active button { background: #24292f; color: #3498db; border-left: 3px solid #3498db; }
   .content { padding: 40px; overflow-y: auto; }
   .description { color: #9ba3af; margin-bottom: 32px; }
+  .form-error { color: #ff7b72; margin-bottom: 12px; font-size: 0.9rem; }
   .editor-box { background: #1a1d21; padding: 20px; border-radius: 8px; border: 1px solid #2d333b; margin-bottom: 32px; }
   .form-grid { display: flex; flex-direction: column; gap: 12px; }
   .form-row { display: flex; gap: 12px; align-items: center; }
   .options-row { margin-top: 8px; border-top: 1px solid #2d333b; padding-top: 12px; flex-wrap: wrap; }
   input[type="text"] { background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px 12px; border-radius: 6px; flex: 1; }
   .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #9ba3af; cursor: pointer; }
+  .color-field { display: flex; align-items: center; gap: 10px; color: #9ba3af; min-width: 0; }
+  .color-field span { font-size: 0.85rem; min-width: 20px; }
+  .color-field code { color: #e8edf2; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; min-width: 72px; }
+  input[type="color"] { width: 44px; height: 32px; background: none; border: none; padding: 0; }
   .btn-primary { background: #3498db; color: white; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; }
   .data-table { width: 100%; border-collapse: collapse; }
   .data-table th { text-align: left; padding: 12px; border-bottom: 2px solid #30363d; color: #9ba3af; font-size: 0.8rem; text-transform: uppercase; }

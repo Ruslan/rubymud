@@ -137,6 +137,13 @@ func (s *Session) RecentInputHistory(limit int) ([]string, error) {
 	return s.store.RecentInputHistory(s.sessionID, limit)
 }
 
+func (s *Session) HighlightText(text string) string {
+	if s == nil || s.vm == nil {
+		return text
+	}
+	return s.vm.ApplyHighlights(text)
+}
+
 func (s *Session) Close() error {
 	s.mu.Lock()
 	if s.closed {

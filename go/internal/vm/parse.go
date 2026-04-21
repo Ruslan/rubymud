@@ -11,7 +11,9 @@ func splitFirstWord(input string) (string, []string) {
 }
 
 func splitSemicolons(input string) []string {
-	parts := strings.Split(input, ";")
+	parts := strings.FieldsFunc(input, func(r rune) bool {
+		return r == ';' || r == '\n' || r == '\r'
+	})
 	result := make([]string, 0, len(parts))
 	for _, p := range parts {
 		trimmed := strings.TrimSpace(p)

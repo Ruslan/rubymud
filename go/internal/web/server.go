@@ -571,7 +571,7 @@ func (s *Server) sendRestoreState(writeJSON func(session.ServerMsg) error) error
 
 	entries := make([]session.ClientLogEntry, 0, len(logs))
 	for _, entry := range logs {
-		cle := session.ClientLogEntry{Text: entry.RawText, Commands: entry.Commands}
+		cle := session.ClientLogEntry{Text: s.session.HighlightText(entry.RawText), Commands: entry.Commands}
 		for _, b := range entry.Buttons {
 			cle.Buttons = append(cle.Buttons, session.ButtonOverlay{Label: b.Label, Command: b.Command})
 		}

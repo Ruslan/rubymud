@@ -39,6 +39,8 @@ func TestSplitSemicolons(t *testing.T) {
 		{"", nil},
 		{"a;b;c", []string{"a", "b", "c"}},
 		{" a ; b ", []string{"a", "b"}},
+		{"one\ntwo", []string{"one", "two"}},
+		{"one\r\ntwo", []string{"one", "two"}},
 	}
 
 	for _, tt := range tests {

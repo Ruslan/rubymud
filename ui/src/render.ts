@@ -128,6 +128,8 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
         button.type = 'button';
         button.textContent = btn.label;
         button.addEventListener('click', () => {
+          appendCommandHint(btn.command);
+          scrollOutputToBottom();
           sendCommand(btn.command, 'button');
         });
         wrapper.appendChild(button);
