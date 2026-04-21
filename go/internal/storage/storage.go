@@ -169,7 +169,7 @@ func (s *Store) RecentLogs(sessionID int64, limit int) ([]LogEntry, error) {
 	}
 
 	reverseLogs(entries)
-	if err := s.loadCommandOverlays(entries); err != nil {
+	if err := s.loadOverlays(entries); err != nil {
 		return nil, err
 	}
 	return entries, nil
@@ -271,7 +271,7 @@ func reverseLogs(entries []LogEntry) {
 	}
 }
 
-func (s *Store) loadCommandOverlays(entries []LogEntry) error {
+func (s *Store) loadOverlays(entries []LogEntry) error {
 	if len(entries) == 0 {
 		return nil
 	}
@@ -286,9 +286,9 @@ func (s *Store) loadCommandOverlays(entries []LogEntry) error {
 	}
 
 	query := fmt.Sprintf(`
-		SELECT log_entry_id, payload_json
+		SELECT log_entry_id, overlay_type, payload_json
 		FROM log_overlays
-		WHERE overlay_type = 'command_hint' AND log_entry_id IN (%s)
+		WHERE overlay_type IN ('command_hint', 'button') AND log_entry_id IN (%s)
 		ORDER BY id ASC
 	`, strings.Join(placeholders, ","))
 
@@ -300,18 +300,34 @@ func (s *Store) loadCommandOverlays(entries []LogEntry) error {
 
 	for rows.Next() {
 		var logEntryID int64
+		var overlayType string
 		var payloadText string
-		if err := rows.Scan(&logEntryID, &payloadText); err != nil {
+		if err := rows.Scan(&logEntryID, &overlayType, &payloadText); err != nil {
 			return err
 		}
 
-		var payload commandOverlayPayload
-		if err := json.Unmarshal([]byte(payloadText), &payload); err != nil {
-			return err
+		index, ok := idIndex[logEntryID]
+		if !ok {
+			continue
 		}
 
-		if index, ok := idIndex[logEntryID]; ok && payload.Command != "" {
-			entries[index].Commands = append(entries[index].Commands, payload.Command)
+		switch overlayType {
+		case "command_hint":
+			var payload commandOverlayPayload
+			if err := json.Unmarshal([]byte(payloadText), &payload); err != nil {
+				return err
+			}
+			if payload.Command != "" {
+				entries[index].Commands = append(entries[index].Commands, payload.Command)
+			}
+		case "button":
+			var payload ButtonOverlay
+			if err := json.Unmarshal([]byte(payloadText), &payload); err != nil {
+				return err
+			}
+			if payload.Command != "" {
+				entries[index].Buttons = append(entries[index].Buttons, payload)
+			}
 		}
 	}
 

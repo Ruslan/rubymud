@@ -206,16 +206,17 @@ func (s *Session) SendCommand(command string, source string) error {
 		source = "input"
 	}
 
-	results := s.vm.ProcessInput(command)
+	results := s.vm.ProcessInputDetailed(command)
 
 	echoMessages := make([]string, 0)
 	commands := make([]string, 0)
 
 	for _, r := range results {
-		if strings.HasPrefix(r, "#") || strings.Contains(r, ": ") {
-			echoMessages = append(echoMessages, r)
-		} else {
-			commands = append(commands, r)
+		switch r.Kind {
+		case vm.ResultEcho:
+			echoMessages = append(echoMessages, r.Text)
+		default:
+			commands = append(commands, r.Text)
 		}
 	}
 

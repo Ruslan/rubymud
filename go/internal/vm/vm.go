@@ -6,6 +6,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"rubymud/go/internal/storage"
 )
@@ -17,6 +18,18 @@ type Effect struct {
 	Command    string
 	Label      string
 	LogEntryID int64
+}
+
+type ResultKind string
+
+const (
+	ResultCommand ResultKind = "command"
+	ResultEcho    ResultKind = "echo"
+)
+
+type Result struct {
+	Text string
+	Kind ResultKind
 }
 
 type VM struct {
@@ -71,24 +84,32 @@ func (v *VM) Triggers() []storage.TriggerRule     { return v.triggers }
 func (v *VM) Highlights() []storage.HighlightRule { return v.highlights }
 
 func (v *VM) ProcessInput(input string) []string {
+	results := v.ProcessInputDetailed(input)
+	output := make([]string, 0, len(results))
+	for _, result := range results {
+		output = append(output, result.Text)
+	}
+	return output
+}
+
+func (v *VM) ProcessInputDetailed(input string) []Result {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return nil
 	}
 
 	if strings.HasPrefix(input, "#") {
-		result := v.dispatchCommand(input)
-		return result
+		return v.dispatchCommand(input)
 	}
 
 	if expanded, ok := expandSpeedwalk(input); ok {
-		return expanded
+		return commandResults(expanded)
 	}
 
-	return v.ExpandInput(input)
+	return commandResults(v.ExpandInput(input))
 }
 
-func (v *VM) dispatchCommand(input string) []string {
+func (v *VM) dispatchCommand(input string) []Result {
 	cmd := strings.TrimPrefix(input, "#")
 	cmd = strings.TrimSpace(cmd)
 
@@ -107,7 +128,7 @@ func (v *VM) dispatchCommand(input string) []string {
 		for i := 0; i < n; i++ {
 			result = append(result, expanded...)
 		}
-		return result
+		return commandResults(result)
 	}
 
 	keyword, args := splitFirstWord(cmd)
@@ -132,10 +153,10 @@ func (v *VM) dispatchCommand(input string) []string {
 		return v.cmdUnhighlight(rest)
 	}
 
-	return []string{input}
+	return []Result{{Text: input, Kind: ResultCommand}}
 }
 
-func (v *VM) cmdAlias(rest string) []string {
+func (v *VM) cmdAlias(rest string) []Result {
 	if rest == "" {
 		var lines []string
 		for _, a := range v.aliases {
@@ -144,48 +165,48 @@ func (v *VM) cmdAlias(rest string) []string {
 		if len(lines) == 0 {
 			lines = append(lines, "#alias: no aliases defined")
 		}
-		return lines
+		return echoResults(lines)
 	}
 
 	name, afterName := splitBraceArg(rest)
 	template, _ := splitBraceArg(strings.TrimSpace(afterName))
 	if name == "" {
-		return []string{"#alias: usage: #alias {name} {template}"}
+		return echoResults([]string{"#alias: usage: #alias {name} {template}"})
 	}
 
 	if template == "" {
 		for _, a := range v.aliases {
 			if a.Name == name {
-				return []string{fmt.Sprintf("#alias {%s} = {%s}", name, a.Template)}
+				return echoResults([]string{fmt.Sprintf("#alias {%s} = {%s}", name, a.Template)})
 			}
 		}
-		return []string{fmt.Sprintf("#alias: %s not found", name)}
+		return echoResults([]string{fmt.Sprintf("#alias: %s not found", name)})
 	}
 
 	if v.store != nil {
 		if err := v.store.SaveAlias(v.sessionID, name, template); err != nil {
-			return []string{fmt.Sprintf("#alias: save error: %v", err)}
+			return echoResults([]string{fmt.Sprintf("#alias: save error: %v", err)})
 		}
 		v.Reload()
 	} else {
 		v.aliases = append(v.aliases, storage.AliasRule{Name: name, Template: template, Enabled: true})
 	}
-	return []string{fmt.Sprintf("#alias {%s} = {%s}", name, template)}
+	return echoResults([]string{fmt.Sprintf("#alias {%s} = {%s}", name, template)})
 }
 
-func (v *VM) cmdUnalias(rest string) []string {
+func (v *VM) cmdUnalias(rest string) []Result {
 	name := strings.TrimSpace(strings.Trim(rest, "{}'\""))
 	if name == "" {
-		return []string{"#unalias: usage: #unalias {name}"}
+		return echoResults([]string{"#unalias: usage: #unalias {name}"})
 	}
 	if err := v.store.DeleteAlias(v.sessionID, name); err != nil {
-		return []string{fmt.Sprintf("#unalias: error: %v", err)}
+		return echoResults([]string{fmt.Sprintf("#unalias: error: %v", err)})
 	}
 	v.Reload()
-	return []string{fmt.Sprintf("#unalias: %s removed", name)}
+	return echoResults([]string{fmt.Sprintf("#unalias: %s removed", name)})
 }
 
-func (v *VM) cmdVariable(rest string) []string {
+func (v *VM) cmdVariable(rest string) []Result {
 	if rest == "" {
 		var lines []string
 		for k, val := range v.variables {
@@ -194,45 +215,44 @@ func (v *VM) cmdVariable(rest string) []string {
 		if len(lines) == 0 {
 			lines = append(lines, "#variable: no variables defined")
 		}
-		return lines
+		return echoResults(lines)
 	}
 
 	name, afterName := splitBraceArg(rest)
 	value, _ := splitBraceArg(strings.TrimSpace(afterName))
 	if name == "" {
-		return []string{"#variable: usage: #variable {name} [value]"}
+		return echoResults([]string{"#variable: usage: #variable {name} [value]"})
 	}
 
 	if value == "" {
 		if val, ok := v.variables[name]; ok {
-			return []string{fmt.Sprintf("#variable {%s} = {%s}", name, val)}
+			return echoResults([]string{fmt.Sprintf("#variable {%s} = {%s}", name, val)})
 		}
-		return []string{fmt.Sprintf("#variable: %s not found", name)}
+		return echoResults([]string{fmt.Sprintf("#variable: %s not found", name)})
 	}
 
 	if v.store != nil {
 		if err := v.store.SetVariable(v.sessionID, name, value); err != nil {
-			return []string{fmt.Sprintf("#variable: save error: %v", err)}
+			return echoResults([]string{fmt.Sprintf("#variable: save error: %v", err)})
 		}
-	} else {
-		v.variables[name] = value
 	}
-	return []string{fmt.Sprintf("#variable {%s} = {%s}", name, value)}
+	v.variables[name] = value
+	return echoResults([]string{fmt.Sprintf("#variable {%s} = {%s}", name, value)})
 }
 
-func (v *VM) cmdUnvariable(rest string) []string {
+func (v *VM) cmdUnvariable(rest string) []Result {
 	name := strings.TrimSpace(strings.Trim(rest, "{}'\""))
 	if name == "" {
-		return []string{"#unvariable: usage: #unvariable {name}"}
+		return echoResults([]string{"#unvariable: usage: #unvariable {name}"})
 	}
 	if err := v.store.DeleteVariable(v.sessionID, name); err != nil {
-		return []string{fmt.Sprintf("#unvariable: error: %v", err)}
+		return echoResults([]string{fmt.Sprintf("#unvariable: error: %v", err)})
 	}
 	delete(v.variables, name)
-	return []string{fmt.Sprintf("#unvariable: %s removed", name)}
+	return echoResults([]string{fmt.Sprintf("#unvariable: %s removed", name)})
 }
 
-func (v *VM) cmdAction(rest string) []string {
+func (v *VM) cmdAction(rest string) []Result {
 	if rest == "" {
 		var lines []string
 		for _, t := range v.triggers {
@@ -246,7 +266,7 @@ func (v *VM) cmdAction(rest string) []string {
 		if len(lines) == 0 {
 			lines = append(lines, "#action: no actions defined")
 		}
-		return lines
+		return echoResults(lines)
 	}
 
 	pattern, afterPattern := splitBraceArg(rest)
@@ -260,7 +280,7 @@ func (v *VM) cmdAction(rest string) []string {
 	}
 
 	if pattern == "" || command == "" {
-		return []string{"#action: usage: #action {pattern} {command} [group] [button]"}
+		return echoResults([]string{"#action: usage: #action {pattern} {command} [group] [button]"})
 	}
 
 	if group == "" {
@@ -268,29 +288,29 @@ func (v *VM) cmdAction(rest string) []string {
 	}
 
 	if err := v.store.SaveTrigger(v.sessionID, pattern, command, isButton, group); err != nil {
-		return []string{fmt.Sprintf("#action: save error: %v", err)}
+		return echoResults([]string{fmt.Sprintf("#action: save error: %v", err)})
 	}
 	v.Reload()
 	label := ""
 	if isButton {
 		label = " {button}"
 	}
-	return []string{fmt.Sprintf("#action {%s} {%s} {%s}%s", pattern, command, group, label)}
+	return echoResults([]string{fmt.Sprintf("#action {%s} {%s} {%s}%s", pattern, command, group, label)})
 }
 
-func (v *VM) cmdUnaction(rest string) []string {
+func (v *VM) cmdUnaction(rest string) []Result {
 	pattern := strings.TrimSpace(strings.Trim(rest, "{}'\""))
 	if pattern == "" {
-		return []string{"#unaction: usage: #unaction {pattern}"}
+		return echoResults([]string{"#unaction: usage: #unaction {pattern}"})
 	}
 	if err := v.store.DeleteTrigger(v.sessionID, pattern); err != nil {
-		return []string{fmt.Sprintf("#unaction: error: %v", err)}
+		return echoResults([]string{fmt.Sprintf("#unaction: error: %v", err)})
 	}
 	v.Reload()
-	return []string{fmt.Sprintf("#unaction: %s removed", pattern)}
+	return echoResults([]string{fmt.Sprintf("#unaction: %s removed", pattern)})
 }
 
-func (v *VM) cmdHighlight(rest string) []string {
+func (v *VM) cmdHighlight(rest string) []Result {
 	if rest == "" {
 		var lines []string
 		for _, h := range v.highlights {
@@ -299,7 +319,7 @@ func (v *VM) cmdHighlight(rest string) []string {
 		if len(lines) == 0 {
 			lines = append(lines, "#highlight: no highlights defined")
 		}
-		return lines
+		return echoResults(lines)
 	}
 
 	colorSpec, afterColor := splitBraceArg(rest)
@@ -308,7 +328,7 @@ func (v *VM) cmdHighlight(rest string) []string {
 	_ = afterGroup
 
 	if pattern == "" {
-		return []string{"#highlight: usage: #highlight {color} {pattern} [group]"}
+		return echoResults([]string{"#highlight: usage: #highlight {color} {pattern} [group]"})
 	}
 	if group == "" {
 		group = "default"
@@ -320,28 +340,28 @@ func (v *VM) cmdHighlight(rest string) []string {
 
 	if v.store != nil {
 		if err := v.store.SaveHighlight(v.sessionID, h); err != nil {
-			return []string{fmt.Sprintf("#highlight: save error: %v", err)}
+			return echoResults([]string{fmt.Sprintf("#highlight: save error: %v", err)})
 		}
 		v.Reload()
 	} else {
 		h.Enabled = true
 		v.highlights = append(v.highlights, h)
 	}
-	return []string{formatHighlight(h)}
+	return echoResults([]string{formatHighlight(h)})
 }
 
-func (v *VM) cmdUnhighlight(rest string) []string {
+func (v *VM) cmdUnhighlight(rest string) []Result {
 	pattern := strings.TrimSpace(strings.Trim(rest, "{}'\""))
 	if pattern == "" {
-		return []string{"#unhighlight: usage: #unhighlight {pattern}"}
+		return echoResults([]string{"#unhighlight: usage: #unhighlight {pattern}"})
 	}
 	if v.store != nil {
 		if err := v.store.DeleteHighlight(v.sessionID, pattern); err != nil {
-			return []string{fmt.Sprintf("#unhighlight: error: %v", err)}
+			return echoResults([]string{fmt.Sprintf("#unhighlight: error: %v", err)})
 		}
 		v.Reload()
 	}
-	return []string{fmt.Sprintf("#unhighlight: %s removed", pattern)}
+	return echoResults([]string{fmt.Sprintf("#unhighlight: %s removed", pattern)})
 }
 
 func formatHighlight(h storage.HighlightRule) string {
@@ -433,12 +453,13 @@ func (v *VM) ApplyHighlights(text string) string {
 		if loc == nil {
 			continue
 		}
-		matched := text
-		if loc[0] >= 0 && loc[1] <= len(text) {
-			matched = text[loc[0]:loc[1]]
+		rawStart, rawEnd, ok := plainRangeToRawRange(text, loc[0], loc[1])
+		if !ok || rawStart < 0 || rawEnd > len(text) || rawStart >= rawEnd {
+			continue
 		}
+		matched := text[rawStart:rawEnd]
 		ansi := highlightToANSI(h)
-		text = strings.Replace(text, matched, ansi+matched+resetANSI(), 1)
+		text = text[:rawStart] + ansi + matched + resetANSI() + text[rawEnd:]
 	}
 	return text
 }
@@ -780,6 +801,69 @@ func splitSemicolons(input string) []string {
 		}
 	}
 	return result
+}
+
+func commandResults(lines []string) []Result {
+	results := make([]Result, 0, len(lines))
+	for _, line := range lines {
+		results = append(results, Result{Text: line, Kind: ResultCommand})
+	}
+	return results
+}
+
+func echoResults(lines []string) []Result {
+	results := make([]Result, 0, len(lines))
+	for _, line := range lines {
+		results = append(results, Result{Text: line, Kind: ResultEcho})
+	}
+	return results
+}
+
+func plainRangeToRawRange(raw string, startPlain, endPlain int) (int, int, bool) {
+	plainOffset := 0
+	rawStart := -1
+	rawEnd := -1
+	inEscape := false
+
+	for i := 0; i < len(raw); {
+		if !inEscape && raw[i] == 0x1b {
+			inEscape = true
+			i++
+			continue
+		}
+
+		if inEscape {
+			if (raw[i] >= 'a' && raw[i] <= 'z') || (raw[i] >= 'A' && raw[i] <= 'Z') {
+				inEscape = false
+			}
+			i++
+			continue
+		}
+
+		if plainOffset == startPlain && rawStart == -1 {
+			rawStart = i
+		}
+
+		_, size := utf8.DecodeRuneInString(raw[i:])
+		if size <= 0 {
+			return 0, 0, false
+		}
+		i += size
+		plainOffset += size
+
+		if plainOffset == endPlain {
+			rawEnd = i
+			break
+		}
+	}
+
+	if startPlain == endPlain {
+		return 0, 0, false
+	}
+	if rawStart == -1 || rawEnd == -1 {
+		return 0, 0, false
+	}
+	return rawStart, rawEnd, true
 }
 
 func splitBraceArg(s string) (string, string) {
