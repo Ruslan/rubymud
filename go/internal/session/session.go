@@ -125,6 +125,10 @@ func (s *Session) DeleteHighlight(id int64) error {
 	return s.store.DeleteHighlightByID(id)
 }
 
+func (s *Session) ListSessions() ([]storage.SessionRecord, error) {
+	return s.store.ListSessions()
+}
+
 func (s *Session) RecentLogs(limit int) ([]storage.LogEntry, error) {
 	return s.store.RecentLogs(s.sessionID, limit)
 }

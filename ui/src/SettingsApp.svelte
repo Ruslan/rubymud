@@ -105,16 +105,6 @@
     }
   }
 
-  async function sessionAction(id: number, action: string) {
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    await fetch(`/api/sessions/${id}/${action}`, { 
-      method: 'POST',
-      headers: { 'X-Session-Token': token }
-    });
-    await fetchData();
-  }
-
   async function saveItem(domain: string, item: any, resetFn: () => void) {
     const isUpdate = !!item.id || domain === 'variables';
     let url = `/api/${domain}`;
@@ -320,9 +310,9 @@
         </tbody>
       </table>
     {:else if currentTab === 'sessions'}
-      <header class="content-header"><h2>Sessions</h2><p class="description">Manage active MUD connections.</p></header>
+      <header class="content-header"><h2>Sessions</h2><p class="description">Read-only runtime session status for 0.0.5. Real connect/disconnect management moves to 0.0.6.</p></header>
       <table class="data-table">
-        <thead><tr><th>Status</th><th>Name</th><th>Session ID</th><th style="width: 240px">Actions</th></tr></thead>
+        <thead><tr><th>Status</th><th>Name</th><th>Host</th><th>Port</th><th>Session ID</th></tr></thead>
         <tbody>
           {#each sessions as s}
             <tr>
@@ -332,15 +322,9 @@
                 </span>
               </td>
               <td class="key-cell">{s.name}</td>
+              <td class="value-cell">{s.mud_host || '-'}</td>
+              <td class="dim-cell">{s.mud_port || '-'}</td>
               <td class="dim-cell">{s.id}</td>
-              <td class="actions-cell">
-                {#if s.status === 'connected'}
-                  <button class="btn-link btn-danger" on:click={() => sessionAction(s.id, 'disconnect')}>Disconnect</button>
-                {:else}
-                  <button class="btn-link" on:click={() => sessionAction(s.id, 'reconnect')}>Connect</button>
-                {/if}
-                <button class="btn-link" style="margin-left: 12px" on:click={() => sessionAction(s.id, 'reconnect')}>Reconnect</button>
-              </td>
             </tr>
           {/each}
         </tbody>

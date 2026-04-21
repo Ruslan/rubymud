@@ -235,3 +235,42 @@ The first acceptable implementation is:
 2. re-fetch on receipt
 
 That is enough for now.
+
+## Revised Scope Snapshot
+
+This file originally treated `sessions` as full CRUD scope for `0.0.5`.
+
+After implementation, the honest `0.0.5` cutoff is narrower:
+
+1. Settings foundation is in scope.
+2. Real session lifecycle management is out of scope.
+
+### What Counts As Done For 0.0.5
+
+1. Vite + Svelte settings frontend exists and is embedded into the Go binary.
+2. Game UI remains native and working.
+3. REST JSON CRUD works for:
+   - variables
+   - aliases
+   - triggers
+   - highlights
+4. Settings pages exist for those four editable domains.
+5. Sessions page exists as a read-only status page.
+6. Settings invalidation uses `settings.changed` notifications and REST re-fetch.
+7. `make run`, `make build`, and `make test` work with the current frontend/embed flow.
+
+### Explicitly Deferred From 0.0.5 To 0.0.6
+
+1. Creating sessions from the settings UI.
+2. Editing session host/port/name from the settings UI.
+3. Real connect/disconnect/reconnect lifecycle from the browser.
+4. Session manager/runtime orchestration for multiple persisted sessions.
+5. First-run product flow where a downloaded `.exe` can bootstrap its own local DB and let the user create the first session entirely from the UI.
+
+### Closure Checklist For 0.0.5
+
+1. Sessions page must not expose fake connect/disconnect controls.
+2. Settings routes must reliably open the Svelte settings page.
+3. Variables delete must handle arbitrary keys safely.
+4. Embedded assets in `go/internal/web/static/` must be rebuilt from `ui/`.
+5. Manual smoke test should confirm game page + settings page + CRUD for the four editable settings domains.

@@ -39,6 +39,12 @@ func (s *Store) EnsureDefaultSession(host string, port int) (SessionRecord, erro
 	return record, nil
 }
 
+func (s *Store) ListSessions() ([]SessionRecord, error) {
+	var sessions []SessionRecord
+	err := s.db.Order("id ASC").Find(&sessions).Error
+	return sessions, err
+}
+
 func (s *Store) MarkSessionDisconnected(sessionID int64) error {
 	now := nowSQLiteTimePtr()
 	return s.db.Model(&SessionRecord{}).Where("id = ?", sessionID).Updates(map[string]any{

@@ -129,8 +129,6 @@ func New(listenAddr string, sess *session.Session, hotkeys []config.Hotkey) *Ser
 		})
 		r.Route("/sessions", func(r chi.Router) {
 			r.Get("/", s.listSessions)
-			r.Post("/{id}/reconnect", s.reconnectSession)
-			r.Post("/{id}/disconnect", s.disconnectSession)
 		})
 	})
 
@@ -439,36 +437,25 @@ func (s *Server) deleteHighlight(w http.ResponseWriter, r *http.Request) {
 // Sessions
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
-	// For now, we only have one active session.
-	// In the future, this would list all sessions from DB and check their status in a map.
-
-	status := "disconnected"
-	if s.session != nil && !s.session.IsClosed() {
-		status = "connected"
+	sessions, err := s.session.ListSessions()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
-	response := []map[string]interface{}{
-		{
-			"id":     s.session.SessionID(),
-			"status": status,
-			"name":   "Default Session",
-		},
+	if s.session != nil {
+		for i := range sessions {
+			if sessions[i].ID == s.session.SessionID() {
+				if s.session.IsClosed() {
+					sessions[i].Status = "disconnected"
+				} else {
+					sessions[i].Status = "connected"
+				}
+			}
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
-}
-
-func (s *Server) reconnectSession(w http.ResponseWriter, r *http.Request) {
-	// TODO: Trigger physical reconnect in session
-	// For now just stub it
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (s *Server) disconnectSession(w http.ResponseWriter, r *http.Request) {
-	if s.session != nil {
-		s.session.Close()
-	}
-	w.WriteHeader(http.StatusNoContent)
+	json.NewEncoder(w).Encode(sessions)
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
