@@ -69,6 +69,10 @@ func (s *Session) SetVariable(key, value string) error {
 	return s.store.SetVariable(s.sessionID, key, value)
 }
 
+func (s *Session) DeleteVariable(key string) error {
+	return s.store.DeleteVariable(s.sessionID, key)
+}
+
 func (s *Session) ListAliases() ([]storage.AliasRule, error) {
 	return s.store.ListAliases(s.sessionID)
 }

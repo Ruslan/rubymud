@@ -58,10 +58,20 @@ func New(listenAddr string, sess *session.Session, hotkeys []config.Hotkey) *Ser
 		w.WriteHeader(http.StatusNoContent)
 	})
 
+	r.Get("/settings*", func(w http.ResponseWriter, r *http.Request) {
+		root, err := fs.Sub(webFiles, "static")
+		if err != nil {
+			http.Error(w, "failed to load web assets", http.StatusInternalServerError)
+			return
+		}
+		http.ServeFileFS(w, r, root, "settings.html")
+	})
+
 	r.Route("/api", func(r chi.Router) {
 		r.Route("/variables", func(r chi.Router) {
 			r.Get("/", s.listVariables)
 			r.Post("/", s.setVariable)
+			r.Delete("/{key}", s.deleteVariable)
 		})
 		r.Route("/aliases", func(r chi.Router) {
 			r.Get("/", s.listAliases)
@@ -152,6 +162,20 @@ func (s *Server) setVariable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.session.SetVariable(v.Key, v.Value); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.session.NotifySettingsChanged("variables")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteVariable(w http.ResponseWriter, r *http.Request) {
+	key := chi.URLParam(r, "key")
+	if key == "" {
+		http.Error(w, "missing key", http.StatusBadRequest)
+		return
+	}
+	if err := s.session.DeleteVariable(key); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -328,11 +352,13 @@ func (s *Server) deleteHighlight(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
+	log.Printf("websocket connect requested: remote=%s path=%s", r.RemoteAddr, r.URL.Path)
 	ws, err := s.upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		log.Printf("websocket upgrade failed: %v", err)
 		return
 	}
+	log.Printf("websocket upgraded: remote=%s", r.RemoteAddr)
 
 	var writeMu sync.Mutex
 	writeJSON := func(msg session.ServerMsg) error {
@@ -346,6 +372,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		_ = ws.Close()
 		return
 	}
+	log.Printf("websocket initial status sent: remote=%s", r.RemoteAddr)
 
 	if err := s.sendRestoreState(writeJSON); err != nil {
 		log.Printf("websocket restore state failed: %v", err)
