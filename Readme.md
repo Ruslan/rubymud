@@ -1,49 +1,63 @@
-# Ruby MUD Client
+# rubymud
 
-A web-based MUD client written in Ruby. This project allows you to interact with a MUD game through a terminal-like interface in the browser.
+Local-first MUD host and browser client.
 
-## Getting Started
+The current runtime is Go-based. The browser UI source of truth lives in `ui/` and is built with Vite into Go-embedded static assets under `go/internal/web/static/`.
 
-Follow these steps to get the project up and running on your local machine:
+## Source Of Truth
 
-### 1. Install Dependencies
+- Frontend source of truth: `ui/`
+- Generated frontend assets: `go/internal/web/static/`
+- Generated assets are not committed on purpose
+- Anyone who clones the repo is expected to build the UI locally
 
-Run the following command to install the necessary gems:
+`make run` and `make build` already rebuild the frontend before starting or compiling the Go server.
 
-```bash
-bundle install
-```
+## Requirements
 
-### 2. Configure the Application
+- Go
+- Node.js + npm
+- `sqlite3`
 
-Copy the example configuration file and rename it to `config.rb`:
+## Running
 
-```bash
-cp config.example.rb config.rb
-```
-
-Edit `config.rb` to configure the application as needed (e.g., server settings).
-
-### 3. Run the Server
-
-Start the application server:
+Start the app against a MUD server:
 
 ```bash
-ruby server.rb
+make run MUD=127.0.0.1:4000
 ```
 
-The application will now be running, and you can access it through your browser.
+This will:
 
-## Usage
+1. initialize the SQLite database
+2. build the UI from `ui/`
+3. start the Go server
 
-Once the server is running, you can interact with the MUD game through the terminal interface. Follow the on-screen prompts to send commands to the server and receive responses.
+Open `http://localhost:8080` in your browser.
 
-## Contributing
+## Building
 
-If you'd like to contribute to this project, please fork the repository and submit a pull request with your changes.
+Build the frontend assets and the Go binary:
 
-Ensure that your changes are well-documented and that any new functionality is covered by tests.
+```bash
+make build
+```
 
-## License
+Build only the frontend assets:
 
-This project is open-source and available under the [MIT License](LICENSE).
+```bash
+make ui
+```
+
+## Testing
+
+Run Go tests:
+
+```bash
+make test
+```
+
+## Notes
+
+- The generated Vite assets in `go/internal/web/static/` are derived artifacts, not the frontend source of truth
+- If the browser UI looks stale after frontend changes, rebuild with `make ui` or `make run` and hard-refresh the page
