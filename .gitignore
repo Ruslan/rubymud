@@ -1,10 +1,30 @@
+# Global / System
+.DS_Store
+tmp/
+log/
+data/
+
+# Ruby artifacts (legacy)
 config.rb
 variables.json
 log.jsonl
 history.jsonl
-data
-mud-mux
-log/
-.DS_Store
+
+# Go artifacts
 mudhost
-tmp
+server.exe
+mud-mux
+
+# Node / UI
+node_modules/
+ui/node_modules/
+ui/dist/
+
+# UI Build Artifacts (Go-embedded)
+# We ignore generated assets and built scripts/styles
+go/internal/web/static/assets/
+go/internal/web/static/*.js
+go/internal/web/static/*.js.map
+go/internal/web/static/*.css
+go/internal/web/static/favicon.svg
+# Note: go/internal/web/static/index.html is tracked but updated by Vite

@@ -53,6 +53,11 @@ func New(listenAddr string, sess *session.Session, hotkeys []config.Hotkey) *Ser
 
 	r.HandleFunc("/ws", s.handleWebSocket)
 
+	r.Get("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/x-icon")
+		w.WriteHeader(http.StatusNoContent)
+	})
+
 	r.Route("/api", func(r chi.Router) {
 		r.Route("/variables", func(r chi.Router) {
 			r.Get("/", s.listVariables)
