@@ -19,50 +19,133 @@
       height: 100vh;
     }
 
-    .hotkeys-panel {
+    .bottom-dock {
       display: flex;
       flex-direction: column;
       border-top: 1px solid #232a31;
       background: #15191e;
     }
 
-    .hotkeys-panel_collapsed #hotkeys {
-      display: none;
-    }
-
-    .hotkeys-panel__toggle {
+    .bottom-toolbar {
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 12px;
       padding: 8px 12px;
       background: #15191e;
+    }
+
+    .bottom-toolbar__tabs {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .panel-tab {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 10px;
+      border: 1px solid #2a3440;
+      border-radius: 10px;
+      background: #1a2027;
       color: #b8c4d0;
-      border: 0;
       cursor: pointer;
       font: inherit;
-      text-align: left;
+      transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
     }
 
-    .hotkeys-panel__toggle:hover {
-      background: #1a2027;
+    .panel-tab:hover {
+      background: #202833;
+      border-color: #3b4959;
+      color: #e8edf2;
     }
 
-    .hotkeys-panel__title {
+    .panel-tab_active {
+      background: #22303f;
+      border-color: #4e7293;
+      color: #eef3f8;
+    }
+
+    .panel-tab__icon {
+      font-size: 16px;
+      line-height: 1;
+    }
+
+    .panel-tab__label {
       font-size: 12px;
       letter-spacing: 0.04em;
       text-transform: uppercase;
-      color: #97a4b3;
     }
 
-    .hotkeys-panel__meta {
+    .bottom-toolbar__meta {
       display: inline-flex;
-      gap: 10px;
       align-items: center;
+      gap: 10px;
     }
 
-    .hotkeys-panel__state {
+    .bottom-toolbar__hint {
       font-size: 12px;
       color: #97a4b3;
+    }
+
+    .bottom-panels {
+      display: none;
+      border-top: 1px solid #232a31;
+      background: #15191e;
+    }
+
+    .bottom-panels_visible {
+      display: block;
+    }
+
+    .bottom-panel {
+      display: none;
+      max-height: 34vh;
+      overflow: auto;
+    }
+
+    .bottom-panel_active {
+      display: block;
+    }
+
+    .panel-section {
+      padding: 10px 12px;
+    }
+
+    .variables-list {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    .variable-row {
+      display: grid;
+      grid-template-columns: minmax(120px, 220px) 1fr;
+      gap: 12px;
+      align-items: start;
+      padding: 7px 10px;
+      border: 1px solid #232d39;
+      border-radius: 8px;
+      background: #161c23;
+      font-size: 13px;
+    }
+
+    .variable-key {
+      color: #7dcfff;
+      word-break: break-word;
+    }
+
+    .variable-value {
+      color: #dce5ee;
+      word-break: break-word;
+      white-space: pre-wrap;
+    }
+
+    .variables-empty {
+      padding: 14px 12px;
+      color: #97a4b3;
+      font-size: 13px;
     }
 
     #connection-status {
@@ -87,8 +170,6 @@
       display: flex;
       gap: 6px;
       flex-wrap: wrap;
-      padding: 8px 12px;
-      background: #15191e;
     }
 
     .hotkey-chip {
@@ -355,21 +436,52 @@
     .ansi-conceal {
       visibility: hidden;
     }
+
+    @media (max-width: 640px) {
+      .bottom-toolbar {
+        flex-wrap: wrap;
+      }
+
+      .variable-row {
+        grid-template-columns: 1fr;
+        gap: 4px;
+      }
+    }
   </style>
 </head>
 <body>
   <div class="app">
     <div id="output"></div>
     <input id="input" type="text" placeholder="Type a command and press Enter">
-    <div id="hotkeys-panel" class="hotkeys-panel hotkeys-panel_collapsed">
-      <button id="hotkeys-toggle" class="hotkeys-panel__toggle" type="button">
-        <span class="hotkeys-panel__title">Hotkeys</span>
-        <span class="hotkeys-panel__meta">
+    <div id="bottom-dock" class="bottom-dock">
+      <div class="bottom-toolbar">
+        <div class="bottom-toolbar__tabs">
+          <button id="panel-toggle-keyboard" class="panel-tab" type="button" title="Keyboard panel">
+            <span class="panel-tab__icon">⌨</span>
+            <span class="panel-tab__label">Keyboard</span>
+          </button>
+          <button id="panel-toggle-variables" class="panel-tab" type="button" title="Variables panel">
+            <span class="panel-tab__icon">$</span>
+            <span class="panel-tab__label">Variables</span>
+          </button>
+        </div>
+        <div class="bottom-toolbar__meta">
+          <span id="bottom-toolbar-hint" class="bottom-toolbar__hint">Panels</span>
           <span id="connection-status">connecting</span>
-          <span id="hotkeys-toggle-state" class="hotkeys-panel__state">show</span>
-        </span>
-      </button>
-      <div id="hotkeys"></div>
+        </div>
+      </div>
+      <div id="bottom-panels" class="bottom-panels">
+        <div id="panel-keyboard" class="bottom-panel">
+          <div class="panel-section">
+            <div id="hotkeys"></div>
+          </div>
+        </div>
+        <div id="panel-variables" class="bottom-panel">
+          <div class="panel-section">
+            <div id="variables-list" class="variables-list"></div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -468,10 +580,15 @@
     }
 
     const output = document.getElementById('output')
-    const hotkeysPanel = document.getElementById('hotkeys-panel')
+    const bottomDock = document.getElementById('bottom-dock')
+    const bottomPanels = document.getElementById('bottom-panels')
+    const bottomToolbarHint = document.getElementById('bottom-toolbar-hint')
     const hotkeysBox = document.getElementById('hotkeys')
-    const hotkeysToggle = document.getElementById('hotkeys-toggle')
-    const hotkeysToggleState = document.getElementById('hotkeys-toggle-state')
+    const variablesList = document.getElementById('variables-list')
+    const keyboardPanel = document.getElementById('panel-keyboard')
+    const variablesPanel = document.getElementById('panel-variables')
+    const keyboardToggle = document.getElementById('panel-toggle-keyboard')
+    const variablesToggle = document.getElementById('panel-toggle-variables')
     const connectionStatus = document.getElementById('connection-status')
     const input = document.getElementById('input')
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
@@ -481,13 +598,25 @@
     ansiUp.use_classes = true
 
     let configuredHotkeys = []
+    let configuredVariables = []
     let restoreInProgress = false
+    let activePanel = null
     const maxRenderedLines = 2000
     const pruneRenderedLines = 500
 
-    function setHotkeysCollapsed(collapsed) {
-      hotkeysPanel.classList.toggle('hotkeys-panel_collapsed', collapsed)
-      hotkeysToggleState.textContent = collapsed ? 'show' : 'hide'
+    function setActivePanel(panel) {
+      activePanel = activePanel === panel ? null : panel
+
+      keyboardToggle.classList.toggle('panel-tab_active', activePanel === 'keyboard')
+      variablesToggle.classList.toggle('panel-tab_active', activePanel === 'variables')
+      keyboardPanel.classList.toggle('bottom-panel_active', activePanel === 'keyboard')
+      variablesPanel.classList.toggle('bottom-panel_active', activePanel === 'variables')
+      bottomPanels.classList.toggle('bottom-panels_visible', Boolean(activePanel))
+      bottomToolbarHint.textContent = activePanel ? `${activePanel} open` : 'Panels'
+
+      if (activePanel === 'variables') {
+        requestVariables()
+      }
     }
 
     function sendCommand(value, source = 'input') {
@@ -538,12 +667,54 @@
         hotkeysBox.appendChild(chip)
       })
 
-      hotkeysPanel.style.display = items && items.length ? 'flex' : 'none'
+      keyboardToggle.style.display = items && items.length ? 'inline-flex' : 'none'
+      if ((!items || !items.length) && activePanel === 'keyboard') {
+        setActivePanel('keyboard')
+      }
     }
 
     function configureHotkeys(items) {
       configuredHotkeys = items || []
       renderHotkeys(configuredHotkeys)
+    }
+
+    function renderVariables(items) {
+      variablesList.innerHTML = ''
+
+      if (!items || !items.length) {
+        const empty = document.createElement('div')
+        empty.className = 'variables-empty'
+        empty.textContent = 'No variables defined yet.'
+        variablesList.appendChild(empty)
+        return
+      }
+
+      items.forEach((item) => {
+        const row = document.createElement('div')
+        row.className = 'variable-row'
+
+        const key = document.createElement('div')
+        key.className = 'variable-key'
+        key.textContent = `$${item.key}`
+        row.appendChild(key)
+
+        const value = document.createElement('div')
+        value.className = 'variable-value'
+        value.textContent = item.value || ''
+        row.appendChild(value)
+
+        variablesList.appendChild(row)
+      })
+    }
+
+    function configureVariables(items) {
+      configuredVariables = items || []
+      renderVariables(configuredVariables)
+    }
+
+    function requestVariables() {
+      if (socket.readyState !== WebSocket.OPEN) return
+      socket.send(JSON.stringify({ method: 'variables' }))
     }
 
     function normalizeShortcut(shortcut) {
@@ -614,10 +785,8 @@
     }
 
     window.addEventListener('keydown', handleHotkey)
-    hotkeysToggle.addEventListener('click', () => {
-      setHotkeysCollapsed(!hotkeysPanel.classList.contains('hotkeys-panel_collapsed'))
-    })
-    setHotkeysCollapsed(true)
+    keyboardToggle.addEventListener('click', () => setActivePanel('keyboard'))
+    variablesToggle.addEventListener('click', () => setActivePanel('variables'))
 
     function clearOutput() {
       output.innerHTML = ''
@@ -692,6 +861,7 @@
         clearOutput()
         history.merge(message.history || [])
         configureHotkeys(message.hotkeys || [])
+        configureVariables(message.variables || [])
       }
 
       if (message.type === 'restore_chunk') {
@@ -706,6 +876,10 @@
       if (message.type === 'output') {
         ;(message.entries || []).forEach(appendEntry)
       }
+
+      if (message.type === 'variables') {
+        configureVariables(message.variables || [])
+      }
     }
 
     socket.onerror = (event) => {
@@ -717,6 +891,22 @@
       updateConnectionStatus('disconnected')
       appendEntry({ text: '[disconnected]' })
     }
+
+    window.addEventListener('focus', () => {
+      requestVariables()
+    })
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        requestVariables()
+      }
+    })
+
+    window.setInterval(() => {
+      if (!document.hidden) {
+        requestVariables()
+      }
+    }, 3000)
 
     input.addEventListener('keydown', (event) => {
       if (event.key === 'ArrowUp') {

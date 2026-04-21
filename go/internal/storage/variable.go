@@ -1,5 +1,29 @@
 package storage
 
+func (s *Store) ListVariables(sessionID int64) ([]Variable, error) {
+	rows, err := s.db.Query(`
+		SELECT key, value
+		FROM variables
+		WHERE session_id = ? AND scope = 'session'
+		ORDER BY key ASC
+	`, sessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	variables := make([]Variable, 0)
+	for rows.Next() {
+		var variable Variable
+		if err := rows.Scan(&variable.Key, &variable.Value); err != nil {
+			return nil, err
+		}
+		variables = append(variables, variable)
+	}
+
+	return variables, rows.Err()
+}
+
 func (s *Store) LoadVariables(sessionID int64) (map[string]string, error) {
 	rows, err := s.db.Query(`
 		SELECT key, value

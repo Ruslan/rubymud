@@ -16,12 +16,13 @@ import (
 var packetEnd = []byte{0xff, 0xf9}
 
 type ServerMsg struct {
-	Type    string           `json:"type"`
-	Entries []ClientLogEntry `json:"entries,omitempty"`
-	History []string         `json:"history,omitempty"`
-	Hotkeys []HotkeyJSON     `json:"hotkeys,omitempty"`
-	Status  string           `json:"status,omitempty"`
-	Message string           `json:"message,omitempty"`
+	Type      string           `json:"type"`
+	Entries   []ClientLogEntry `json:"entries,omitempty"`
+	History   []string         `json:"history,omitempty"`
+	Hotkeys   []HotkeyJSON     `json:"hotkeys,omitempty"`
+	Variables []VariableJSON   `json:"variables,omitempty"`
+	Status    string           `json:"status,omitempty"`
+	Message   string           `json:"message,omitempty"`
 }
 
 type ClientLogEntry struct {
@@ -38,6 +39,11 @@ type ButtonOverlay struct {
 type HotkeyJSON struct {
 	Shortcut string `json:"shortcut"`
 	Command  string `json:"command"`
+}
+
+type VariableJSON struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
 }
 
 type clientSink struct {
@@ -185,6 +191,28 @@ func (s *Session) BroadcastEcho(text string) {
 	s.broadcastMsg(msg)
 }
 
+func (s *Session) CurrentVariables() ([]VariableJSON, error) {
+	variables, err := s.store.ListVariables(s.sessionID)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]VariableJSON, 0, len(variables))
+	for _, variable := range variables {
+		result = append(result, VariableJSON{Key: variable.Key, Value: variable.Value})
+	}
+	return result, nil
+}
+
+func (s *Session) BroadcastVariables() {
+	variables, err := s.CurrentVariables()
+	if err != nil {
+		log.Printf("load variables failed: %v", err)
+		return
+	}
+	s.broadcastMsg(ServerMsg{Type: "variables", Variables: variables})
+}
+
 func (s *Session) broadcastMsg(msg ServerMsg) {
 	s.mu.Lock()
 	clients := make([]clientSink, 0, len(s.clients))
@@ -202,6 +230,8 @@ func (s *Session) broadcastMsg(msg ServerMsg) {
 }
 
 func (s *Session) SendCommand(command string, source string) error {
+	shouldBroadcastVariables := isVariableCommand(command)
+
 	if source == "" {
 		source = "input"
 	}
@@ -240,6 +270,9 @@ func (s *Session) SendCommand(command string, source string) error {
 		if _, err := s.conn.Write([]byte(cmd + "\n")); err != nil {
 			return err
 		}
+	}
+	if shouldBroadcastVariables {
+		s.BroadcastVariables()
 	}
 	return nil
 }
@@ -324,4 +357,23 @@ func stripANSI(s string) string {
 		result.WriteRune(c)
 	}
 	return result.String()
+}
+
+func isVariableCommand(command string) bool {
+	trimmed := strings.TrimSpace(command)
+	if !strings.HasPrefix(trimmed, "#") {
+		return false
+	}
+
+	fields := strings.Fields(strings.TrimSpace(strings.TrimPrefix(trimmed, "#")))
+	if len(fields) == 0 {
+		return false
+	}
+
+	switch fields[0] {
+	case "var", "variable", "unvar", "unvariable":
+		return true
+	default:
+		return false
+	}
 }

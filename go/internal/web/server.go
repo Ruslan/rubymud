@@ -104,30 +104,43 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		command, source := parseClientCommand(payload)
-		if command == "" {
-			continue
-		}
+		message := parseClientMessage(payload)
+		switch message.Method {
+		case "variables":
+			variables, err := s.session.CurrentVariables()
+			if err != nil {
+				log.Printf("load variables failed: %v", err)
+				return
+			}
+			if err := ws.WriteJSON(session.ServerMsg{Type: "variables", Variables: variables}); err != nil {
+				return
+			}
+		case "send":
+			command := strings.TrimSpace(message.Value)
+			if command == "" {
+				continue
+			}
 
-		if err := s.session.SendCommand(command, source); err != nil {
-			log.Printf("send command failed: %v", err)
-			return
+			if err := s.session.SendCommand(command, strings.TrimSpace(message.Source)); err != nil {
+				log.Printf("send command failed: %v", err)
+				return
+			}
 		}
 	}
 }
 
-func parseClientCommand(payload []byte) (string, string) {
+func parseClientMessage(payload []byte) clientMessage {
 	trimmed := strings.TrimSpace(string(payload))
 	if trimmed == "" {
-		return "", ""
+		return clientMessage{}
 	}
 
 	var message clientMessage
-	if err := json.Unmarshal(payload, &message); err == nil && message.Method == "send" {
-		return strings.TrimSpace(message.Value), strings.TrimSpace(message.Source)
+	if err := json.Unmarshal(payload, &message); err == nil && message.Method != "" {
+		return message
 	}
 
-	return trimmed, "input"
+	return clientMessage{Method: "send", Value: trimmed, Source: "input"}
 }
 
 func (s *Server) sendRestoreState(ws *websocket.Conn) error {
@@ -145,6 +158,11 @@ func (s *Server) sendRestoreState(ws *websocket.Conn) error {
 		Type:    "restore_begin",
 		History: history,
 	}
+	variables, err := s.session.CurrentVariables()
+	if err != nil {
+		return err
+	}
+	begin.Variables = variables
 	for _, hk := range s.hotkeys {
 		begin.Hotkeys = append(begin.Hotkeys, session.HotkeyJSON{Shortcut: hk.Shortcut, Command: hk.Command})
 	}
