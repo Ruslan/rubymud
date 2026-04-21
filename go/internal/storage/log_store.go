@@ -5,126 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"strings"
-
-	_ "modernc.org/sqlite"
 )
-
-type Store struct {
-	db *sql.DB
-}
-
-type SessionRecord struct {
-	ID      int64
-	Name    string
-	MudHost string
-	MudPort int
-	Status  string
-}
-
-type ButtonOverlay struct {
-	Label   string `json:"label"`
-	Command string `json:"command"`
-}
-
-type LogEntry struct {
-	ID       int64
-	RawText  string
-	Commands []string
-	Buttons  []ButtonOverlay
-}
-
-type Variable struct {
-	Key   string
-	Value string
-}
-
-type commandOverlayPayload struct {
-	Command string `json:"command"`
-}
-
-func Open(path string) (*Store, error) {
-	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)", filepath.Clean(path))
-	db, err := sql.Open("sqlite", dsn)
-	if err != nil {
-		return nil, err
-	}
-
-	if err := db.Ping(); err != nil {
-		return nil, err
-	}
-
-	return &Store{db: db}, nil
-}
-
-func (s *Store) Close() error {
-	if s == nil || s.db == nil {
-		return nil
-	}
-	return s.db.Close()
-}
-
-func (s *Store) EnsureDefaultSession(host string, port int) (SessionRecord, error) {
-	const query = `
-		SELECT id, name, mud_host, mud_port, status
-		FROM sessions
-		WHERE name = 'default'
-		ORDER BY id ASC
-		LIMIT 1
-	`
-
-	var record SessionRecord
-	err := s.db.QueryRow(query).Scan(&record.ID, &record.Name, &record.MudHost, &record.MudPort, &record.Status)
-	if errors.Is(err, sql.ErrNoRows) {
-		result, insertErr := s.db.Exec(`
-			INSERT INTO sessions(name, mud_host, mud_port, status)
-			VALUES('default', ?, ?, 'connected')
-		`, host, port)
-		if insertErr != nil {
-			return SessionRecord{}, insertErr
-		}
-
-		id, idErr := result.LastInsertId()
-		if idErr != nil {
-			return SessionRecord{}, idErr
-		}
-
-		return SessionRecord{
-			ID:      id,
-			Name:    "default",
-			MudHost: host,
-			MudPort: port,
-			Status:  "connected",
-		}, nil
-	}
-	if err != nil {
-		return SessionRecord{}, err
-	}
-
-	_, err = s.db.Exec(`
-		UPDATE sessions
-		SET mud_host = ?, mud_port = ?, status = 'connected', updated_at = CURRENT_TIMESTAMP, last_connected_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, host, port, record.ID)
-	if err != nil {
-		return SessionRecord{}, err
-	}
-
-	record.MudHost = host
-	record.MudPort = port
-	record.Status = "connected"
-	return record, nil
-}
-
-func (s *Store) MarkSessionDisconnected(sessionID int64) error {
-	_, err := s.db.Exec(`
-		UPDATE sessions
-		SET status = 'disconnected', updated_at = CURRENT_TIMESTAMP, last_disconnected_at = CURRENT_TIMESTAMP
-		WHERE id = ?
-	`, sessionID)
-	return err
-}
 
 func (s *Store) AppendLogEntry(sessionID int64, rawText, plainText string) (int64, error) {
 	result, err := s.db.Exec(`
@@ -134,13 +16,7 @@ func (s *Store) AppendLogEntry(sessionID int64, rawText, plainText string) (int6
 	if err != nil {
 		return 0, err
 	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		return 0, err
-	}
-
-	return id, nil
+	return result.LastInsertId()
 }
 
 func (s *Store) RecentLogs(sessionID int64, limit int) ([]LogEntry, error) {
@@ -206,51 +82,6 @@ func (s *Store) AppendCommandHintToLatestLogEntry(sessionID int64, command strin
 		VALUES(?, 'command_hint', ?, 'client')
 	`, logEntryID, string(payload))
 	return err
-}
-
-func (s *Store) AppendHistoryEntry(sessionID int64, kind, line string) error {
-	_, err := s.db.Exec(`
-		INSERT INTO history_entries(session_id, kind, line)
-		VALUES(?, ?, ?)
-	`, sessionID, kind, strings.TrimSpace(line))
-	return err
-}
-
-func (s *Store) RecentInputHistory(sessionID int64, limit int) ([]string, error) {
-	rows, err := s.db.Query(`
-		SELECT line
-		FROM history_entries
-		WHERE session_id = ? AND kind = 'input'
-		ORDER BY created_at DESC, id DESC
-		LIMIT ?
-	`, sessionID, limit)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	history := make([]string, 0, limit)
-	seen := make(map[string]struct{}, limit)
-	for rows.Next() {
-		var line string
-		if err := rows.Scan(&line); err != nil {
-			return nil, err
-		}
-		if _, ok := seen[line]; ok {
-			continue
-		}
-		seen[line] = struct{}{}
-		history = append(history, line)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-
-	for i, j := 0, len(history)-1; i < j; i, j = i+1, j-1 {
-		history[i], history[j] = history[j], history[i]
-	}
-
-	return history, nil
 }
 
 func (s *Store) AppendButtonOverlay(logEntryID int64, label, command string) error {
@@ -332,11 +163,4 @@ func (s *Store) loadOverlays(entries []LogEntry) error {
 	}
 
 	return rows.Err()
-}
-
-func boolToInt(b bool) int {
-	if b {
-		return 1
-	}
-	return 0
 }

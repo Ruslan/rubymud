@@ -1,0 +1,82 @@
+package session
+
+import (
+	"log"
+	"strings"
+
+	"rubymud/go/internal/vm"
+)
+
+func (s *Session) sendTriggerCommand(cmd string) error {
+	log.Printf("trigger sending command: %q", cmd)
+	if err := s.store.AppendHistoryEntry(s.sessionID, "trigger", cmd); err != nil {
+		log.Printf("append history entry failed: %v", err)
+	}
+	_, err := s.conn.Write([]byte(cmd + "\n"))
+	return err
+}
+
+func (s *Session) SendCommand(command string, source string) error {
+	shouldBroadcastVariables := isVariableCommand(command)
+	if source == "" {
+		source = "input"
+	}
+
+	results := s.vm.ProcessInputDetailed(command)
+	echoMessages := make([]string, 0)
+	commands := make([]string, 0)
+	for _, r := range results {
+		switch r.Kind {
+		case vm.ResultEcho:
+			echoMessages = append(echoMessages, r.Text)
+		default:
+			commands = append(commands, r.Text)
+		}
+	}
+
+	for _, msg := range echoMessages {
+		s.BroadcastEcho(msg)
+	}
+
+	for _, cmd := range commands {
+		cmd = strings.TrimSpace(cmd)
+		if cmd == "" {
+			continue
+		}
+
+		log.Printf("sending command to MUD: %q (source=%s)", cmd, source)
+		if err := s.store.AppendHistoryEntry(s.sessionID, source, cmd); err != nil {
+			log.Printf("append history entry failed: %v", err)
+		}
+		if err := s.store.AppendCommandHintToLatestLogEntry(s.sessionID, cmd); err != nil {
+			log.Printf("append command hint failed: %v", err)
+		}
+		if _, err := s.conn.Write([]byte(cmd + "\n")); err != nil {
+			return err
+		}
+	}
+
+	if shouldBroadcastVariables {
+		s.BroadcastVariables()
+	}
+	return nil
+}
+
+func isVariableCommand(command string) bool {
+	trimmed := strings.TrimSpace(command)
+	if !strings.HasPrefix(trimmed, "#") {
+		return false
+	}
+
+	fields := strings.Fields(strings.TrimSpace(strings.TrimPrefix(trimmed, "#")))
+	if len(fields) == 0 {
+		return false
+	}
+
+	switch fields[0] {
+	case "var", "variable", "unvar", "unvariable":
+		return true
+	default:
+		return false
+	}
+}
