@@ -1,6 +1,8 @@
 export function createSocket() {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return new WebSocket(`${protocol}//${window.location.host}/ws`);
+  // @ts-ignore - Injected by Go server
+  const token = window.API_TOKEN || '';
+  return new WebSocket(`${protocol}//${window.location.host}/ws?token=${token}`);
 }
 
 export function sendSocketCommand(socket: WebSocket, value: string, source: string) {

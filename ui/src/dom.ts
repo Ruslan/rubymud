@@ -24,3 +24,13 @@ export function getAppElements() {
 }
 
 export type AppElements = ReturnType<typeof getAppElements>;
+
+export async function fetchWithToken(url: string, options: RequestInit = {}) {
+  // @ts-ignore
+  const token = window.API_TOKEN || '';
+  const headers = {
+    ...options.headers,
+    'X-Session-Token': token,
+  };
+  return fetch(url, { ...options, headers });
+}

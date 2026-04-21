@@ -1,25 +1,38 @@
 package storage
 
 import (
-	"database/sql"
+	"fmt"
 	"testing"
 
-	_ "modernc.org/sqlite"
+	"github.com/glebarez/sqlite"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func TestRecentLogsLoadsButtonOverlays(t *testing.T) {
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared")
-	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
-	}
-	defer db.Close()
+	dbName := uuid.New().String()
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", dbName)
 
-	store := &Store{db: db}
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
+	if err != nil {
+		t.Fatalf("gorm.Open: %v", err)
+	}
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("db.DB: %v", err)
+	}
+	defer sqlDB.Close()
+
+	store := NewTestStore(db)
 	for _, stmt := range []string{
 		`CREATE TABLE log_entries (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, stream TEXT NOT NULL, window_name TEXT, raw_text TEXT NOT NULL, plain_text TEXT NOT NULL, source_type TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
 		`CREATE TABLE log_overlays (id INTEGER PRIMARY KEY, log_entry_id INTEGER NOT NULL, overlay_type TEXT NOT NULL, payload_json TEXT NOT NULL, source_type TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
 	} {
-		if _, err := db.Exec(stmt); err != nil {
+		if err := db.Exec(stmt).Error; err != nil {
 			t.Fatalf("Exec(%q): %v", stmt, err)
 		}
 	}

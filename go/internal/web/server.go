@@ -1,14 +1,17 @@
 package web
 
 import (
+	"crypto/rand"
 	"embed"
+	"encoding/hex"
 	"encoding/json"
-	"io/fs"
 	"log"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -29,6 +32,7 @@ type Server struct {
 	session    *session.Session
 	hotkeys    []config.Hotkey
 	upgrader   websocket.Upgrader
+	apiToken   string
 }
 
 type clientMessage struct {
@@ -39,17 +43,49 @@ type clientMessage struct {
 
 func New(listenAddr string, sess *session.Session, hotkeys []config.Hotkey) *Server {
 	log.Printf("creating web server on %s", listenAddr)
+
+	tokenBytes := make([]byte, 16)
+	rand.Read(tokenBytes)
+	apiToken := hex.EncodeToString(tokenBytes)
+
 	s := &Server{
-		session: sess,
-		hotkeys: hotkeys,
+		session:  sess,
+		hotkeys:  hotkeys,
+		apiToken: apiToken,
 		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool { return true },
+			CheckOrigin: func(r *http.Request) bool {
+				return sameOriginRequest(r)
+			},
 		},
 	}
 
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+
+	// Token protection: check X-Session-Token header
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Skip check for non-API routes (static files, index)
+			if !strings.HasPrefix(r.URL.Path, "/api") && r.URL.Path != "/ws" {
+				next.ServeHTTP(w, r)
+				return
+			}
+
+			// Validate token
+			token := r.Header.Get("X-Session-Token")
+			if token == "" {
+				// Also check query param for WebSockets
+				token = r.URL.Query().Get("token")
+			}
+
+			if token != s.apiToken {
+				http.Error(w, "Unauthorized: Invalid or missing session token", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
 
 	r.HandleFunc("/ws", s.handleWebSocket)
 
@@ -58,14 +94,8 @@ func New(listenAddr string, sess *session.Session, hotkeys []config.Hotkey) *Ser
 		w.WriteHeader(http.StatusNoContent)
 	})
 
-	r.Get("/settings*", func(w http.ResponseWriter, r *http.Request) {
-		root, err := fs.Sub(webFiles, "static")
-		if err != nil {
-			http.Error(w, "failed to load web assets", http.StatusInternalServerError)
-			return
-		}
-		http.ServeFileFS(w, r, root, "settings.html")
-	})
+	r.Get("/settings", s.handleSettingsIndex)
+	r.Get("/settings/*", s.handleSettingsIndex)
 
 	r.Route("/api", func(r chi.Router) {
 		r.Route("/variables", func(r chi.Router) {
@@ -97,6 +127,11 @@ func New(listenAddr string, sess *session.Session, hotkeys []config.Hotkey) *Ser
 				r.Delete("/", s.deleteHighlight)
 			})
 		})
+		r.Route("/sessions", func(r chi.Router) {
+			r.Get("/", s.listSessions)
+			r.Post("/{id}/reconnect", s.reconnectSession)
+			r.Post("/{id}/disconnect", s.disconnectSession)
+		})
 	})
 
 	r.Handle("/*", http.HandlerFunc(s.handleIndex))
@@ -114,7 +149,6 @@ func (s *Server) ListenAndServe() error {
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	// Handle root or static files
 	path := r.URL.Path
 	if path == "/" {
 		path = "index.html"
@@ -122,22 +156,73 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		path = strings.TrimPrefix(path, "/")
 	}
 
-	root, err := fs.Sub(webFiles, "static")
+	content, err := webFiles.ReadFile("static/" + path)
+	if err != nil {
+		// If not found, serve index.html
+		content, err = webFiles.ReadFile("static/index.html")
+		if err != nil {
+			http.Error(w, "failed to load web assets", http.StatusInternalServerError)
+			return
+		}
+		path = "index.html"
+	}
+
+	if strings.HasSuffix(path, ".html") {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		tokenTag := "<script>window.API_TOKEN=\"" + s.apiToken + "\"</script>"
+		html := strings.Replace(string(content), "<!-- %TOKEN% -->", tokenTag, 1)
+		w.Write([]byte(html))
+		return
+	}
+
+	// For other files, serve normally
+	http.ServeContent(w, r, path, time.Now(), strings.NewReader(string(content)))
+}
+
+func (s *Server) handleSettingsIndex(w http.ResponseWriter, r *http.Request) {
+	content, err := webFiles.ReadFile("static/settings.html")
 	if err != nil {
 		http.Error(w, "failed to load web assets", http.StatusInternalServerError)
 		return
 	}
 
-	// Check if file exists in embedded FS
-	f, err := root.Open(path)
-	if err != nil {
-		// If not found, serve index.html (for SPA routing if needed)
-		path = "index.html"
-	} else {
-		f.Close()
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	tokenTag := "<script>window.API_TOKEN=\"" + s.apiToken + "\"</script>"
+	html := strings.Replace(string(content), "<!-- %TOKEN% -->", tokenTag, 1)
+	w.Write([]byte(html))
+}
+
+func sameOriginRequest(r *http.Request) bool {
+	origin := r.Header.Get("Origin")
+	if origin == "" {
+		return true
 	}
 
-	http.ServeFileFS(w, r, root, path)
+	originURL, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+
+	if !strings.EqualFold(originURL.Host, r.Host) {
+		return false
+	}
+
+	requestScheme := forwardedScheme(r)
+	if requestScheme == "" {
+		return true
+	}
+
+	return strings.EqualFold(originURL.Scheme, requestScheme)
+}
+
+func forwardedScheme(r *http.Request) string {
+	if proto := r.Header.Get("X-Forwarded-Proto"); proto != "" {
+		return strings.TrimSpace(strings.Split(proto, ",")[0])
+	}
+	if r.TLS != nil {
+		return "https"
+	}
+	return "http"
 }
 
 // Variables
@@ -348,6 +433,41 @@ func (s *Server) deleteHighlight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.session.NotifySettingsChanged("highlights")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Sessions
+
+func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
+	// For now, we only have one active session.
+	// In the future, this would list all sessions from DB and check their status in a map.
+
+	status := "disconnected"
+	if s.session != nil && !s.session.IsClosed() {
+		status = "connected"
+	}
+
+	response := []map[string]interface{}{
+		{
+			"id":     s.session.SessionID(),
+			"status": status,
+			"name":   "Default Session",
+		},
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(response)
+}
+
+func (s *Server) reconnectSession(w http.ResponseWriter, r *http.Request) {
+	// TODO: Trigger physical reconnect in session
+	// For now just stub it
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) disconnectSession(w http.ResponseWriter, r *http.Request) {
+	if s.session != nil {
+		s.session.Close()
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 

@@ -1,7 +1,7 @@
 import './styles/main.css';
 import { AnsiUp } from 'ansi_up';
 
-import { getAppElements } from './dom';
+import { getAppElements, fetchWithToken } from './dom';
 import { InputHistory } from './history';
 import { matchHotkey } from './hotkeys';
 import { createRenderer } from './render';
@@ -43,6 +43,11 @@ let configuredHotkeys: Hotkey[] = [];
 function requestVariables() {
   if (socket.readyState !== WebSocket.OPEN) return;
   requestSocketVariables(socket);
+
+  fetchWithToken('/api/variables')
+    .then(res => res.json())
+    .then(data => renderer.renderVariables(data))
+    .catch(err => console.error('Failed to sync variables:', err));
 }
 
 function sendCommand(value: string, source = 'input'): boolean {

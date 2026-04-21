@@ -18,7 +18,7 @@ func (s *Session) RunReadLoop() {
 	for {
 		n, err := s.conn.Read(buf)
 		if err != nil {
-			if !s.isClosed() {
+			if !s.IsClosed() {
 				log.Printf("mud read error: %v", err)
 			}
 			return

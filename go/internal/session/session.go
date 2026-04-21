@@ -173,7 +173,7 @@ func (s *Session) NotifySettingsChanged(domain string) {
 	}
 }
 
-func (s *Session) isClosed() bool {
+func (s *Session) IsClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed

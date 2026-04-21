@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -30,7 +31,12 @@ func TestVariablesAPI(t *testing.T) {
 		"key":   "test_var",
 		"value": "test_val",
 	})
-	resp, err := http.Post(ts.URL+"/api/variables", "application/json", bytes.NewBuffer(payload))
+	req, err := newAuthenticatedRequest(http.MethodPost, ts.URL+"/api/variables", bytes.NewBuffer(payload), s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(POST /api/variables): %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST /api/variables: %v", err)
 	}
@@ -39,13 +45,17 @@ func TestVariablesAPI(t *testing.T) {
 	}
 
 	// 2. List variables
-	resp, err = http.Get(ts.URL + "/api/variables")
+	req, err = newAuthenticatedRequest(http.MethodGet, ts.URL+"/api/variables", nil, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(GET /api/variables): %v", err)
+	}
+	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET /api/variables: %v", err)
 	}
 	var vars []session.VariableJSON
 	json.NewDecoder(resp.Body).Decode(&vars)
-	
+
 	found := false
 	for _, v := range vars {
 		if v.Key == "test_var" && v.Value == "test_val" {
@@ -74,7 +84,12 @@ func TestAliasesAPI(t *testing.T) {
 		"template": "get all from corpse",
 		"enabled":  true,
 	})
-	resp, err := http.Post(ts.URL+"/api/aliases", "application/json", bytes.NewBuffer(payload))
+	req, err := newAuthenticatedRequest(http.MethodPost, ts.URL+"/api/aliases", bytes.NewBuffer(payload), s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(POST /api/aliases): %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("POST /api/aliases: %v", err)
 	}
@@ -83,7 +98,11 @@ func TestAliasesAPI(t *testing.T) {
 	}
 
 	// 2. List aliases to get ID
-	resp, err = http.Get(ts.URL + "/api/aliases")
+	req, err = newAuthenticatedRequest(http.MethodGet, ts.URL+"/api/aliases", nil, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(GET /api/aliases): %v", err)
+	}
+	resp, err = http.DefaultClient.Do(req)
 	var aliases []storage.AliasRule
 	json.NewDecoder(resp.Body).Decode(&aliases)
 	if len(aliases) == 0 {
@@ -97,7 +116,11 @@ func TestAliasesAPI(t *testing.T) {
 		"template": "get all",
 		"enabled":  false,
 	})
-	req, _ := http.NewRequest(http.MethodPut, fmt.Sprintf("%s/api/aliases/%d", ts.URL, aliasID), bytes.NewBuffer(payload))
+	req, err = newAuthenticatedRequest(http.MethodPut, fmt.Sprintf("%s/api/aliases/%d", ts.URL, aliasID), bytes.NewBuffer(payload), s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(PUT /api/aliases/%d): %v", aliasID, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("PUT /api/aliases/%d: %v", aliasID, err)
@@ -107,7 +130,10 @@ func TestAliasesAPI(t *testing.T) {
 	}
 
 	// 4. Delete alias
-	req, _ = http.NewRequest(http.MethodDelete, fmt.Sprintf("%s/api/aliases/%d", ts.URL, aliasID), nil)
+	req, err = newAuthenticatedRequest(http.MethodDelete, fmt.Sprintf("%s/api/aliases/%d", ts.URL, aliasID), nil, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(DELETE /api/aliases/%d): %v", aliasID, err)
+	}
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("DELETE /api/aliases/%d: %v", aliasID, err)
@@ -131,13 +157,13 @@ func setupTestServer(t *testing.T) (*Server, *session.Session) {
 
 	store := storage.NewTestStore(db)
 	v := vm.New(store, 1)
-	
+
 	// Mock session (without real TCP connection)
 	sess := &session.Session{}
 	setUnexportedField(t, sess, "sessionID", int64(1))
 	setUnexportedField(t, sess, "store", store)
 	setUnexportedField(t, sess, "vm", v)
-	
+
 	clientsField := reflect.ValueOf(sess).Elem().FieldByName("clients")
 	clientsMap := reflect.MakeMap(clientsField.Type())
 	setUnexportedField(t, sess, "clients", clientsMap.Interface())
@@ -153,4 +179,13 @@ func setUnexportedField(t *testing.T, target any, fieldName string, value any) {
 		t.Fatalf("field %s not found in %T", fieldName, target)
 	}
 	reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem().Set(reflect.ValueOf(value))
+}
+
+func newAuthenticatedRequest(method, url string, body io.Reader, token string) (*http.Request, error) {
+	req, err := http.NewRequest(method, url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("X-Session-Token", token)
+	return req, nil
 }

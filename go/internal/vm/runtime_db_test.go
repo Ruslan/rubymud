@@ -1,12 +1,15 @@
 package vm
 
 import (
-	"database/sql"
+	"fmt"
 	"reflect"
 	"testing"
 	"unsafe"
 
-	_ "modernc.org/sqlite"
+	"github.com/glebarez/sqlite"
+	"github.com/google/uuid"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 
 	"rubymud/go/internal/storage"
 )
@@ -74,28 +77,38 @@ func TestApplyHighlightsLoadsLatestStateFromDB(t *testing.T) {
 func newRuntimeTestStore(t *testing.T) *storage.Store {
 	t.Helper()
 
-	db, err := sql.Open("sqlite", "file::memory:?cache=shared")
+	dbName := uuid.New().String()
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", dbName)
+
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
 	if err != nil {
-		t.Fatalf("sql.Open: %v", err)
+		t.Fatalf("gorm.Open: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
+
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("db.DB: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
 
 	for _, stmt := range []string{
 		`CREATE TABLE variables (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, scope TEXT NOT NULL, key TEXT NOT NULL, value TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
 		`CREATE UNIQUE INDEX variables_session_scope_key_idx ON variables(session_id, scope, key);`,
 		`CREATE TABLE alias_rules (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, name TEXT NOT NULL, template TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
 		`CREATE UNIQUE INDEX alias_rules_session_name_idx ON alias_rules(session_id, name);`,
-		`CREATE TABLE trigger_rules (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, name TEXT, pattern TEXT NOT NULL, command TEXT NOT NULL, is_button INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, stop_after_match INTEGER NOT NULL DEFAULT 0, group_name TEXT NOT NULL DEFAULT 'default');`,
+		`CREATE TABLE trigger_rules (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, name TEXT, pattern TEXT NOT NULL, command TEXT NOT NULL, is_button INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, stop_after_match INTEGER NOT NULL DEFAULT 0, group_name TEXT NOT NULL DEFAULT 'default', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
 		`CREATE TABLE highlight_rules (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, pattern TEXT NOT NULL, fg TEXT NOT NULL DEFAULT '', bg TEXT NOT NULL DEFAULT '', bold INTEGER NOT NULL DEFAULT 0, faint INTEGER NOT NULL DEFAULT 0, italic INTEGER NOT NULL DEFAULT 0, underline INTEGER NOT NULL DEFAULT 0, strikethrough INTEGER NOT NULL DEFAULT 0, blink INTEGER NOT NULL DEFAULT 0, reverse INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, group_name TEXT NOT NULL DEFAULT 'default', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
 		`CREATE UNIQUE INDEX highlight_rules_session_pattern_idx ON highlight_rules(session_id, pattern);`,
 		`CREATE TABLE log_overlays (id INTEGER PRIMARY KEY, log_entry_id INTEGER NOT NULL, overlay_type TEXT NOT NULL, payload_json TEXT NOT NULL, source_type TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
 	} {
-		if _, err := db.Exec(stmt); err != nil {
+		if err := db.Exec(stmt).Error; err != nil {
 			t.Fatalf("Exec(%q): %v", stmt, err)
 		}
 	}
 
-	store := &storage.Store{}
+	store := storage.NewTestStore(db)
 	setRuntimeTestField(t, store, "db", db)
 	return store
 }
