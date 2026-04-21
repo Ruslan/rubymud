@@ -4,12 +4,13 @@ LISTEN ?= :8080
 DB_PATH ?= data/mudhost.db
 MIGRATION_DIR := go/sqlite/migrations
 
-.PHONY: help run build tidy db-init db-schema
+.PHONY: help run build test tidy db-init db-schema
 
 help:
 	@printf "Targets:\n"
 	@printf "  make run MUD=host:port [LISTEN=:8080]   Init db, build and run mudhost\n"
 	@printf "  make build                               Build mudhost binary\n"
+	@printf "  make test                                Run Go tests\n"
 	@printf "  make tidy                                Run go mod tidy\n"
 	@printf "  make db-init                             Create or update mudhost.db schema\n"
 	@printf "  make db-schema                           Print mudhost.db schema\n"
@@ -19,6 +20,9 @@ run: db-init
 
 build:
 	cd "$(GO_DIR)" && go build ./cmd/mudhost
+
+test:
+	cd "$(GO_DIR)" && go test ./...
 
 tidy:
 	cd "$(GO_DIR)" && go mod tidy
