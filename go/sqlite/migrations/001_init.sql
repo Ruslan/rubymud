@@ -102,18 +102,6 @@ CREATE TABLE IF NOT EXISTS history_entries (
 CREATE INDEX IF NOT EXISTS history_entries_session_created_idx ON history_entries(session_id, created_at);
 CREATE INDEX IF NOT EXISTS history_entries_session_kind_created_idx ON history_entries(session_id, kind, created_at);
 
-CREATE TABLE IF NOT EXISTS variables (
-  id INTEGER PRIMARY KEY,
-  session_id INTEGER NOT NULL,
-  scope TEXT NOT NULL,
-  key TEXT NOT NULL,
-  value TEXT,
-  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE
-);
-
-CREATE UNIQUE INDEX IF NOT EXISTS variables_session_scope_key_idx ON variables(session_id, scope, key);
-
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY,
   session_id INTEGER NOT NULL,

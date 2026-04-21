@@ -1,0 +1,90 @@
+#!/bin/sh
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+WS_URL=${1:-ws://localhost:8080/ws}
+COMMAND=${2:-look}
+TMPDIR=$(mktemp -d)
+trap 'rm -rf "$TMPDIR"' EXIT
+
+cat > "$TMPDIR/ws_smokecheck.go" <<'EOF'
+package main
+
+import (
+	"fmt"
+	"log"
+	"os"
+	"time"
+
+	"github.com/gorilla/websocket"
+)
+
+func main() {
+	if len(os.Args) < 3 {
+		log.Fatalf("usage: ws_smoke_test <ws-url> <command>")
+	}
+
+	url := os.Args[1]
+	command := os.Args[2]
+
+	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
+	if err != nil {
+		log.Fatalf("dial websocket: %v", err)
+	}
+	defer conn.Close()
+
+	fmt.Println("websocket open")
+
+	seenRestoreBegin := false
+	seenRestoreEnd := false
+	deadline := time.Now().Add(5 * time.Second)
+
+	for time.Now().Before(deadline) {
+		if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+			log.Fatalf("set read deadline: %v", err)
+		}
+
+		_, msg, err := conn.ReadMessage()
+		if err != nil {
+			log.Fatalf("read websocket message: %v", err)
+		}
+
+		text := string(msg)
+		fmt.Println(text)
+
+		if text == `{"type":"restore_begin"}` || contains(text, `"type":"restore_begin"`) {
+			seenRestoreBegin = true
+		}
+		if text == `{"type":"restore_end"}` || contains(text, `"type":"restore_end"`) {
+			seenRestoreEnd = true
+			break
+		}
+	}
+
+	if !seenRestoreBegin || !seenRestoreEnd {
+		log.Fatalf("restore did not complete: begin=%v end=%v", seenRestoreBegin, seenRestoreEnd)
+	}
+
+	if err := conn.WriteJSON(map[string]any{"method": "send", "value": command, "source": "input"}); err != nil {
+		log.Fatalf("send command: %v", err)
+	}
+
+	fmt.Printf("command sent: %s\n", command)
+}
+
+func contains(s, substr string) bool {
+	return len(substr) == 0 || (len(s) >= len(substr) && indexOf(s, substr) >= 0)
+}
+
+func indexOf(s, substr string) int {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
+}
+EOF
+
+cd "$ROOT/go"
+go run "$TMPDIR/ws_smokecheck.go" "$WS_URL" "$COMMAND"

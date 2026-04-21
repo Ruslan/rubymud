@@ -47,19 +47,6 @@ func (s *Session) BroadcastEcho(text string) {
 	s.broadcastMsg(ServerMsg{Type: "output", Entries: []ClientLogEntry{{Text: text}}})
 }
 
-func (s *Session) CurrentVariables() ([]VariableJSON, error) {
-	variables, err := s.store.ListVariables(s.sessionID)
-	if err != nil {
-		return nil, err
-	}
-
-	result := make([]VariableJSON, 0, len(variables))
-	for _, variable := range variables {
-		result = append(result, VariableJSON{Key: variable.Key, Value: variable.Value})
-	}
-	return result, nil
-}
-
 func (s *Session) BroadcastVariables() {
 	variables, err := s.CurrentVariables()
 	if err != nil {

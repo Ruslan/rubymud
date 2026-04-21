@@ -1,22 +1,26 @@
 package storage
 
 import (
-	"database/sql"
-	"fmt"
 	"path/filepath"
 
-	_ "modernc.org/sqlite"
+	"github.com/glebarez/sqlite"
+	"gorm.io/gorm"
+	"gorm.io/gorm/logger"
 )
 
 func Open(path string) (*Store, error) {
-	dsn := fmt.Sprintf("file:%s?_pragma=foreign_keys(1)", filepath.Clean(path))
-	db, err := sql.Open("sqlite", dsn)
+	db, err := gorm.Open(sqlite.Open(filepath.Clean(path)), &gorm.Config{
+		Logger: logger.Default.LogMode(logger.Silent),
+	})
 	if err != nil {
 		return nil, err
 	}
-	if err := db.Ping(); err != nil {
+
+	// Auto-migrate new rule tables for 0.0.5
+	if err := db.AutoMigrate(&Variable{}, &AliasRule{}, &TriggerRule{}, &HighlightRule{}); err != nil {
 		return nil, err
 	}
+
 	return &Store{db: db}, nil
 }
 
@@ -24,7 +28,11 @@ func (s *Store) Close() error {
 	if s == nil || s.db == nil {
 		return nil
 	}
-	return s.db.Close()
+	sqlDB, err := s.db.DB()
+	if err != nil {
+		return err
+	}
+	return sqlDB.Close()
 }
 
 func boolToInt(b bool) int {

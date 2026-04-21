@@ -620,7 +620,13 @@
     }
 
     function sendCommand(value, source = 'input') {
+      if (socket.readyState !== WebSocket.OPEN) {
+        appendEntry({ text: '[disconnected]' })
+        updateConnectionStatus('disconnected')
+        return false
+      }
       socket.send(JSON.stringify({ method: 'send', value: value, source: source }))
+      return true
     }
 
     function updateConnectionStatus(status) {
@@ -880,6 +886,10 @@
       if (message.type === 'variables') {
         configureVariables(message.variables || [])
       }
+
+      if (message.type === 'settings.changed' && message.settings && message.settings.domain === 'variables') {
+        requestVariables()
+      }
     }
 
     socket.onerror = (event) => {
@@ -934,7 +944,9 @@
       history.push(value)
       appendCommandHint(value)
       output.scrollTop = output.scrollHeight
-      sendCommand(value, 'input')
+      if (!sendCommand(value, 'input')) {
+        return
+      }
       input.value = ''
     })
   </script>

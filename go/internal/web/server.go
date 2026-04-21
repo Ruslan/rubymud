@@ -6,12 +6,17 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/gorilla/websocket"
 
 	"rubymud/go/internal/config"
 	"rubymud/go/internal/session"
+	"rubymud/go/internal/storage"
 )
 
 const restoreChunkSize = 100
@@ -42,13 +47,48 @@ func New(listenAddr string, sess *session.Session, hotkeys []config.Hotkey) *Ser
 		},
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/ws", s.handleWebSocket)
-	mux.Handle("/", http.HandlerFunc(s.handleIndex))
+	r := chi.NewRouter()
+	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+
+	r.HandleFunc("/ws", s.handleWebSocket)
+
+	r.Route("/api", func(r chi.Router) {
+		r.Route("/variables", func(r chi.Router) {
+			r.Get("/", s.listVariables)
+			r.Post("/", s.setVariable)
+		})
+		r.Route("/aliases", func(r chi.Router) {
+			r.Get("/", s.listAliases)
+			r.Post("/", s.createAlias)
+			r.Route("/{id}", func(r chi.Router) {
+				r.Put("/", s.updateAlias)
+				r.Delete("/", s.deleteAlias)
+			})
+		})
+		r.Route("/triggers", func(r chi.Router) {
+			r.Get("/", s.listTriggers)
+			r.Post("/", s.createTrigger)
+			r.Route("/{id}", func(r chi.Router) {
+				r.Put("/", s.updateTrigger)
+				r.Delete("/", s.deleteTrigger)
+			})
+		})
+		r.Route("/highlights", func(r chi.Router) {
+			r.Get("/", s.listHighlights)
+			r.Post("/", s.createHighlight)
+			r.Route("/{id}", func(r chi.Router) {
+				r.Put("/", s.updateHighlight)
+				r.Delete("/", s.deleteHighlight)
+			})
+		})
+	})
+
+	r.Handle("/*", http.HandlerFunc(s.handleIndex))
 
 	s.httpServer = &http.Server{
 		Addr:    listenAddr,
-		Handler: mux,
+		Handler: r,
 	}
 
 	return s
@@ -59,9 +99,12 @@ func (s *Server) ListenAndServe() error {
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
+	// Handle root or static files
+	path := r.URL.Path
+	if path == "/" {
+		path = "index.html"
+	} else {
+		path = strings.TrimPrefix(path, "/")
 	}
 
 	root, err := fs.Sub(webFiles, "static")
@@ -70,7 +113,213 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	http.FileServer(http.FS(root)).ServeHTTP(w, r)
+	// Check if file exists in embedded FS
+	f, err := root.Open(path)
+	if err != nil {
+		// If not found, serve index.html (for SPA routing if needed)
+		path = "index.html"
+	} else {
+		f.Close()
+	}
+
+	http.ServeFileFS(w, r, root, path)
+}
+
+// Variables
+
+func (s *Server) listVariables(w http.ResponseWriter, r *http.Request) {
+	vars, err := s.session.CurrentVariables()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(vars)
+}
+
+func (s *Server) setVariable(w http.ResponseWriter, r *http.Request) {
+	var v struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.session.SetVariable(v.Key, v.Value); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.session.NotifySettingsChanged("variables")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Aliases
+
+func (s *Server) listAliases(w http.ResponseWriter, r *http.Request) {
+	aliases, err := s.session.ListAliases()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(aliases)
+}
+
+func (s *Server) createAlias(w http.ResponseWriter, r *http.Request) {
+	var a storage.AliasRule
+	if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.session.SaveAlias(a); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.session.NotifySettingsChanged("aliases")
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (s *Server) updateAlias(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, _ := strconv.ParseInt(idStr, 10, 64)
+
+	var a storage.AliasRule
+	if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	a.ID = id
+	if err := s.session.UpdateAlias(a); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.session.NotifySettingsChanged("aliases")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteAlias(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, _ := strconv.ParseInt(idStr, 10, 64)
+
+	if err := s.session.DeleteAlias(id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.session.NotifySettingsChanged("aliases")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Triggers
+
+func (s *Server) listTriggers(w http.ResponseWriter, r *http.Request) {
+	triggers, err := s.session.ListTriggers()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(triggers)
+}
+
+func (s *Server) createTrigger(w http.ResponseWriter, r *http.Request) {
+	var t storage.TriggerRule
+	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.session.CreateTrigger(t); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.session.NotifySettingsChanged("triggers")
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (s *Server) updateTrigger(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, _ := strconv.ParseInt(idStr, 10, 64)
+
+	var t storage.TriggerRule
+	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	t.ID = id
+	if err := s.session.UpdateTrigger(t); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.session.NotifySettingsChanged("triggers")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteTrigger(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, _ := strconv.ParseInt(idStr, 10, 64)
+
+	if err := s.session.DeleteTrigger(id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.session.NotifySettingsChanged("triggers")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Highlights
+
+func (s *Server) listHighlights(w http.ResponseWriter, r *http.Request) {
+	highlights, err := s.session.ListHighlights()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(highlights)
+}
+
+func (s *Server) createHighlight(w http.ResponseWriter, r *http.Request) {
+	var h storage.HighlightRule
+	if err := json.NewDecoder(r.Body).Decode(&h); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.session.CreateHighlight(h); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.session.NotifySettingsChanged("highlights")
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (s *Server) updateHighlight(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, _ := strconv.ParseInt(idStr, 10, 64)
+
+	var h storage.HighlightRule
+	if err := json.NewDecoder(r.Body).Decode(&h); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	h.ID = id
+	if err := s.session.UpdateHighlight(h); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.session.NotifySettingsChanged("highlights")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteHighlight(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+	id, _ := strconv.ParseInt(idStr, 10, 64)
+
+	if err := s.session.DeleteHighlight(id); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.session.NotifySettingsChanged("highlights")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
@@ -80,18 +329,27 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := ws.WriteJSON(session.ServerMsg{Type: "status", Status: "connected"}); err != nil {
+	var writeMu sync.Mutex
+	writeJSON := func(msg session.ServerMsg) error {
+		writeMu.Lock()
+		defer writeMu.Unlock()
+		return ws.WriteJSON(msg)
+	}
+
+	if err := writeJSON(session.ServerMsg{Type: "status", Status: "connected"}); err != nil {
+		log.Printf("websocket initial status send failed: %v", err)
 		_ = ws.Close()
 		return
 	}
 
-	if err := s.sendRestoreState(ws); err != nil {
+	if err := s.sendRestoreState(writeJSON); err != nil {
+		log.Printf("websocket restore state failed: %v", err)
 		_ = ws.Close()
 		return
 	}
 
 	clientID := s.session.AttachClient(ws.RemoteAddr().String(), func(msg session.ServerMsg) error {
-		return ws.WriteJSON(msg)
+		return writeJSON(msg)
 	})
 	defer func() {
 		s.session.DetachClient(clientID)
@@ -101,6 +359,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	for {
 		_, payload, err := ws.ReadMessage()
 		if err != nil {
+			log.Printf("websocket read failed: %v", err)
 			return
 		}
 
@@ -112,7 +371,8 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				log.Printf("load variables failed: %v", err)
 				return
 			}
-			if err := ws.WriteJSON(session.ServerMsg{Type: "variables", Variables: variables}); err != nil {
+			if err := writeJSON(session.ServerMsg{Type: "variables", Variables: variables}); err != nil {
+				log.Printf("websocket variables send failed: %v", err)
 				return
 			}
 		case "send":
@@ -143,7 +403,7 @@ func parseClientMessage(payload []byte) clientMessage {
 	return clientMessage{Method: "send", Value: trimmed, Source: "input"}
 }
 
-func (s *Server) sendRestoreState(ws *websocket.Conn) error {
+func (s *Server) sendRestoreState(writeJSON func(session.ServerMsg) error) error {
 	logs, err := s.session.RecentLogs(500)
 	if err != nil {
 		return err
@@ -166,7 +426,7 @@ func (s *Server) sendRestoreState(ws *websocket.Conn) error {
 	for _, hk := range s.hotkeys {
 		begin.Hotkeys = append(begin.Hotkeys, session.HotkeyJSON{Shortcut: hk.Shortcut, Command: hk.Command})
 	}
-	if err := ws.WriteJSON(begin); err != nil {
+	if err := writeJSON(begin); err != nil {
 		return err
 	}
 
@@ -184,10 +444,10 @@ func (s *Server) sendRestoreState(ws *websocket.Conn) error {
 		if end > len(entries) {
 			end = len(entries)
 		}
-		if err := ws.WriteJSON(session.ServerMsg{Type: "restore_chunk", Entries: entries[start:end]}); err != nil {
+		if err := writeJSON(session.ServerMsg{Type: "restore_chunk", Entries: entries[start:end]}); err != nil {
 			return err
 		}
 	}
 
-	return ws.WriteJSON(session.ServerMsg{Type: "restore_end"})
+	return writeJSON(session.ServerMsg{Type: "restore_end"})
 }

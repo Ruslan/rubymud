@@ -1,67 +1,81 @@
 package storage
 
 type HighlightRule struct {
-	ID            int64
-	SessionID     int64
-	Pattern       string
-	FG            string
-	BG            string
-	Bold          bool
-	Faint         bool
-	Italic        bool
-	Underline     bool
-	Strikethrough bool
-	Blink         bool
-	Reverse       bool
-	Enabled       bool
-	GroupName     string
+	ID            int64      `gorm:"primaryKey" json:"id"`
+	SessionID     int64      `json:"session_id"`
+	Pattern       string     `json:"pattern"`
+	FG            string     `json:"fg"`
+	BG            string     `json:"bg"`
+	Bold          bool       `json:"bold"`
+	Faint         bool       `json:"faint"`
+	Italic        bool       `json:"italic"`
+	Underline     bool       `json:"underline"`
+	Strikethrough bool       `json:"strikethrough"`
+	Blink         bool       `json:"blink"`
+	Reverse       bool       `json:"reverse"`
+	Enabled       bool       `json:"enabled"`
+	GroupName     string     `json:"group_name"`
+	UpdatedAt     SQLiteTime `json:"updated_at"`
 }
 
-func (s *Store) LoadHighlights(sessionID int64) ([]HighlightRule, error) {
-	rows, err := s.db.Query(`
-		SELECT id, session_id, pattern, fg, bg, bold, faint, italic, underline, strikethrough, blink, reverse, enabled, group_name
-		FROM highlight_rules
-		WHERE session_id = ? AND enabled = 1
-		ORDER BY id
-	`, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	highlights := make([]HighlightRule, 0)
-	for rows.Next() {
-		var h HighlightRule
-		var bold, faint, italic, underline, strikethrough, blink, reverse, enabled int
-		if err := rows.Scan(&h.ID, &h.SessionID, &h.Pattern, &h.FG, &h.BG, &bold, &faint, &italic, &underline, &strikethrough, &blink, &reverse, &enabled, &h.GroupName); err != nil {
-			return nil, err
-		}
-		h.Bold = bold == 1
-		h.Faint = faint == 1
-		h.Italic = italic == 1
-		h.Underline = underline == 1
-		h.Strikethrough = strikethrough == 1
-		h.Blink = blink == 1
-		h.Reverse = reverse == 1
-		h.Enabled = enabled == 1
-		highlights = append(highlights, h)
-	}
-	return highlights, rows.Err()
+func (s *HighlightRule) TableName() string {
+	return "highlight_rules"
 }
 
-func (s *Store) SaveHighlight(sessionID int64, h HighlightRule) error {
+func (s *Store) ListHighlights(sessionID int64) ([]HighlightRule, error) {
+	var highlights []HighlightRule
+	err := s.db.Where("session_id = ?", sessionID).Order("id").Find(&highlights).Error
+	return highlights, err
+}
+
+func (s *Store) GetHighlight(id int64) (*HighlightRule, error) {
+	var h HighlightRule
+	err := s.db.First(&h, id).Error
+	return &h, err
+}
+
+func (s *Store) CreateHighlight(h HighlightRule) error {
 	if h.GroupName == "" {
 		h.GroupName = "default"
 	}
-	_, err := s.db.Exec(`
-		INSERT INTO highlight_rules(session_id, pattern, fg, bg, bold, faint, italic, underline, strikethrough, blink, reverse, enabled, group_name)
-		VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
-		ON CONFLICT(session_id, pattern) DO UPDATE SET fg = excluded.fg, bg = excluded.bg, bold = excluded.bold, faint = excluded.faint, italic = excluded.italic, underline = excluded.underline, strikethrough = excluded.strikethrough, blink = excluded.blink, reverse = excluded.reverse, group_name = excluded.group_name, updated_at = CURRENT_TIMESTAMP
-	`, sessionID, h.Pattern, h.FG, h.BG, boolToInt(h.Bold), boolToInt(h.Faint), boolToInt(h.Italic), boolToInt(h.Underline), boolToInt(h.Strikethrough), boolToInt(h.Blink), boolToInt(h.Reverse), h.GroupName)
-	return err
+	h.UpdatedAt = nowSQLiteTime()
+	return s.db.Create(&h).Error
+}
+
+func (s *Store) UpdateHighlight(h HighlightRule) error {
+	if h.GroupName == "" {
+		h.GroupName = "default"
+	}
+	h.UpdatedAt = nowSQLiteTime()
+	return s.db.Save(&h).Error
+}
+
+func (s *Store) DeleteHighlightByID(id int64) error {
+	return s.db.Delete(&HighlightRule{}, id).Error
+}
+
+func (s *Store) LoadHighlights(sessionID int64) ([]HighlightRule, error) {
+	var highlights []HighlightRule
+	err := s.db.Where("session_id = ? AND enabled = ?", sessionID, true).Order("id").Find(&highlights).Error
+	return highlights, err
+}
+
+func (s *Store) SaveHighlight(sessionID int64, h HighlightRule) error {
+	h.SessionID = sessionID
+	if h.GroupName == "" {
+		h.GroupName = "default"
+	}
+	h.UpdatedAt = nowSQLiteTime()
+	// UPSERT by pattern
+	var existing HighlightRule
+	err := s.db.Where("session_id = ? AND pattern = ?", sessionID, h.Pattern).First(&existing).Error
+	if err == nil {
+		h.ID = existing.ID
+		return s.db.Save(&h).Error
+	}
+	return s.db.Create(&h).Error
 }
 
 func (s *Store) DeleteHighlight(sessionID int64, pattern string) error {
-	_, err := s.db.Exec(`DELETE FROM highlight_rules WHERE session_id = ? AND pattern = ?`, sessionID, pattern)
-	return err
+	return s.db.Where("session_id = ? AND pattern = ?", sessionID, pattern).Delete(&HighlightRule{}).Error
 }

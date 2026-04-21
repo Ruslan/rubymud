@@ -1,13 +1,18 @@
 package session
 
 type ServerMsg struct {
-	Type      string           `json:"type"`
-	Entries   []ClientLogEntry `json:"entries,omitempty"`
-	History   []string         `json:"history,omitempty"`
-	Hotkeys   []HotkeyJSON     `json:"hotkeys,omitempty"`
-	Variables []VariableJSON   `json:"variables,omitempty"`
-	Status    string           `json:"status,omitempty"`
-	Message   string           `json:"message,omitempty"`
+	Type      string               `json:"type"`
+	Entries   []ClientLogEntry     `json:"entries,omitempty"`
+	History   []string             `json:"history,omitempty"`
+	Hotkeys   []HotkeyJSON         `json:"hotkeys,omitempty"`
+	Variables []VariableJSON       `json:"variables,omitempty"`
+	Status    string               `json:"status,omitempty"`
+	Message   string               `json:"message,omitempty"`
+	Settings  *SettingsChangedJSON `json:"settings,omitempty"`
+}
+
+type SettingsChangedJSON struct {
+	Domain string `json:"domain"`
 }
 
 type ClientLogEntry struct {

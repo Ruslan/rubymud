@@ -1,50 +1,56 @@
 package storage
 
 import (
-	"database/sql"
 	"encoding/json"
-	"errors"
-	"fmt"
 	"strings"
+
+	"gorm.io/gorm"
 )
 
+func (r *LogRecord) TableName() string {
+	return "log_entries"
+}
+
+func (o *LogOverlay) TableName() string {
+	return "log_overlays"
+}
+
 func (s *Store) AppendLogEntry(sessionID int64, rawText, plainText string) (int64, error) {
-	result, err := s.db.Exec(`
-		INSERT INTO log_entries(session_id, stream, window_name, raw_text, plain_text, source_type)
-		VALUES(?, 'mud', NULL, ?, ?, 'mud')
-	`, sessionID, rawText, plainText)
-	if err != nil {
-		return 0, err
+	entry := LogRecord{
+		SessionID:  sessionID,
+		Stream:     "mud",
+		RawText:    rawText,
+		PlainText:  plainText,
+		SourceType: "mud",
+		CreatedAt:  nowSQLiteTime(),
 	}
-	return result.LastInsertId()
+	err := s.db.Create(&entry).Error
+	return entry.ID, err
 }
 
 func (s *Store) RecentLogs(sessionID int64, limit int) ([]LogEntry, error) {
-	rows, err := s.db.Query(`
-		SELECT id, raw_text
-		FROM log_entries
-		WHERE session_id = ?
-		ORDER BY created_at DESC, id DESC
-		LIMIT ?
-	`, sessionID, limit)
+	var records []LogRecord
+	err := s.db.Where("session_id = ?", sessionID).
+		Order("created_at DESC, id DESC").
+		Limit(limit).
+		Find(&records).Error
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
 
-	entries := make([]LogEntry, 0, limit)
-	for rows.Next() {
-		var entry LogEntry
-		if err := rows.Scan(&entry.ID, &entry.RawText); err != nil {
-			return nil, err
-		}
-		entries = append(entries, entry)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
+	entries := make([]LogEntry, 0, len(records))
+	for _, r := range records {
+		entries = append(entries, LogEntry{
+			ID:      r.ID,
+			RawText: r.RawText,
+		})
 	}
 
-	reverseLogs(entries)
+	// Reverse to get chronological order (oldest first)
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+
 	if err := s.loadOverlays(entries); err != nil {
 		return nil, err
 	}
@@ -57,15 +63,9 @@ func (s *Store) AppendCommandHintToLatestLogEntry(sessionID int64, command strin
 		return nil
 	}
 
-	var logEntryID int64
-	err := s.db.QueryRow(`
-		SELECT id
-		FROM log_entries
-		WHERE session_id = ?
-		ORDER BY created_at DESC, id DESC
-		LIMIT 1
-	`, sessionID).Scan(&logEntryID)
-	if errors.Is(err, sql.ErrNoRows) {
+	var lastEntry LogRecord
+	err := s.db.Where("session_id = ?", sessionID).Order("created_at DESC, id DESC").First(&lastEntry).Error
+	if err == gorm.ErrRecordNotFound {
 		return nil
 	}
 	if err != nil {
@@ -77,11 +77,14 @@ func (s *Store) AppendCommandHintToLatestLogEntry(sessionID int64, command strin
 		return err
 	}
 
-	_, err = s.db.Exec(`
-		INSERT INTO log_overlays(log_entry_id, overlay_type, payload_json, source_type)
-		VALUES(?, 'command_hint', ?, 'client')
-	`, logEntryID, string(payload))
-	return err
+	overlay := LogOverlay{
+		LogEntryID:  lastEntry.ID,
+		OverlayType: "command_hint",
+		PayloadJSON: string(payload),
+		SourceType:  "client",
+		CreatedAt:   nowSQLiteTime(),
+	}
+	return s.db.Create(&overlay).Error
 }
 
 func (s *Store) AppendButtonOverlay(logEntryID int64, label, command string) error {
@@ -89,17 +92,14 @@ func (s *Store) AppendButtonOverlay(logEntryID int64, label, command string) err
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(`
-		INSERT INTO log_overlays(log_entry_id, overlay_type, payload_json, source_type)
-		VALUES(?, 'button', ?, 'trigger')
-	`, logEntryID, string(payload))
-	return err
-}
-
-func reverseLogs(entries []LogEntry) {
-	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
-		entries[i], entries[j] = entries[j], entries[i]
+	overlay := LogOverlay{
+		LogEntryID:  logEntryID,
+		OverlayType: "button",
+		PayloadJSON: string(payload),
+		SourceType:  "trigger",
+		CreatedAt:   nowSQLiteTime(),
 	}
+	return s.db.Create(&overlay).Error
 }
 
 func (s *Store) loadOverlays(entries []LogEntry) error {
@@ -107,45 +107,31 @@ func (s *Store) loadOverlays(entries []LogEntry) error {
 		return nil
 	}
 
+	ids := make([]int64, len(entries))
 	idIndex := make(map[int64]int, len(entries))
-	placeholders := make([]string, 0, len(entries))
-	args := make([]any, 0, len(entries))
 	for i, entry := range entries {
+		ids[i] = entry.ID
 		idIndex[entry.ID] = i
-		placeholders = append(placeholders, "?")
-		args = append(args, entry.ID)
 	}
 
-	query := fmt.Sprintf(`
-		SELECT log_entry_id, overlay_type, payload_json
-		FROM log_overlays
-		WHERE overlay_type IN ('command_hint', 'button') AND log_entry_id IN (%s)
-		ORDER BY id ASC
-	`, strings.Join(placeholders, ","))
-
-	rows, err := s.db.Query(query, args...)
+	var overlays []LogOverlay
+	err := s.db.Where("overlay_type IN ('command_hint', 'button') AND log_entry_id IN ?", ids).
+		Order("id ASC").
+		Find(&overlays).Error
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
 
-	for rows.Next() {
-		var logEntryID int64
-		var overlayType string
-		var payloadText string
-		if err := rows.Scan(&logEntryID, &overlayType, &payloadText); err != nil {
-			return err
-		}
-
-		index, ok := idIndex[logEntryID]
+	for _, o := range overlays {
+		index, ok := idIndex[o.LogEntryID]
 		if !ok {
 			continue
 		}
 
-		switch overlayType {
+		switch o.OverlayType {
 		case "command_hint":
 			var payload commandOverlayPayload
-			if err := json.Unmarshal([]byte(payloadText), &payload); err != nil {
+			if err := json.Unmarshal([]byte(o.PayloadJSON), &payload); err != nil {
 				return err
 			}
 			if payload.Command != "" {
@@ -153,7 +139,7 @@ func (s *Store) loadOverlays(entries []LogEntry) error {
 			}
 		case "button":
 			var payload ButtonOverlay
-			if err := json.Unmarshal([]byte(payloadText), &payload); err != nil {
+			if err := json.Unmarshal([]byte(o.PayloadJSON), &payload); err != nil {
 				return err
 			}
 			if payload.Command != "" {
@@ -162,5 +148,5 @@ func (s *Store) loadOverlays(entries []LogEntry) error {
 		}
 	}
 
-	return rows.Err()
+	return nil
 }
