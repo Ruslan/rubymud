@@ -41,6 +41,13 @@ func (s *Store) UpdateTrigger(t TriggerRule) error {
 	if t.GroupName == "" {
 		t.GroupName = "default"
 	}
+	if t.SessionID == 0 && t.ID != 0 {
+		var existing TriggerRule
+		if err := s.db.First(&existing, t.ID).Error; err != nil {
+			return err
+		}
+		t.SessionID = existing.SessionID
+	}
 	t.UpdatedAt = nowSQLiteTime()
 	return s.db.Save(&t).Error
 }

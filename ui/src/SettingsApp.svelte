@@ -11,6 +11,15 @@
     name: string;
     template: string;
     enabled: boolean;
+    group_name: string;
+  }
+
+  interface RuleGroupSummary {
+    domain: string;
+    group_name: string;
+    total_count: number;
+    enabled_count: number;
+    disabled_count: number;
   }
 
   interface Trigger {
@@ -60,6 +69,7 @@
     { id: 'aliases', label: 'Aliases' },
     { id: 'triggers', label: 'Triggers' },
     { id: 'highlights', label: 'Highlights' },
+    { id: 'groups', label: 'Groups' },
     { id: 'sessions', label: 'Sessions' },
   ];
 
@@ -70,7 +80,8 @@
 
   // Aliases State
   let aliases: Alias[] = [];
-  let aliasEditor: Alias = { name: '', template: '', enabled: true };
+  const defaultAlias = (): Alias => ({ name: '', template: '', enabled: true, group_name: '' });
+  let aliasEditor: Alias = defaultAlias();
 
   // Triggers State
   let triggers: Trigger[] = [];
@@ -81,6 +92,9 @@
   let highlights: Highlight[] = [];
   const defaultHighlight = (): Highlight => ({ pattern: '', fg: '', bg: '', bold: false, faint: false, italic: false, underline: false, strikethrough: false, blink: false, reverse: false, enabled: true, group_name: '' });
   let highlightEditor: Highlight = defaultHighlight();
+
+  // Groups State
+  let groups: RuleGroupSummary[] = [];
 
   type RGB = { r: number; g: number; b: number };
 
@@ -203,15 +217,28 @@
     // @ts-ignore
     const token = window.API_TOKEN || '';
     try {
-      const res = await fetch(`/api/${currentTab}`, {
-        headers: { 'X-Session-Token': token }
-      });
-      const data = await res.json();
-      if (currentTab === 'variables') variables = data || [];
-      else if (currentTab === 'aliases') aliases = data || [];
-      else if (currentTab === 'triggers') triggers = data || [];
-      else if (currentTab === 'highlights') highlights = data || [];
-      else if (currentTab === 'sessions') sessions = data || [];
+      if (currentTab === 'groups') {
+        const [groupsRes, aliasesRes, triggersRes, highlightsRes] = await Promise.all([
+          fetch('/api/groups', { headers: { 'X-Session-Token': token } }),
+          fetch('/api/aliases', { headers: { 'X-Session-Token': token } }),
+          fetch('/api/triggers', { headers: { 'X-Session-Token': token } }),
+          fetch('/api/highlights', { headers: { 'X-Session-Token': token } }),
+        ]);
+        groups = await groupsRes.json() || [];
+        aliases = await aliasesRes.json() || [];
+        triggers = await triggersRes.json() || [];
+        highlights = await highlightsRes.json() || [];
+      } else {
+        const res = await fetch(`/api/${currentTab}`, {
+          headers: { 'X-Session-Token': token }
+        });
+        const data = await res.json();
+        if (currentTab === 'variables') variables = data || [];
+        else if (currentTab === 'aliases') aliases = data || [];
+        else if (currentTab === 'triggers') triggers = data || [];
+        else if (currentTab === 'highlights') highlights = data || [];
+        else if (currentTab === 'sessions') sessions = data || [];
+      }
     } catch (e) {
       console.error(`Failed to fetch ${currentTab}`, e);
     } finally {
@@ -279,6 +306,48 @@
     await fetchData();
   }
 
+  async function toggleItem(domain: 'aliases' | 'triggers' | 'highlights', item: Alias | Trigger | Highlight, enabled: boolean) {
+    formError = '';
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    await fetch(`/api/${domain}/${item.id}`, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Token': token,
+      },
+      body: JSON.stringify({ ...item, enabled }),
+    });
+    await fetchData();
+  }
+
+  async function toggleGroup(domain: string, groupName: string, enabled: boolean) {
+    formError = '';
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    await fetch('/api/groups/toggle', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Token': token,
+      },
+      body: JSON.stringify({ domain, group_name: groupName, enabled }),
+    });
+    await fetchData();
+  }
+
+  function titleCase(value: string): string {
+    return value.slice(0, 1).toUpperCase() + value.slice(1);
+  }
+
+  function ruleCountForGroup(domain: string, groupName: string): number {
+    const normalized = groupName || 'default';
+    if (domain === 'aliases') return aliases.filter((item) => (item.group_name || 'default') === normalized).length;
+    if (domain === 'triggers') return triggers.filter((item) => (item.group_name || 'default') === normalized).length;
+    if (domain === 'highlights') return highlights.filter((item) => (item.group_name || 'default') === normalized).length;
+    return 0;
+  }
+
   $: if (currentTab) fetchData();
   onMount(() => fetchData());
 </script>
@@ -328,19 +397,26 @@
         <div class="form-row">
           <input type="text" bind:value={aliasEditor.name} placeholder="Name" required />
           <input type="text" bind:value={aliasEditor.template} placeholder="Template" required />
+          <input type="text" bind:value={aliasEditor.group_name} placeholder="Group Name" />
           <label class="checkbox-label"><input type="checkbox" bind:checked={aliasEditor.enabled} /> Enabled</label>
-          <button class="btn-primary" on:click={() => saveItem('aliases', aliasEditor, () => aliasEditor = { name: '', template: '', enabled: true })}>
+          <button class="btn-primary" on:click={() => saveItem('aliases', aliasEditor, () => aliasEditor = defaultAlias())}>
             {aliasEditor.id ? 'Update' : 'Add'}
           </button>
         </div>
       </div>
       <table class="data-table">
-        <thead><tr><th style="width: 40px">Status</th><th>Name</th><th>Template</th><th style="width: 140px">Actions</th></tr></thead>
+        <thead><tr><th style="width: 72px">Status</th><th>Name</th><th>Template</th><th>Group</th><th style="width: 140px">Actions</th></tr></thead>
         <tbody>
           {#each aliases as a}
             <tr>
-              <td><span class="status-dot {a.enabled ? 'on' : 'off'}" title={a.enabled ? 'Enabled' : 'Disabled'}></span></td>
+              <td>
+                <label class="toggle-label">
+                  <input type="checkbox" checked={a.enabled} on:change={(event) => toggleItem('aliases', a, (event.currentTarget as HTMLInputElement).checked)} />
+                  <span class="status-dot {a.enabled ? 'on' : 'off'}" title={a.enabled ? 'Enabled' : 'Disabled'}></span>
+                </label>
+              </td>
               <td class="key-cell">{a.name}</td><td class="value-cell">{a.template}</td>
+              <td class="dim-cell">{a.group_name || '-'}</td>
               <td class="actions-cell">
                 <button class="btn-link" on:click={() => aliasEditor = { ...a }}>Edit</button>
                 <button class="btn-link btn-danger" on:click={() => deleteItem('aliases', a.id!)}>Delete</button>
@@ -368,13 +444,16 @@
         </div>
       </div>
       <table class="data-table">
-        <thead><tr><th style="width: 80px">Flags</th><th>Pattern</th><th>Command</th><th>Group</th><th style="width: 140px">Actions</th></tr></thead>
+        <thead><tr><th style="width: 96px">Flags</th><th>Pattern</th><th>Command</th><th>Group</th><th style="width: 140px">Actions</th></tr></thead>
         <tbody>
           {#each triggers as t}
             <tr>
               <td class="flags-cell">
                 <div class="flags-wrapper">
-                  <span class={t.enabled ? 'flag-on' : 'flag-off'} title="Enabled">●</span>
+                  <label class="toggle-label" title="Enabled">
+                    <input type="checkbox" checked={t.enabled} on:change={(event) => toggleItem('triggers', t, (event.currentTarget as HTMLInputElement).checked)} />
+                    <span class={t.enabled ? 'flag-on' : 'flag-off'}>●</span>
+                  </label>
                   {#if t.is_button}<span class="flag-icon" title="Is Button">⚡</span>{/if}
                   {#if t.stop_after_match}<span class="flag-icon" title="Stop After Match">🛑</span>{/if}
                 </div>
@@ -430,11 +509,16 @@
         </div>
       </div>
       <table class="data-table">
-        <thead><tr><th style="width: 40px">Status</th><th>Pattern</th><th>Colors</th><th>Group</th><th>Preview</th><th style="width: 140px">Actions</th></tr></thead>
+        <thead><tr><th style="width: 72px">Status</th><th>Pattern</th><th>Colors</th><th>Group</th><th>Preview</th><th style="width: 140px">Actions</th></tr></thead>
         <tbody>
           {#each highlights as h}
             <tr>
-              <td><span class="status-dot {h.enabled ? 'on' : 'off'}" title={h.enabled ? 'Enabled' : 'Disabled'}></span></td>
+              <td>
+                <label class="toggle-label">
+                  <input type="checkbox" checked={h.enabled} on:change={(event) => toggleItem('highlights', h, (event.currentTarget as HTMLInputElement).checked)} />
+                  <span class="status-dot {h.enabled ? 'on' : 'off'}" title={h.enabled ? 'Enabled' : 'Disabled'}></span>
+                </label>
+              </td>
               <td class="key-cell">{h.pattern}</td>
               <td class="dim-cell">
                 <div class="color-preview">
@@ -459,6 +543,26 @@
               <td class="actions-cell">
                 <button class="btn-link" on:click={() => highlightEditor = { ...h }}>Edit</button>
                 <button class="btn-link btn-danger" on:click={() => deleteItem('highlights', h.id!)}>Delete</button>
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+    {:else if currentTab === 'groups'}
+      <header class="content-header"><h2>Groups</h2><p class="description">Bulk enable or disable rule groups across aliases, triggers, and highlights.</p></header>
+      {#if formError}<div class="form-error">{formError}</div>{/if}
+      <table class="data-table">
+        <thead><tr><th>Domain</th><th>Group</th><th>Rules</th><th>Status</th><th style="width: 180px">Actions</th></tr></thead>
+        <tbody>
+          {#each groups as group}
+            <tr>
+              <td class="key-cell">{titleCase(group.domain)}</td>
+              <td class="value-cell">{group.group_name || 'default'}</td>
+              <td class="dim-cell">{ruleCountForGroup(group.domain, group.group_name)} total</td>
+              <td class="dim-cell">{group.enabled_count} on / {group.disabled_count} off</td>
+              <td class="actions-cell">
+                <button class="btn-link" on:click={() => toggleGroup(group.domain, group.group_name, true)}>Enable</button>
+                <button class="btn-link btn-danger" on:click={() => toggleGroup(group.domain, group.group_name, false)}>Disable</button>
               </td>
             </tr>
           {/each}
@@ -532,6 +636,7 @@
   .color-preview { display: flex; align-items: center; gap: 4px; }
   .color-chip { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #444; }
   .actions-cell { white-space: nowrap; }
+  .toggle-label { display: inline-flex; align-items: center; gap: 8px; }
   .btn-link { background: none; border: none; color: #3498db; cursor: pointer; padding: 0; font-size: 0.9rem; }
   .btn-link:hover { text-decoration: underline; }
   .btn-danger { color: #e74c3c; margin-left: 12px; }

@@ -6,6 +6,7 @@ type AliasRule struct {
 	Name      string     `json:"name"`
 	Template  string     `json:"template"`
 	Enabled   bool       `json:"enabled"`
+	GroupName string     `json:"group_name"`
 	UpdatedAt SQLiteTime `json:"updated_at"`
 }
 
@@ -25,11 +26,16 @@ func (s *Store) GetAlias(id int64) (*AliasRule, error) {
 	return &a, err
 }
 
-func (s *Store) SaveAlias(sessionID int64, name, template string) error {
+func (s *Store) SaveAlias(sessionID int64, name, template string, enabled bool, group string) error {
+	if group == "" {
+		group = "default"
+	}
 	var a AliasRule
 	err := s.db.Where("session_id = ? AND name = ?", sessionID, name).First(&a).Error
 	if err == nil {
 		a.Template = template
+		a.Enabled = enabled
+		a.GroupName = group
 		a.UpdatedAt = nowSQLiteTime()
 		return s.db.Save(&a).Error
 	}
@@ -37,13 +43,24 @@ func (s *Store) SaveAlias(sessionID int64, name, template string) error {
 		SessionID: sessionID,
 		Name:      name,
 		Template:  template,
-		Enabled:   true,
+		Enabled:   enabled,
+		GroupName: group,
 		UpdatedAt: nowSQLiteTime(),
 	}
 	return s.db.Create(&a).Error
 }
 
 func (s *Store) UpdateAlias(a AliasRule) error {
+	if a.GroupName == "" {
+		a.GroupName = "default"
+	}
+	if a.SessionID == 0 && a.ID != 0 {
+		var existing AliasRule
+		if err := s.db.First(&existing, a.ID).Error; err != nil {
+			return err
+		}
+		a.SessionID = existing.SessionID
+	}
 	a.UpdatedAt = nowSQLiteTime()
 	return s.db.Save(&a).Error
 }

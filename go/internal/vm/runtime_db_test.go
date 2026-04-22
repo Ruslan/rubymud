@@ -24,7 +24,7 @@ func TestProcessInputDetailedLoadsLatestStateFromDB(t *testing.T) {
 	if err := store.SetVariable(1, "weapon", "sword"); err != nil {
 		t.Fatalf("SetVariable: %v", err)
 	}
-	if err := store.SaveAlias(1, "eq", "wield $weapon"); err != nil {
+	if err := store.SaveAlias(1, "eq", "wield $weapon", true, "default"); err != nil {
 		t.Fatalf("SaveAlias: %v", err)
 	}
 
@@ -96,7 +96,7 @@ func newRuntimeTestStore(t *testing.T) *storage.Store {
 	for _, stmt := range []string{
 		`CREATE TABLE variables (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, scope TEXT NOT NULL, key TEXT NOT NULL, value TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
 		`CREATE UNIQUE INDEX variables_session_scope_key_idx ON variables(session_id, scope, key);`,
-		`CREATE TABLE alias_rules (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, name TEXT NOT NULL, template TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
+		`CREATE TABLE alias_rules (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, name TEXT NOT NULL, template TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, group_name TEXT NOT NULL DEFAULT 'default', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
 		`CREATE UNIQUE INDEX alias_rules_session_name_idx ON alias_rules(session_id, name);`,
 		`CREATE TABLE trigger_rules (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, name TEXT, pattern TEXT NOT NULL, command TEXT NOT NULL, is_button INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, stop_after_match INTEGER NOT NULL DEFAULT 0, group_name TEXT NOT NULL DEFAULT 'default', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
 		`CREATE TABLE highlight_rules (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, pattern TEXT NOT NULL, fg TEXT NOT NULL DEFAULT '', bg TEXT NOT NULL DEFAULT '', bold INTEGER NOT NULL DEFAULT 0, faint INTEGER NOT NULL DEFAULT 0, italic INTEGER NOT NULL DEFAULT 0, underline INTEGER NOT NULL DEFAULT 0, strikethrough INTEGER NOT NULL DEFAULT 0, blink INTEGER NOT NULL DEFAULT 0, reverse INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, group_name TEXT NOT NULL DEFAULT 'default', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,

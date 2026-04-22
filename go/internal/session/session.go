@@ -80,7 +80,7 @@ func (s *Session) ListAliases() ([]storage.AliasRule, error) {
 func (s *Session) SaveAlias(a storage.AliasRule) error {
 	// For now SaveAlias in storage uses name-based UPSERT.
 	// In future we might want to strictly separate Create/Update by ID.
-	return s.store.SaveAlias(s.sessionID, a.Name, a.Template)
+	return s.store.SaveAlias(s.sessionID, a.Name, a.Template, a.Enabled, a.GroupName)
 }
 
 func (s *Session) UpdateAlias(a storage.AliasRule) error {
@@ -127,6 +127,14 @@ func (s *Session) DeleteHighlight(id int64) error {
 
 func (s *Session) ListSessions() ([]storage.SessionRecord, error) {
 	return s.store.ListSessions()
+}
+
+func (s *Session) ListRuleGroups() ([]storage.RuleGroupSummary, error) {
+	return s.store.ListRuleGroups(s.sessionID)
+}
+
+func (s *Session) SetGroupEnabled(domain, group string, enabled bool) error {
+	return s.store.SetGroupEnabled(s.sessionID, domain, group, enabled)
 }
 
 func (s *Session) RecentLogs(limit int) ([]storage.LogEntry, error) {

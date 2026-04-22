@@ -127,6 +127,10 @@ func New(listenAddr string, sess *session.Session, hotkeys []config.Hotkey) *Ser
 				r.Delete("/", s.deleteHighlight)
 			})
 		})
+		r.Route("/groups", func(r chi.Router) {
+			r.Get("/", s.listGroups)
+			r.Post("/toggle", s.toggleGroup)
+		})
 		r.Route("/sessions", func(r chi.Router) {
 			r.Get("/", s.listSessions)
 		})
@@ -431,6 +435,40 @@ func (s *Server) deleteHighlight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.session.NotifySettingsChanged("highlights")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Groups
+
+func (s *Server) listGroups(w http.ResponseWriter, r *http.Request) {
+	groups, err := s.session.ListRuleGroups()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(groups)
+}
+
+func (s *Server) toggleGroup(w http.ResponseWriter, r *http.Request) {
+	var payload struct {
+		Domain    string `json:"domain"`
+		GroupName string `json:"group_name"`
+		Enabled   bool   `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if strings.TrimSpace(payload.Domain) == "" {
+		http.Error(w, "missing domain", http.StatusBadRequest)
+		return
+	}
+	if err := s.session.SetGroupEnabled(strings.TrimSpace(payload.Domain), strings.TrimSpace(payload.GroupName), payload.Enabled); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.session.NotifySettingsChanged(strings.TrimSpace(payload.Domain))
 	w.WriteHeader(http.StatusNoContent)
 }
 

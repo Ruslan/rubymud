@@ -40,6 +40,39 @@ const state = {
 
 let configuredHotkeys: Hotkey[] = [];
 
+function isEditableElement(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) return false;
+  if (target instanceof HTMLInputElement) {
+    const type = target.type.toLowerCase();
+    return type !== 'button' && type !== 'checkbox' && type !== 'radio' && type !== 'range' && type !== 'submit';
+  }
+  return target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable;
+}
+
+function isPrintableKey(event: KeyboardEvent): boolean {
+  return event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
+}
+
+function insertInputText(text: string) {
+  const { input } = elements;
+  const start = input.selectionStart ?? input.value.length;
+  const end = input.selectionEnd ?? input.value.length;
+  input.value = `${input.value.slice(0, start)}${text}${input.value.slice(end)}`;
+  const caret = start + text.length;
+  input.setSelectionRange(caret, caret);
+}
+
+function focusInputForTyping(event: KeyboardEvent): boolean {
+  if (!isPrintableKey(event)) return false;
+  if (isEditableElement(event.target)) return false;
+  if (document.activeElement === elements.input) return false;
+
+  event.preventDefault();
+  elements.input.focus();
+  insertInputText(event.key);
+  return true;
+}
+
 function requestVariables() {
   if (socket.readyState !== WebSocket.OPEN) return;
   requestSocketVariables(socket);
@@ -71,6 +104,10 @@ const renderer = createRenderer({
 logBoot('renderer initialized');
 
 window.addEventListener('keydown', (event) => {
+  if (focusInputForTyping(event)) {
+    return;
+  }
+
   const match = matchHotkey(event, configuredHotkeys);
   if (!match) return;
 
@@ -83,12 +120,14 @@ window.addEventListener('keydown', (event) => {
 
 elements.keyboardToggle.addEventListener('click', () => renderer.setActivePanel('keyboard'));
 elements.variablesToggle.addEventListener('click', () => renderer.setActivePanel('variables'));
-elements.settingsToggle.addEventListener('click', () => window.open('/settings', '_blank'));
+elements.settingsToggle.addEventListener('click', () => window.open('/settings', 'settings'));
+elements.output.addEventListener('click', () => elements.input.focus());
 logBoot('event listeners attached');
 
 socket.onopen = () => {
   logBoot('socket open');
   renderer.updateConnectionStatus('connected');
+  elements.input.focus();
 };
 
 socket.onmessage = (event) => {
@@ -154,6 +193,7 @@ socket.onclose = () => {
 window.addEventListener('focus', () => {
   logBoot('window focus -> request variables');
   requestVariables();
+  elements.input.focus();
 });
 document.addEventListener('visibilitychange', () => {
   logBoot('visibility change', { hidden: document.hidden });

@@ -35,12 +35,12 @@ func (v *VM) cmdAlias(rest string) []Result {
 	}
 
 	if v.store != nil {
-		if err := v.store.SaveAlias(v.sessionID, name, template); err != nil {
+		if err := v.store.SaveAlias(v.sessionID, name, template, true, "default"); err != nil {
 			return echoResults([]string{fmt.Sprintf("#alias: save error: %v", err)})
 		}
 		v.ensureFresh()
 	} else {
-		v.aliases = append(v.aliases, storage.AliasRule{Name: name, Template: template, Enabled: true})
+		v.aliases = append(v.aliases, storage.AliasRule{Name: name, Template: template, Enabled: true, GroupName: "default"})
 	}
 
 	return echoResults([]string{fmt.Sprintf("#alias {%s} = {%s}", name, template)})

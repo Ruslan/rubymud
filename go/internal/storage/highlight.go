@@ -46,6 +46,13 @@ func (s *Store) UpdateHighlight(h HighlightRule) error {
 	if h.GroupName == "" {
 		h.GroupName = "default"
 	}
+	if h.SessionID == 0 && h.ID != 0 {
+		var existing HighlightRule
+		if err := s.db.First(&existing, h.ID).Error; err != nil {
+			return err
+		}
+		h.SessionID = existing.SessionID
+	}
 	h.UpdatedAt = nowSQLiteTime()
 	return s.db.Save(&h).Error
 }
