@@ -14,6 +14,7 @@ interface RendererDeps {
   ansiUp: AnsiUp;
   sendCommand: (value: string, source: string) => boolean;
   requestVariables: () => void;
+  onButtonRendered?: (btn: ButtonOverlay, el: HTMLButtonElement) => void;
   state: RendererState;
 }
 
@@ -235,6 +236,11 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
           scrollOutputToBottom();
           sendCommand(btn.command, 'button');
         });
+
+        if (onButtonRendered) {
+          onButtonRendered(btn, button);
+        }
+
         wrapper.appendChild(button);
       });
 

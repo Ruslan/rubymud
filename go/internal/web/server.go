@@ -89,6 +89,7 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 	})
 
 	r.HandleFunc("/ws", s.handleWebSocket)
+	r.Post("/mcp", s.handleMCP)
 
 	r.Get("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/x-icon")

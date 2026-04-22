@@ -58,10 +58,12 @@ type ButtonOverlay struct {
 }
 
 type LogEntry struct {
-	ID       int64
-	RawText  string
-	Commands []string
-	Buttons  []ButtonOverlay
+	ID        int64
+	RawText   string
+	PlainText string
+	CreatedAt SQLiteTime
+	Commands  []string
+	Buttons   []ButtonOverlay
 }
 
 type commandOverlayPayload struct {

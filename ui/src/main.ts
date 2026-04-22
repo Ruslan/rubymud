@@ -80,6 +80,27 @@ const state = {
 
 let configuredHotkeys: Hotkey[] = [];
 
+// Auto-buttons logic (Alt+0..9)
+const autoButtons: (() => void)[] = new Array(10);
+let autoButtonIndex = 0;
+
+const onButtonRendered = (btn: any, el: HTMLButtonElement) => {
+  autoButtonIndex = (autoButtonIndex + 1) % 10;
+  const index = autoButtonIndex;
+
+  const hint = document.createElement('span');
+  hint.className = 'button-hotkey-hint';
+  hint.textContent = `Alt+${index}`;
+  el.prepend(hint);
+
+  autoButtons[index] = () => {
+    if (el.disabled) return;
+    el.click();
+    el.classList.add('trigger-button_active');
+    setTimeout(() => el.classList.remove('trigger-button_active'), 500);
+  };
+};
+
 function isEditableElement(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target instanceof HTMLInputElement) {
@@ -147,6 +168,7 @@ const renderer = createRenderer({
   ansiUp,
   requestVariables,
   sendCommand,
+  onButtonRendered,
   state,
 });
 logBoot('renderer initialized');
@@ -154,6 +176,16 @@ logBoot('renderer initialized');
 window.addEventListener('keydown', (event) => {
   if (focusInputForTyping(event)) {
     return;
+  }
+
+  // Handle Alt+0..9 for auto-buttons
+  if (event.altKey && event.key >= '0' && event.key <= '9') {
+    const index = parseInt(event.key, 10);
+    if (autoButtons[index]) {
+      event.preventDefault();
+      autoButtons[index]!();
+      return;
+    }
   }
 
   const match = matchHotkey(event, configuredHotkeys);

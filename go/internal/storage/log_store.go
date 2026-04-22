@@ -2,6 +2,7 @@ package storage
 
 import (
 	"encoding/json"
+	"sort"
 	"strings"
 
 	"gorm.io/gorm"
@@ -29,9 +30,13 @@ func (s *Store) AppendLogEntry(sessionID int64, rawText, plainText string) (int6
 }
 
 func (s *Store) RecentLogs(sessionID int64, limit int) ([]LogEntry, error) {
+	return s.LogRangeDetailed(sessionID, 9223372036854775807, limit)
+}
+
+func (s *Store) LogRangeDetailed(sessionID, beforeID int64, limit int) ([]LogEntry, error) {
 	var records []LogRecord
-	err := s.db.Where("session_id = ?", sessionID).
-		Order("created_at DESC, id DESC").
+	err := s.db.Where("session_id = ? AND id < ?", sessionID, beforeID).
+		Order("id DESC").
 		Limit(limit).
 		Find(&records).Error
 	if err != nil {
@@ -41,8 +46,10 @@ func (s *Store) RecentLogs(sessionID int64, limit int) ([]LogEntry, error) {
 	entries := make([]LogEntry, 0, len(records))
 	for _, r := range records {
 		entries = append(entries, LogEntry{
-			ID:      r.ID,
-			RawText: r.RawText,
+			ID:        r.ID,
+			RawText:   r.RawText,
+			PlainText: r.PlainText,
+			CreatedAt: r.CreatedAt,
 		})
 	}
 
@@ -149,4 +156,85 @@ func (s *Store) loadOverlays(entries []LogEntry) error {
 	}
 
 	return nil
+}
+
+func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines int, beforeID int64) ([][]LogEntry, error) {
+	var matchingIDs []int64
+	db := s.db.Model(&LogRecord{}).
+		Where("session_id = ? AND plain_text LIKE ?", sessionID, "%"+query+"%")
+	if beforeID > 0 {
+		db = db.Where("id < ?", beforeID)
+	}
+	// Limit candidates to avoid building context for hundreds of matches.
+	// Ordered DESC so we process the newest matches first.
+	err := db.Order("id DESC").Limit(200).Pluck("id", &matchingIDs).Error
+	if err != nil || len(matchingIDs) == 0 {
+		return nil, err
+	}
+
+	allIDsMap := make(map[int64]bool)
+	for _, mid := range matchingIDs {
+		allIDsMap[mid] = true
+		var beforeIDs []int64
+		s.db.Model(&LogRecord{}).Where("session_id = ? AND id < ?", sessionID, mid).Order("id DESC").Limit(contextLines).Pluck("id", &beforeIDs)
+		for _, id := range beforeIDs {
+			allIDsMap[id] = true
+		}
+		var afterIDs []int64
+		s.db.Model(&LogRecord{}).Where("session_id = ? AND id > ?", sessionID, mid).Order("id ASC").Limit(contextLines).Pluck("id", &afterIDs)
+		for _, id := range afterIDs {
+			allIDsMap[id] = true
+		}
+	}
+
+	var allIDs []int64
+	for id := range allIDsMap {
+		allIDs = append(allIDs, id)
+	}
+	sort.Slice(allIDs, func(i, j int) bool { return allIDs[i] < allIDs[j] })
+
+	var records []LogRecord
+	if err := s.db.Where("id IN ?", allIDs).Order("id ASC").Find(&records).Error; err != nil {
+		return nil, err
+	}
+
+	var allEntries []LogEntry
+	for _, r := range records {
+		allEntries = append(allEntries, LogEntry{
+			ID:        r.ID,
+			RawText:   r.RawText,
+			PlainText: r.PlainText,
+			CreatedAt: r.CreatedAt,
+		})
+	}
+	if err := s.loadOverlays(allEntries); err != nil {
+		return nil, err
+	}
+
+	entryMap := make(map[int64]LogEntry)
+	for _, e := range allEntries {
+		entryMap[e.ID] = e
+	}
+
+	var groups [][]LogEntry
+	if len(records) == 0 {
+		return nil, nil
+	}
+
+	currentGroup := []LogEntry{entryMap[records[0].ID]}
+	for i := 1; i < len(records); i++ {
+		if records[i].ID > records[i-1].ID+1 {
+			var count int64
+			s.db.Model(&LogRecord{}).Where("session_id = ? AND id > ? AND id < ?", sessionID, records[i-1].ID, records[i].ID).Count(&count)
+			if count > 0 {
+				groups = append(groups, currentGroup)
+				currentGroup = []LogEntry{entryMap[records[i].ID]}
+				continue
+			}
+		}
+		currentGroup = append(currentGroup, entryMap[records[i].ID])
+	}
+	groups = append(groups, currentGroup)
+
+	return groups, nil
 }

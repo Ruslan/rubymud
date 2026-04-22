@@ -509,3 +509,22 @@ body {
   color: white;
   border-color: #b62324;
 }
+
+/* Auto-button Hotkey Hints */
+
+.button-hotkey-hint {
+  font-size: 9px;
+  background: rgba(0, 0, 0, 0.4);
+  color: #9ece6a;
+  padding: 1px 4px;
+  border-radius: 4px;
+  margin-right: 4px;
+  border: 1px solid rgba(158, 206, 106, 0.3);
+  font-family: monospace;
+}
+
+.trigger-button_active {
+  background: #2ea043 !important;
+  border-color: #9ece6a !important;
+  transform: scale(1.05);
+}
