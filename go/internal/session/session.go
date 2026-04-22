@@ -88,7 +88,7 @@ func (s *Session) UpdateAlias(a storage.AliasRule) error {
 }
 
 func (s *Session) DeleteAlias(id int64) error {
-	return s.store.DeleteAliasByID(id)
+	return s.store.DeleteAliasByID(id, s.sessionID)
 }
 
 func (s *Session) ListTriggers() ([]storage.TriggerRule, error) {
@@ -105,7 +105,7 @@ func (s *Session) UpdateTrigger(t storage.TriggerRule) error {
 }
 
 func (s *Session) DeleteTrigger(id int64) error {
-	return s.store.DeleteTriggerByID(id)
+	return s.store.DeleteTriggerByID(id, s.sessionID)
 }
 
 func (s *Session) ListHighlights() ([]storage.HighlightRule, error) {
@@ -122,7 +122,7 @@ func (s *Session) UpdateHighlight(h storage.HighlightRule) error {
 }
 
 func (s *Session) DeleteHighlight(id int64) error {
-	return s.store.DeleteHighlightByID(id)
+	return s.store.DeleteHighlightByID(id, s.sessionID)
 }
 
 func (s *Session) ListSessions() ([]storage.SessionRecord, error) {

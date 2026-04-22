@@ -1,5 +1,7 @@
 package storage
 
+import "errors"
+
 type HighlightRule struct {
 	ID            int64      `gorm:"primaryKey" json:"id"`
 	SessionID     int64      `json:"session_id"`
@@ -46,19 +48,42 @@ func (s *Store) UpdateHighlight(h HighlightRule) error {
 	if h.GroupName == "" {
 		h.GroupName = "default"
 	}
-	if h.SessionID == 0 && h.ID != 0 {
-		var existing HighlightRule
-		if err := s.db.First(&existing, h.ID).Error; err != nil {
-			return err
-		}
-		h.SessionID = existing.SessionID
-	}
 	h.UpdatedAt = nowSQLiteTime()
-	return s.db.Save(&h).Error
+	result := s.db.Model(&HighlightRule{}).
+		Where("id = ? AND session_id = ?", h.ID, h.SessionID).
+		Updates(map[string]interface{}{
+			"pattern":       h.Pattern,
+			"fg":            h.FG,
+			"bg":            h.BG,
+			"bold":          h.Bold,
+			"faint":         h.Faint,
+			"italic":        h.Italic,
+			"underline":     h.Underline,
+			"strikethrough": h.Strikethrough,
+			"blink":         h.Blink,
+			"reverse":       h.Reverse,
+			"enabled":       h.Enabled,
+			"group_name":    h.GroupName,
+			"updated_at":    h.UpdatedAt,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("highlight not found")
+	}
+	return nil
 }
 
-func (s *Store) DeleteHighlightByID(id int64) error {
-	return s.db.Delete(&HighlightRule{}, id).Error
+func (s *Store) DeleteHighlightByID(id, sessionID int64) error {
+	result := s.db.Where("id = ? AND session_id = ?", id, sessionID).Delete(&HighlightRule{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("highlight not found")
+	}
+	return nil
 }
 
 func (s *Store) LoadHighlights(sessionID int64) ([]HighlightRule, error) {

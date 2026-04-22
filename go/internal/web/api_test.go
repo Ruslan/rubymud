@@ -26,32 +26,35 @@ func TestVariablesAPI(t *testing.T) {
 	ts := httptest.NewServer(s.httpServer.Handler)
 	defer ts.Close()
 
+	sessionID := sess.SessionID()
+
 	// 1. Create variable
 	payload, _ := json.Marshal(map[string]string{
 		"key":   "test_var",
 		"value": "test_val",
 	})
-	req, err := newAuthenticatedRequest(http.MethodPost, ts.URL+"/api/variables", bytes.NewBuffer(payload), s.apiToken)
+	url := fmt.Sprintf("%s/api/sessions/%d/variables", ts.URL, sessionID)
+	req, err := newAuthenticatedRequest(http.MethodPost, url, bytes.NewBuffer(payload), s.apiToken)
 	if err != nil {
-		t.Fatalf("newAuthenticatedRequest(POST /api/variables): %v", err)
+		t.Fatalf("newAuthenticatedRequest(POST %s): %v", url, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("POST /api/variables: %v", err)
+		t.Fatalf("POST %s: %v", url, err)
 	}
 	if resp.StatusCode != http.StatusNoContent {
-		t.Fatalf("POST /api/variables status = %d, want 204", resp.StatusCode)
+		t.Fatalf("POST %s status = %d, want 204", url, resp.StatusCode)
 	}
 
 	// 2. List variables
-	req, err = newAuthenticatedRequest(http.MethodGet, ts.URL+"/api/variables", nil, s.apiToken)
+	req, err = newAuthenticatedRequest(http.MethodGet, url, nil, s.apiToken)
 	if err != nil {
-		t.Fatalf("newAuthenticatedRequest(GET /api/variables): %v", err)
+		t.Fatalf("newAuthenticatedRequest(GET %s): %v", url, err)
 	}
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("GET /api/variables: %v", err)
+		t.Fatalf("GET %s: %v", url, err)
 	}
 	var vars []session.VariableJSON
 	json.NewDecoder(resp.Body).Decode(&vars)
@@ -74,9 +77,12 @@ func TestVariablesAPI(t *testing.T) {
 }
 
 func TestAliasesAPI(t *testing.T) {
-	s, _ := setupTestServer(t)
+	s, sess := setupTestServer(t)
 	ts := httptest.NewServer(s.httpServer.Handler)
 	defer ts.Close()
+
+	sessionID := sess.SessionID()
+	url := fmt.Sprintf("%s/api/sessions/%d/aliases", ts.URL, sessionID)
 
 	// 1. Create alias
 	payload, _ := json.Marshal(map[string]any{
@@ -84,23 +90,23 @@ func TestAliasesAPI(t *testing.T) {
 		"template": "get all from corpse",
 		"enabled":  true,
 	})
-	req, err := newAuthenticatedRequest(http.MethodPost, ts.URL+"/api/aliases", bytes.NewBuffer(payload), s.apiToken)
+	req, err := newAuthenticatedRequest(http.MethodPost, url, bytes.NewBuffer(payload), s.apiToken)
 	if err != nil {
-		t.Fatalf("newAuthenticatedRequest(POST /api/aliases): %v", err)
+		t.Fatalf("newAuthenticatedRequest(POST %s): %v", url, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("POST /api/aliases: %v", err)
+		t.Fatalf("POST %s: %v", url, err)
 	}
 	if resp.StatusCode != http.StatusCreated {
-		t.Fatalf("POST /api/aliases status = %d, want 201", resp.StatusCode)
+		t.Fatalf("POST %s status = %d, want 201", url, resp.StatusCode)
 	}
 
 	// 2. List aliases to get ID
-	req, err = newAuthenticatedRequest(http.MethodGet, ts.URL+"/api/aliases", nil, s.apiToken)
+	req, err = newAuthenticatedRequest(http.MethodGet, url, nil, s.apiToken)
 	if err != nil {
-		t.Fatalf("newAuthenticatedRequest(GET /api/aliases): %v", err)
+		t.Fatalf("newAuthenticatedRequest(GET %s): %v", url, err)
 	}
 	resp, err = http.DefaultClient.Do(req)
 	var aliases []storage.AliasRule
@@ -116,27 +122,27 @@ func TestAliasesAPI(t *testing.T) {
 		"template": "get all",
 		"enabled":  false,
 	})
-	req, err = newAuthenticatedRequest(http.MethodPut, fmt.Sprintf("%s/api/aliases/%d", ts.URL, aliasID), bytes.NewBuffer(payload), s.apiToken)
+	req, err = newAuthenticatedRequest(http.MethodPut, fmt.Sprintf("%s/%d", url, aliasID), bytes.NewBuffer(payload), s.apiToken)
 	if err != nil {
-		t.Fatalf("newAuthenticatedRequest(PUT /api/aliases/%d): %v", aliasID, err)
+		t.Fatalf("newAuthenticatedRequest(PUT %s/%d): %v", url, aliasID, err)
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("PUT /api/aliases/%d: %v", aliasID, err)
+		t.Fatalf("PUT %s/%d: %v", url, aliasID, err)
 	}
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("PUT status = %d, want 204", resp.StatusCode)
 	}
 
 	// 4. Delete alias
-	req, err = newAuthenticatedRequest(http.MethodDelete, fmt.Sprintf("%s/api/aliases/%d", ts.URL, aliasID), nil, s.apiToken)
+	req, err = newAuthenticatedRequest(http.MethodDelete, fmt.Sprintf("%s/%d", url, aliasID), nil, s.apiToken)
 	if err != nil {
-		t.Fatalf("newAuthenticatedRequest(DELETE /api/aliases/%d): %v", aliasID, err)
+		t.Fatalf("newAuthenticatedRequest(DELETE %s/%d): %v", url, aliasID, err)
 	}
 	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
-		t.Fatalf("DELETE /api/aliases/%d: %v", aliasID, err)
+		t.Fatalf("DELETE %s/%d: %v", url, aliasID, err)
 	}
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("DELETE status = %d, want 204", resp.StatusCode)
@@ -153,14 +159,22 @@ func setupTestServer(t *testing.T) (*Server, *session.Session) {
 	if err != nil {
 		t.Fatalf("gorm.Open: %v", err)
 	}
-	db.AutoMigrate(&storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{})
+	db.AutoMigrate(&storage.AppSetting{}, &storage.SessionRecord{}, &storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{})
 
 	store := storage.NewTestStore(db)
-	v := vm.New(store, 1)
+	
+	// Ensure a session exists
+	record, err := store.EnsureDefaultSession("localhost", 1234)
+	if err != nil {
+		t.Fatalf("EnsureDefaultSession: %v", err)
+	}
+
+	manager := session.NewManager(store)
+	v := vm.New(store, record.ID)
 
 	// Mock session (without real TCP connection)
 	sess := &session.Session{}
-	setUnexportedField(t, sess, "sessionID", int64(1))
+	setUnexportedField(t, sess, "sessionID", record.ID)
 	setUnexportedField(t, sess, "store", store)
 	setUnexportedField(t, sess, "vm", v)
 
@@ -168,7 +182,13 @@ func setupTestServer(t *testing.T) (*Server, *session.Session) {
 	clientsMap := reflect.MakeMap(clientsField.Type())
 	setUnexportedField(t, sess, "clients", clientsMap.Interface())
 
-	s := New(":0", sess, nil)
+	// Manually inject into manager's private map
+	managerMapField := reflect.ValueOf(manager).Elem().FieldByName("sessions")
+	reflect.NewAt(managerMapField.Type(), unsafe.Pointer(managerMapField.UnsafeAddr())).Elem().Set(reflect.ValueOf(map[int64]*session.Session{
+		record.ID: sess,
+	}))
+
+	s := New(":0", manager, store, nil)
 	return s, sess
 }
 

@@ -49,10 +49,20 @@
     group_name: string;
   }
 
+  interface Session {
+    id: number;
+    name: string;
+    mud_host: string;
+    mud_port: number;
+    status: string;
+  }
+
   // Initialize from hash or default to variables
   let currentTab = window.location.hash.slice(1) || 'variables';
   let loading = true;
   let formError = '';
+  let selectedSessionID: number | null = null;
+  let appSettings: { api_token: string } = { api_token: '' };
 
   window.onhashchange = () => {
     currentTab = window.location.hash.slice(1) || 'variables';
@@ -65,12 +75,13 @@
   }
 
   const tabs = [
+    { id: 'sessions', label: 'Sessions' },
     { id: 'variables', label: 'Variables' },
     { id: 'aliases', label: 'Aliases' },
     { id: 'triggers', label: 'Triggers' },
     { id: 'highlights', label: 'Highlights' },
     { id: 'groups', label: 'Groups' },
-    { id: 'sessions', label: 'Sessions' },
+    { id: 'app', label: 'App' },
   ];
 
   // Variables State
@@ -95,6 +106,13 @@
 
   // Groups State
   let groups: RuleGroupSummary[] = [];
+
+  // Sessions State
+  let sessions: Session[] = [];
+  const defaultSession = (): Partial<Session> => ({ name: '', mud_host: '', mud_port: 0 });
+  let sessionEditor: Partial<Session> = defaultSession();
+
+  $: currentSession = sessions.find(s => s.id === selectedSessionID);
 
   type RGB = { r: number; g: number; b: number };
 
@@ -208,28 +226,36 @@
     };
   }
 
-  // Sessions State
-  let sessions: any[] = [];
-
   async function fetchData() {
     loading = true;
     formError = '';
     // @ts-ignore
     const token = window.API_TOKEN || '';
     try {
-      if (currentTab === 'groups') {
+      // Always fetch sessions first to populate selector
+      const sessRes = await fetch('/api/sessions', { headers: { 'X-Session-Token': token } });
+      sessions = await sessRes.json() || [];
+      if (selectedSessionID === null && sessions.length > 0) {
+        selectedSessionID = sessions[0]!.id;
+      }
+
+      if (currentTab === 'app') {
+        const appRes = await fetch('/api/app/settings', { headers: { 'X-Session-Token': token } });
+        appSettings = await appRes.json();
+      } else if (currentTab === 'groups' && selectedSessionID) {
+        const base = `/api/sessions/${selectedSessionID}`;
         const [groupsRes, aliasesRes, triggersRes, highlightsRes] = await Promise.all([
-          fetch('/api/groups', { headers: { 'X-Session-Token': token } }),
-          fetch('/api/aliases', { headers: { 'X-Session-Token': token } }),
-          fetch('/api/triggers', { headers: { 'X-Session-Token': token } }),
-          fetch('/api/highlights', { headers: { 'X-Session-Token': token } }),
+          fetch(`${base}/groups`, { headers: { 'X-Session-Token': token } }),
+          fetch(`${base}/aliases`, { headers: { 'X-Session-Token': token } }),
+          fetch(`${base}/triggers`, { headers: { 'X-Session-Token': token } }),
+          fetch(`${base}/highlights`, { headers: { 'X-Session-Token': token } }),
         ]);
         groups = await groupsRes.json() || [];
         aliases = await aliasesRes.json() || [];
         triggers = await triggersRes.json() || [];
         highlights = await highlightsRes.json() || [];
-      } else {
-        const res = await fetch(`/api/${currentTab}`, {
+      } else if (currentTab !== 'sessions' && selectedSessionID) {
+        const res = await fetch(`/api/sessions/${selectedSessionID}/${currentTab}`, {
           headers: { 'X-Session-Token': token }
         });
         const data = await res.json();
@@ -237,7 +263,6 @@
         else if (currentTab === 'aliases') aliases = data || [];
         else if (currentTab === 'triggers') triggers = data || [];
         else if (currentTab === 'highlights') highlights = data || [];
-        else if (currentTab === 'sessions') sessions = data || [];
       }
     } catch (e) {
       console.error(`Failed to fetch ${currentTab}`, e);
@@ -254,19 +279,29 @@
     }
 
     formError = '';
-    const isUpdate = !!item.id || domain === 'variables';
+    const isUpdate = domain !== 'variables' && !!item.id;
     let url = `/api/${domain}`;
-    if (isUpdate && domain !== 'variables') url += `/${item.id}`;
+    if (domain === 'sessions') {
+      url = '/api/sessions';
+      if (isUpdate) url += `/${item.id}`;
+    } else if (selectedSessionID) {
+      url = `/api/sessions/${selectedSessionID}/${domain}`;
+      // For variables, we use the root /variables for now, but backend expects session-specific.
+      // Wait, I updated backend to expect /api/sessions/{id}/variables.
+    }
     
     // @ts-ignore
     const token = window.API_TOKEN || '';
+    const method = isUpdate ? 'PUT' : 'POST';
+    const body = domain === 'variables' ? { key: newVarKey, value: newVarValue } : item;
+
     await fetch(url, {
-      method: (isUpdate && domain !== 'variables') ? 'PUT' : 'POST',
+      method,
       headers: { 
         'Content-Type': 'application/json',
         'X-Session-Token': token
       },
-      body: JSON.stringify(domain === 'variables' ? { key: newVarKey, value: newVarValue } : item)
+      body: JSON.stringify(body)
     });
     resetFn();
     await fetchData();
@@ -291,6 +326,11 @@
       if (!item.pattern?.trim()) return 'Highlight pattern is required.';
       return '';
     }
+    if (domain === 'sessions') {
+      if (!item.name?.trim()) return 'Session name is required.';
+      if (!item.mud_host?.trim()) return 'MUD host is required.';
+      if (!item.mud_port) return 'MUD port is required.';
+    }
     return '';
   }
 
@@ -298,8 +338,15 @@
     if (!confirm(`Delete this ${domain.slice(0, -1)}?`)) return;
     // @ts-ignore
     const token = window.API_TOKEN || '';
-    const itemID = domain === 'variables' ? encodeURIComponent(String(id)) : String(id);
-    await fetch(`/api/${domain}/${itemID}`, { 
+    let url = `/api/${domain}/${id}`;
+    if (domain === 'sessions') {
+        url = `/api/sessions/${id}`;
+    } else if (selectedSessionID) {
+        const itemID = domain === 'variables' ? encodeURIComponent(String(id)) : String(id);
+        url = `/api/sessions/${selectedSessionID}/${domain}/${itemID}`;
+    }
+
+    await fetch(url, { 
       method: 'DELETE',
       headers: { 'X-Session-Token': token }
     });
@@ -307,10 +354,11 @@
   }
 
   async function toggleItem(domain: 'aliases' | 'triggers' | 'highlights', item: Alias | Trigger | Highlight, enabled: boolean) {
+    if (!selectedSessionID) return;
     formError = '';
     // @ts-ignore
     const token = window.API_TOKEN || '';
-    await fetch(`/api/${domain}/${item.id}`, {
+    await fetch(`/api/sessions/${selectedSessionID}/${domain}/${item.id}`, {
       method: 'PUT',
       headers: {
         'Content-Type': 'application/json',
@@ -322,10 +370,11 @@
   }
 
   async function toggleGroup(domain: string, groupName: string, enabled: boolean) {
+    if (!selectedSessionID) return;
     formError = '';
     // @ts-ignore
     const token = window.API_TOKEN || '';
-    await fetch('/api/groups/toggle', {
+    await fetch(`/api/sessions/${selectedSessionID}/groups/toggle`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -334,6 +383,30 @@
       body: JSON.stringify({ domain, group_name: groupName, enabled }),
     });
     await fetchData();
+  }
+
+  async function sessionAction(action: 'connect' | 'disconnect', id: number) {
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    await fetch(`/api/sessions/${id}/${action}`, {
+        method: 'POST',
+        headers: { 'X-Session-Token': token }
+    });
+    await fetchData();
+  }
+
+  async function rotateAPIToken() {
+    if (!confirm('Are you sure you want to rotate the API token? This will invalidate all external clients.')) return;
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const res = await fetch('/api/app/settings/rotate-api-token', {
+        method: 'POST',
+        headers: { 'X-Session-Token': token }
+    });
+    appSettings = await res.json();
+    // Update global token if it's currently used in window
+    // @ts-ignore
+    window.API_TOKEN = appSettings.api_token;
   }
 
   function titleCase(value: string): string {
@@ -348,7 +421,7 @@
     return 0;
   }
 
-  $: if (currentTab) fetchData();
+  $: if (currentTab || selectedSessionID) fetchData();
   onMount(() => fetchData());
 </script>
 
@@ -365,8 +438,22 @@
   </nav>
 
   <section class="content">
+    {#if currentTab !== 'sessions' && currentTab !== 'app'}
+        <div class="session-selector">
+            <label for="session-selector">Configuring Session:</label>
+            <select id="session-selector" bind:value={selectedSessionID}>
+                {#each sessions as s}
+                    <option value={s.id}>{s.name} ({s.mud_host}:{s.mud_port})</option>
+                {/each}
+                {#if sessions.length === 0}
+                    <option value={null}>No sessions available</option>
+                {/if}
+            </select>
+        </div>
+    {/if}
+
     {#if currentTab === 'variables'}
-      <header class="content-header"><h2>Variables</h2><p class="description">Global state variables.</p></header>
+      <header class="content-header"><h2>Variables</h2><p class="description">State variables for {currentSession?.name || 'selected session'}.</p></header>
       <div class="editor-box">
         {#if formError}<div class="form-error">{formError}</div>{/if}
         <div class="form-row">
@@ -391,7 +478,7 @@
       </table>
 
     {:else if currentTab === 'aliases'}
-      <header class="content-header"><h2>Aliases</h2><p class="description">Command shortcuts.</p></header>
+      <header class="content-header"><h2>Aliases</h2><p class="description">Command shortcuts for {currentSession?.name}.</p></header>
       <div class="editor-box">
         {#if formError}<div class="form-error">{formError}</div>{/if}
         <div class="form-row">
@@ -427,7 +514,7 @@
       </table>
 
     {:else if currentTab === 'triggers'}
-      <header class="content-header"><h2>Triggers</h2><p class="description">Automatic reactions.</p></header>
+      <header class="content-header"><h2>Triggers</h2><p class="description">Automatic reactions for {currentSession?.name}.</p></header>
       <div class="editor-box">
         {#if formError}<div class="form-error">{formError}</div>{/if}
         <div class="form-grid">
@@ -473,7 +560,7 @@
       </table>
 
     {:else if currentTab === 'highlights'}
-      <header class="content-header"><h2>Highlights</h2><p class="description">Visual formatting.</p></header>
+      <header class="content-header"><h2>Highlights</h2><p class="description">Visual formatting for {currentSession?.name}.</p></header>
       <div class="editor-box">
         {#if formError}<div class="form-error">{formError}</div>{/if}
         <div class="form-grid">
@@ -549,7 +636,7 @@
         </tbody>
       </table>
     {:else if currentTab === 'groups'}
-      <header class="content-header"><h2>Groups</h2><p class="description">Bulk enable or disable rule groups across aliases, triggers, and highlights.</p></header>
+      <header class="content-header"><h2>Groups</h2><p class="description">Bulk enable/disable rule groups for {currentSession?.name}.</p></header>
       {#if formError}<div class="form-error">{formError}</div>{/if}
       <table class="data-table">
         <thead><tr><th>Domain</th><th>Group</th><th>Rules</th><th>Status</th><th style="width: 180px">Actions</th></tr></thead>
@@ -569,9 +656,20 @@
         </tbody>
       </table>
     {:else if currentTab === 'sessions'}
-      <header class="content-header"><h2>Sessions</h2><p class="description">Read-only runtime session status for 0.0.5. Real connect/disconnect management moves to 0.0.6.</p></header>
+      <header class="content-header"><h2>Sessions</h2><p class="description">Manage your MUD connections.</p></header>
+      <div class="editor-box">
+        {#if formError}<div class="form-error">{formError}</div>{/if}
+        <div class="form-row">
+            <input type="text" bind:value={sessionEditor.name} placeholder="Session Name" required />
+            <input type="text" bind:value={sessionEditor.mud_host} placeholder="MUD Host" required />
+            <input type="number" bind:value={sessionEditor.mud_port} placeholder="Port" required />
+            <button class="btn-primary" on:click={() => saveItem('sessions', sessionEditor, () => sessionEditor = defaultSession())}>
+                {sessionEditor.id ? 'Update' : 'Add'}
+            </button>
+        </div>
+      </div>
       <table class="data-table">
-        <thead><tr><th>Status</th><th>Name</th><th>Host</th><th>Port</th><th>Session ID</th></tr></thead>
+        <thead><tr><th>Status</th><th>Name</th><th>Connection</th><th>Actions</th></tr></thead>
         <tbody>
           {#each sessions as s}
             <tr>
@@ -581,13 +679,32 @@
                 </span>
               </td>
               <td class="key-cell">{s.name}</td>
-              <td class="value-cell">{s.mud_host || '-'}</td>
-              <td class="dim-cell">{s.mud_port || '-'}</td>
-              <td class="dim-cell">{s.id}</td>
+              <td class="value-cell">{s.mud_host}:{s.mud_port}</td>
+              <td class="actions-cell">
+                {#if s.status === 'connected'}
+                    <button class="btn-link btn-danger" on:click={() => sessionAction('disconnect', s.id)}>Disconnect</button>
+                {:else}
+                    <button class="btn-link" on:click={() => sessionAction('connect', s.id)}>Connect</button>
+                {/if}
+                <button class="btn-link" style="margin-left: 12px" on:click={() => { selectedSessionID = s.id; currentTab = 'variables'; }}>Rules</button>
+                <button class="btn-link" style="margin-left: 12px" on:click={() => sessionEditor = { ...s }}>Edit</button>
+                <button class="btn-link btn-danger" style="margin-left: 12px" on:click={() => deleteItem('sessions', s.id)}>Delete</button>
+              </td>
             </tr>
           {/each}
         </tbody>
       </table>
+    {:else if currentTab === 'app'}
+        <header class="content-header"><h2>App Settings</h2><p class="description">Global application configuration.</p></header>
+        <div class="editor-box">
+            <h3>API Token</h3>
+            <p class="description">Use this token for external REST or WebSocket access. Header: <code>X-Session-Token</code></p>
+            <div class="form-row">
+                <input type="text" readonly value={appSettings.api_token} />
+                <button class="btn-primary" on:click={() => navigator.clipboard.writeText(appSettings.api_token)}>Copy</button>
+                <button class="btn-link btn-danger" on:click={rotateAPIToken}>Rotate Token</button>
+            </div>
+        </div>
     {/if}
   </section>
 </main>
@@ -608,7 +725,7 @@
   .form-grid { display: flex; flex-direction: column; gap: 12px; }
   .form-row { display: flex; gap: 12px; align-items: center; }
   .options-row { margin-top: 8px; border-top: 1px solid #2d333b; padding-top: 12px; flex-wrap: wrap; }
-  input[type="text"] { background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px 12px; border-radius: 6px; flex: 1; }
+  input[type="text"], input[type="number"] { background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px 12px; border-radius: 6px; flex: 1; }
   .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #9ba3af; cursor: pointer; }
   .color-field { display: flex; align-items: center; gap: 10px; color: #9ba3af; min-width: 0; }
   .color-field span { font-size: 0.85rem; min-width: 20px; }
@@ -640,4 +757,6 @@
   .btn-link { background: none; border: none; color: #3498db; cursor: pointer; padding: 0; font-size: 0.9rem; }
   .btn-link:hover { text-decoration: underline; }
   .btn-danger { color: #e74c3c; margin-left: 12px; }
+  .session-selector { margin-bottom: 20px; display: flex; align-items: center; gap: 12px; }
+  .session-selector select { background: #1a1d21; border: 1px solid #2d333b; color: #e8edf2; padding: 6px 12px; border-radius: 6px; }
 </style>

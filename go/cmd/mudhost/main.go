@@ -4,29 +4,27 @@ import (
 	"flag"
 	"log"
 	"net"
+	"os"
+	"path/filepath"
 	"strconv"
 
 	"rubymud/go/internal/config"
 	"rubymud/go/internal/session"
 	"rubymud/go/internal/storage"
-	"rubymud/go/internal/vm"
 	"rubymud/go/internal/web"
 )
 
 func main() {
-	mudAddr := flag.String("mud", "", "MUD server address in host:port format")
+	mudAddr := flag.String("mud", "", "Optional: initial MUD server address in host:port format")
 	listenAddr := flag.String("listen", ":8080", "HTTP listen address")
-	dbPath := flag.String("db", "../data/mudhost.db", "SQLite database path")
-	configPath := flag.String("config", "../config.rb", "Config file path for hotkeys")
+	dbPath := flag.String("db", "data/mudhost.db", "SQLite database path")
+	configPath := flag.String("config", "config.rb", "Config file path for hotkeys")
 	flag.Parse()
 
-	if *mudAddr == "" {
-		log.Fatal("usage: mudhost --mud HOST:PORT [--listen :8080] [--db ../data/mudhost.db]")
-	}
-
-	host, port, err := splitMudAddr(*mudAddr)
-	if err != nil {
-		log.Fatalf("invalid mud address: %v", err)
+	// Ensure data directory exists
+	dataDir := filepath.Dir(*dbPath)
+	if err := os.MkdirAll(dataDir, 0755); err != nil {
+		log.Fatalf("failed to create data directory %s: %v", dataDir, err)
 	}
 
 	store, err := storage.Open(*dbPath)
@@ -35,9 +33,23 @@ func main() {
 	}
 	defer store.Close()
 
-	sessionRecord, err := store.EnsureDefaultSession(host, port)
-	if err != nil {
-		log.Fatalf("ensure default session: %v", err)
+	manager := session.NewManager(store)
+
+	// If --mud is provided, ensure a default session exists and connect to it
+	if *mudAddr != "" {
+		host, port, err := splitMudAddr(*mudAddr)
+		if err != nil {
+			log.Fatalf("invalid mud address: %v", err)
+		}
+
+		record, err := store.EnsureDefaultSession(host, port)
+		if err != nil {
+			log.Fatalf("ensure default session: %v", err)
+		}
+
+		if _, err := manager.Connect(record.ID); err != nil {
+			log.Printf("failed to connect to initial mud session: %v", err)
+		}
 	}
 
 	hotkeys, err := config.LoadHotkeys(*configPath)
@@ -45,22 +57,8 @@ func main() {
 		log.Printf("load hotkeys warning: %v", err)
 	}
 
-	v := vm.New(store, sessionRecord.ID)
-	if err := v.Reload(); err != nil {
-		log.Fatalf("vm reload: %v", err)
-	}
-	log.Printf("loaded %d aliases, %d variables, %d triggers, %d highlights", len(v.Aliases()), len(v.Variables()), len(v.Triggers()), len(v.Highlights()))
-
-	sess, err := session.New(sessionRecord.ID, *mudAddr, store, v)
-	if err != nil {
-		log.Fatalf("connect to MUD: %v", err)
-	}
-	defer sess.Close()
-
-	go sess.RunReadLoop()
-
-	server := web.New(*listenAddr, sess, hotkeys)
-	log.Printf("mudhost listening on %s and connected to %s using db %s", *listenAddr, *mudAddr, *dbPath)
+	server := web.New(*listenAddr, manager, store, hotkeys)
+	log.Printf("mudhost listening on %s using db %s", *listenAddr, *dbPath)
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("web server failed: %v", err)
 	}

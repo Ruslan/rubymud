@@ -16,7 +16,7 @@ func (s *Store) EnsureDefaultSession(host string, port int) (SessionRecord, erro
 			Name:            "default",
 			MudHost:         host,
 			MudPort:         port,
-			Status:          "connected",
+			Status:          "disconnected",
 			LastConnectedAt: now,
 		}
 		if err := s.db.Create(&record).Error; err != nil {
@@ -28,21 +28,46 @@ func (s *Store) EnsureDefaultSession(host string, port int) (SessionRecord, erro
 		return SessionRecord{}, err
 	}
 
-	record.MudHost = host
-	record.MudPort = port
-	record.Status = "connected"
-	record.LastConnectedAt = now
-	if err := s.db.Save(&record).Error; err != nil {
-		return SessionRecord{}, err
-	}
-
 	return record, nil
+}
+
+func (s *Store) GetSession(id int64) (SessionRecord, error) {
+	var record SessionRecord
+	err := s.db.First(&record, id).Error
+	return record, err
+}
+
+func (s *Store) CreateSession(name, host string, port int) (SessionRecord, error) {
+	record := SessionRecord{
+		Name:    name,
+		MudHost: host,
+		MudPort: port,
+		Status:  "disconnected",
+	}
+	err := s.db.Create(&record).Error
+	return record, err
+}
+
+func (s *Store) UpdateSession(record SessionRecord) error {
+	return s.db.Save(&record).Error
+}
+
+func (s *Store) DeleteSession(id int64) error {
+	return s.db.Delete(&SessionRecord{}, id).Error
 }
 
 func (s *Store) ListSessions() ([]SessionRecord, error) {
 	var sessions []SessionRecord
 	err := s.db.Order("id ASC").Find(&sessions).Error
 	return sessions, err
+}
+
+func (s *Store) MarkSessionConnected(sessionID int64) error {
+	now := nowSQLiteTimePtr()
+	return s.db.Model(&SessionRecord{}).Where("id = ?", sessionID).Updates(map[string]any{
+		"status":          "connected",
+		"last_connected_at": now,
+	}).Error
 }
 
 func (s *Store) MarkSessionDisconnected(sessionID int64) error {

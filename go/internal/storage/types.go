@@ -10,6 +10,11 @@ func NewTestStore(db *gorm.DB) *Store {
 	return &Store{db: db}
 }
 
+type AppSetting struct {
+	Key   string `gorm:"primaryKey" json:"key"`
+	Value string `json:"value"`
+}
+
 type SessionRecord struct {
 	ID                 int64       `gorm:"primaryKey" json:"id"`
 	Name               string      `json:"name"`

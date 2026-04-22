@@ -16,8 +16,8 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 
-	// Auto-migrate new rule tables for 0.0.5
-	if err := db.AutoMigrate(&Variable{}, &AliasRule{}, &TriggerRule{}, &HighlightRule{}); err != nil {
+	// Auto-migrate tables
+	if err := db.AutoMigrate(&AppSetting{}, &SessionRecord{}, &Variable{}, &AliasRule{}, &TriggerRule{}, &HighlightRule{}); err != nil {
 		return nil, err
 	}
 

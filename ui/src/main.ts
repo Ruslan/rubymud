@@ -23,8 +23,25 @@ logBoot('module start');
 const elements = getAppElements();
 logBoot('dom elements resolved');
 
-const socket = createSocket();
-logBoot('socket created', { readyState: socket.readyState, url: socket.url });
+const params = new URLSearchParams(window.location.search);
+
+type SessionSummary = { id: number };
+
+if (!params.get('session_id')) {
+  fetchWithToken('/api/sessions')
+    .then((res) => res.json())
+    .then((sessions: SessionSummary[]) => {
+      const firstSessionID = sessions[0]?.id;
+      if (!firstSessionID) return;
+      params.set('session_id', String(firstSessionID));
+      window.location.search = params.toString();
+    })
+    .catch((err) => console.error('Failed to pick default session:', err));
+}
+
+const sessionID = params.get('session_id') ? parseInt(params.get('session_id')!, 10) : undefined;
+const socket = createSocket(sessionID);
+logBoot('socket created', { readyState: socket.readyState, url: socket.url, sessionID });
 
 const history = new InputHistory();
 logBoot('history initialized');
@@ -75,15 +92,26 @@ function focusInputForTyping(event: KeyboardEvent): boolean {
 
 function requestVariables() {
   if (socket.readyState !== WebSocket.OPEN) return;
+  if (!sessionID) {
+    renderer.renderVariables([]);
+    return;
+  }
+
   requestSocketVariables(socket);
 
-  fetchWithToken('/api/variables')
+  fetchWithToken(`/api/sessions/${sessionID}/variables`)
     .then(res => res.json())
     .then(data => renderer.renderVariables(data))
     .catch(err => console.error('Failed to sync variables:', err));
 }
 
 function sendCommand(value: string, source = 'input'): boolean {
+  if (!sessionID) {
+    renderer.appendEntry({ text: '[no session selected]' });
+    renderer.updateConnectionStatus('no session');
+    return false;
+  }
+
   if (socket.readyState !== WebSocket.OPEN) {
     renderer.appendEntry({ text: '[disconnected]' });
     renderer.updateConnectionStatus('disconnected');
@@ -121,12 +149,22 @@ window.addEventListener('keydown', (event) => {
 elements.keyboardToggle.addEventListener('click', () => renderer.setActivePanel('keyboard'));
 elements.variablesToggle.addEventListener('click', () => renderer.setActivePanel('variables'));
 elements.settingsToggle.addEventListener('click', () => window.open('/settings', 'settings'));
-elements.output.addEventListener('click', () => elements.input.focus());
+elements.output.addEventListener('click', (event) => {
+  const selection = window.getSelection();
+  if (selection && selection.toString()) {
+    return;
+  }
+
+  if ((event.target as HTMLElement | null)?.closest('button')) {
+    return;
+  }
+
+  elements.input.focus();
+});
 logBoot('event listeners attached');
 
 socket.onopen = () => {
   logBoot('socket open');
-  renderer.updateConnectionStatus('connected');
   elements.input.focus();
 };
 

@@ -1,5 +1,7 @@
 package storage
 
+import "errors"
+
 type AliasRule struct {
 	ID        int64      `gorm:"primaryKey" json:"id"`
 	SessionID int64      `json:"session_id"`
@@ -54,19 +56,34 @@ func (s *Store) UpdateAlias(a AliasRule) error {
 	if a.GroupName == "" {
 		a.GroupName = "default"
 	}
-	if a.SessionID == 0 && a.ID != 0 {
-		var existing AliasRule
-		if err := s.db.First(&existing, a.ID).Error; err != nil {
-			return err
-		}
-		a.SessionID = existing.SessionID
-	}
 	a.UpdatedAt = nowSQLiteTime()
-	return s.db.Save(&a).Error
+	result := s.db.Model(&AliasRule{}).
+		Where("id = ? AND session_id = ?", a.ID, a.SessionID).
+		Updates(map[string]interface{}{
+			"name":       a.Name,
+			"template":   a.Template,
+			"enabled":    a.Enabled,
+			"group_name": a.GroupName,
+			"updated_at": a.UpdatedAt,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("alias not found")
+	}
+	return nil
 }
 
-func (s *Store) DeleteAliasByID(id int64) error {
-	return s.db.Delete(&AliasRule{}, id).Error
+func (s *Store) DeleteAliasByID(id, sessionID int64) error {
+	result := s.db.Where("id = ? AND session_id = ?", id, sessionID).Delete(&AliasRule{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("alias not found")
+	}
+	return nil
 }
 
 func (s *Store) LoadAliases(sessionID int64) ([]AliasRule, error) {

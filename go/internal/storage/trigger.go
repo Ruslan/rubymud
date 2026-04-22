@@ -1,5 +1,7 @@
 package storage
 
+import "errors"
+
 type TriggerRule struct {
 	ID             int64      `gorm:"primaryKey" json:"id"`
 	SessionID      int64      `json:"session_id"`
@@ -41,19 +43,37 @@ func (s *Store) UpdateTrigger(t TriggerRule) error {
 	if t.GroupName == "" {
 		t.GroupName = "default"
 	}
-	if t.SessionID == 0 && t.ID != 0 {
-		var existing TriggerRule
-		if err := s.db.First(&existing, t.ID).Error; err != nil {
-			return err
-		}
-		t.SessionID = existing.SessionID
-	}
 	t.UpdatedAt = nowSQLiteTime()
-	return s.db.Save(&t).Error
+	result := s.db.Model(&TriggerRule{}).
+		Where("id = ? AND session_id = ?", t.ID, t.SessionID).
+		Updates(map[string]interface{}{
+			"name":             t.Name,
+			"pattern":          t.Pattern,
+			"command":          t.Command,
+			"enabled":          t.Enabled,
+			"is_button":        t.IsButton,
+			"stop_after_match": t.StopAfterMatch,
+			"group_name":       t.GroupName,
+			"updated_at":       t.UpdatedAt,
+		})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("trigger not found")
+	}
+	return nil
 }
 
-func (s *Store) DeleteTriggerByID(id int64) error {
-	return s.db.Delete(&TriggerRule{}, id).Error
+func (s *Store) DeleteTriggerByID(id, sessionID int64) error {
+	result := s.db.Where("id = ? AND session_id = ?", id, sessionID).Delete(&TriggerRule{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return errors.New("trigger not found")
+	}
+	return nil
 }
 
 func (s *Store) LoadTriggers(sessionID int64) ([]TriggerRule, error) {
