@@ -40,10 +40,16 @@ func (v *VM) cmdAction(rest string) []Result {
 		group = "default"
 	}
 
-	if err := v.store.SaveTrigger(v.sessionID, pattern, command, isButton, group); err != nil {
-		return echoResults([]string{fmt.Sprintf("#action: save error: %v", err)})
+	if v.store != nil {
+		pid := v.primaryProfileID()
+		if pid == 0 {
+			return echoResults([]string{"#action: save error: no primary profile found"})
+		}
+		if err := v.store.SaveTrigger(pid, pattern, command, isButton, group); err != nil {
+			return echoResults([]string{fmt.Sprintf("#action: save error: %v", err)})
+		}
+		v.ensureFresh()
 	}
-	v.ensureFresh()
 
 	label := ""
 	if isButton {
@@ -57,10 +63,15 @@ func (v *VM) cmdUnaction(rest string) []Result {
 	if pattern == "" {
 		return echoResults([]string{"#unaction: usage: #unaction {pattern}"})
 	}
-	if err := v.store.DeleteTrigger(v.sessionID, pattern); err != nil {
-		return echoResults([]string{fmt.Sprintf("#unaction: error: %v", err)})
+	if v.store != nil {
+		pid := v.primaryProfileID()
+		if pid != 0 {
+			if err := v.store.DeleteTrigger(pid, pattern); err != nil {
+				return echoResults([]string{fmt.Sprintf("#unaction: error: %v", err)})
+			}
+			v.ensureFresh()
+		}
 	}
-	v.ensureFresh()
 	return echoResults([]string{fmt.Sprintf("#unaction: %s removed", pattern)})
 }
 
@@ -92,7 +103,11 @@ func (v *VM) cmdHighlight(rest string) []Result {
 	h.GroupName = group
 
 	if v.store != nil {
-		if err := v.store.SaveHighlight(v.sessionID, h); err != nil {
+		pid := v.primaryProfileID()
+		if pid == 0 {
+			return echoResults([]string{"#highlight: save error: no primary profile found"})
+		}
+		if err := v.store.SaveHighlight(pid, h); err != nil {
 			return echoResults([]string{fmt.Sprintf("#highlight: save error: %v", err)})
 		}
 		v.ensureFresh()
@@ -110,10 +125,13 @@ func (v *VM) cmdUnhighlight(rest string) []Result {
 		return echoResults([]string{"#unhighlight: usage: #unhighlight {pattern}"})
 	}
 	if v.store != nil {
-		if err := v.store.DeleteHighlight(v.sessionID, pattern); err != nil {
-			return echoResults([]string{fmt.Sprintf("#unhighlight: error: %v", err)})
+		pid := v.primaryProfileID()
+		if pid != 0 {
+			if err := v.store.DeleteHighlight(pid, pattern); err != nil {
+				return echoResults([]string{fmt.Sprintf("#unhighlight: error: %v", err)})
+			}
+			v.ensureFresh()
 		}
-		v.ensureFresh()
 	}
 	return echoResults([]string{fmt.Sprintf("#unhighlight: %s removed", pattern)})
 }

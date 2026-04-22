@@ -6,24 +6,32 @@
     value: string;
   }
 
+  interface Profile {
+    id: number;
+    name: string;
+    description: string;
+  }
+
+  interface SessionProfile {
+    id: number;
+    session_id: number;
+    profile_id: number;
+    order_index: number;
+    profile_name: string;
+  }
+
   interface Alias {
     id?: number;
+    position?: number;
     name: string;
     template: string;
     enabled: boolean;
     group_name: string;
   }
 
-  interface RuleGroupSummary {
-    domain: string;
-    group_name: string;
-    total_count: number;
-    enabled_count: number;
-    disabled_count: number;
-  }
-
   interface Trigger {
     id?: number;
+    position?: number;
     name: string;
     pattern: string;
     command: string;
@@ -35,6 +43,7 @@
 
   interface Highlight {
     id?: number;
+    position?: number;
     pattern: string;
     fg: string;
     bg: string;
@@ -49,6 +58,21 @@
     group_name: string;
   }
 
+  interface Hotkey {
+    id?: number;
+    position?: number;
+    shortcut: string;
+    command: string;
+  }
+
+  interface RuleGroupSummary {
+    domain: string;
+    group_name: string;
+    total_count: number;
+    enabled_count: number;
+    disabled_count: number;
+  }
+
   interface Session {
     id: number;
     name: string;
@@ -57,11 +81,13 @@
     status: string;
   }
 
-  // Initialize from hash or default to variables
   let currentTab = window.location.hash.slice(1) || 'variables';
   let loading = true;
   let formError = '';
+  
   let selectedSessionID: number | null = null;
+  let selectedProfileID: number | null = null;
+  
   let appSettings: { api_token: string } = { api_token: '' };
 
   window.onhashchange = () => {
@@ -76,15 +102,31 @@
 
   const tabs = [
     { id: 'sessions', label: 'Sessions' },
+    { id: 'profiles', label: 'Profiles' },
     { id: 'variables', label: 'Variables' },
     { id: 'aliases', label: 'Aliases' },
     { id: 'triggers', label: 'Triggers' },
     { id: 'highlights', label: 'Highlights' },
+    { id: 'hotkeys', label: 'Hotkeys' },
     { id: 'groups', label: 'Groups' },
     { id: 'app', label: 'App' },
   ];
 
-  // Variables State
+  // Sessions State
+  let sessions: Session[] = [];
+  const defaultSession = (): Partial<Session> => ({ name: '', mud_host: '', mud_port: 0 });
+  let sessionEditor: Partial<Session> = defaultSession();
+  $: currentSession = sessions.find(s => s.id === selectedSessionID);
+
+  let sessionProfiles: SessionProfile[] = [];
+
+  // Profiles State
+  let profiles: Profile[] = [];
+  const defaultProfile = (): Partial<Profile> => ({ name: '', description: '' });
+  let profileEditor: Partial<Profile> = defaultProfile();
+  $: currentProfile = profiles.find(p => p.id === selectedProfileID);
+
+  // Variables State (Session-scoped)
   let variables: Variable[] = [];
   let newVarKey = '';
   let newVarValue = '';
@@ -104,35 +146,21 @@
   const defaultHighlight = (): Highlight => ({ pattern: '', fg: '', bg: '', bold: false, faint: false, italic: false, underline: false, strikethrough: false, blink: false, reverse: false, enabled: true, group_name: '' });
   let highlightEditor: Highlight = defaultHighlight();
 
+  // Hotkeys State
+  let hotkeys: Hotkey[] = [];
+  const defaultHotkey = (): Hotkey => ({ shortcut: '', command: '' });
+  let hotkeyEditor: Hotkey = defaultHotkey();
+
   // Groups State
   let groups: RuleGroupSummary[] = [];
-
-  // Sessions State
-  let sessions: Session[] = [];
-  const defaultSession = (): Partial<Session> => ({ name: '', mud_host: '', mud_port: 0 });
-  let sessionEditor: Partial<Session> = defaultSession();
-
-  $: currentSession = sessions.find(s => s.id === selectedSessionID);
 
   type RGB = { r: number; g: number; b: number };
 
   const ansiBasePalette: RGB[] = [
-    { r: 0, g: 0, b: 0 },
-    { r: 128, g: 0, b: 0 },
-    { r: 0, g: 128, b: 0 },
-    { r: 128, g: 128, b: 0 },
-    { r: 0, g: 0, b: 128 },
-    { r: 128, g: 0, b: 128 },
-    { r: 0, g: 128, b: 128 },
-    { r: 192, g: 192, b: 192 },
-    { r: 128, g: 128, b: 128 },
-    { r: 255, g: 0, b: 0 },
-    { r: 0, g: 255, b: 0 },
-    { r: 255, g: 255, b: 0 },
-    { r: 0, g: 0, b: 255 },
-    { r: 255, g: 0, b: 255 },
-    { r: 0, g: 255, b: 255 },
-    { r: 255, g: 255, b: 255 },
+    { r: 0, g: 0, b: 0 }, { r: 128, g: 0, b: 0 }, { r: 0, g: 128, b: 0 }, { r: 128, g: 128, b: 0 },
+    { r: 0, g: 0, b: 128 }, { r: 128, g: 0, b: 128 }, { r: 0, g: 128, b: 128 }, { r: 192, g: 192, b: 192 },
+    { r: 128, g: 128, b: 128 }, { r: 255, g: 0, b: 0 }, { r: 0, g: 255, b: 0 }, { r: 255, g: 255, b: 0 },
+    { r: 0, g: 0, b: 255 }, { r: 255, g: 0, b: 255 }, { r: 0, g: 255, b: 255 }, { r: 255, g: 255, b: 255 },
   ];
 
   function ansi256ToRGB(index: number): RGB {
@@ -140,14 +168,7 @@
     if (index >= 16 && index <= 231) {
       const cube = index - 16;
       const steps = [0, 95, 135, 175, 215, 255];
-      const r = steps[Math.floor(cube / 36) % 6] ?? 0;
-      const g = steps[Math.floor(cube / 6) % 6] ?? 0;
-      const b = steps[cube % 6] ?? 0;
-      return {
-        r,
-        g,
-        b,
-      };
+      return { r: steps[Math.floor(cube / 36) % 6] ?? 0, g: steps[Math.floor(cube / 6) % 6] ?? 0, b: steps[cube % 6] ?? 0 };
     }
     const gray = 8 + (index - 232) * 10;
     return { r: gray, g: gray, b: gray };
@@ -162,15 +183,9 @@
     const normalized = value.trim().toLowerCase();
     if (!normalized.startsWith('#')) return null;
     let hex = normalized.slice(1);
-    if (hex.length === 3) {
-      hex = `${hex[0]}${hex[0]}${hex[1]}${hex[1]}${hex[2]}${hex[2]}`;
-    }
+    if (hex.length === 3) hex = `${hex[0]}${hex[0]}${hex[1]}${hex[1]}${hex[2]}${hex[2]}`;
     if (!/^[0-9a-f]{6}$/.test(hex)) return null;
-    return {
-      r: parseInt(hex.slice(0, 2), 16),
-      g: parseInt(hex.slice(2, 4), 16),
-      b: parseInt(hex.slice(4, 6), 16),
-    };
+    return { r: parseInt(hex.slice(0, 2), 16), g: parseInt(hex.slice(2, 4), 16), b: parseInt(hex.slice(4, 6), 16) };
   }
 
   function colorValueToHex(value: string): string {
@@ -180,24 +195,13 @@
     if (parsedHex) return rgbToHex(parsedHex);
     if (normalized.startsWith('256:')) {
       const index = Number.parseInt(normalized.slice(4), 10);
-      if (!Number.isNaN(index) && index >= 0 && index <= 255) {
-        return rgbToHex(ansi256ToRGB(index));
-      }
+      if (!Number.isNaN(index) && index >= 0 && index <= 255) return rgbToHex(ansi256ToRGB(index));
     }
     return '#cccccc';
   }
 
   function colorValueToCss(value: string, fallback: string): string {
-    const normalized = value.trim().toLowerCase();
-    if (!normalized) return fallback;
-    if (parseHexColor(normalized)) return rgbToHex(parseHexColor(normalized)!);
-    if (normalized.startsWith('256:')) {
-      const index = Number.parseInt(normalized.slice(4), 10);
-      if (!Number.isNaN(index) && index >= 0 && index <= 255) {
-        return rgbToHex(ansi256ToRGB(index));
-      }
-    }
-    return fallback;
+    return colorValueToHex(value) === '#cccccc' && !value ? fallback : colorValueToHex(value);
   }
 
   function nearestAnsi256Index(rgb: RGB): number {
@@ -209,10 +213,7 @@
       const dg = rgb.g - candidate.g;
       const db = rgb.b - candidate.b;
       const distance = dr * dr + dg * dg + db * db;
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestIndex = i;
-      }
+      if (distance < bestDistance) { bestDistance = distance; bestIndex = i; }
     }
     return bestIndex;
   }
@@ -220,10 +221,7 @@
   function setHighlightColor(field: 'fg' | 'bg', hex: string) {
     const rgb = parseHexColor(hex);
     if (!rgb) return;
-    highlightEditor = {
-      ...highlightEditor,
-      [field]: `256:${nearestAnsi256Index(rgb)}`,
-    };
+    highlightEditor = { ...highlightEditor, [field]: `256:${nearestAnsi256Index(rgb)}` };
   }
 
   async function fetchData() {
@@ -231,41 +229,38 @@
     formError = '';
     // @ts-ignore
     const token = window.API_TOKEN || '';
+    const headers = { 'X-Session-Token': token };
     try {
-      // Always fetch sessions first to populate selector
-      const sessRes = await fetch('/api/sessions', { headers: { 'X-Session-Token': token } });
+      const [sessRes, profRes] = await Promise.all([
+        fetch('/api/sessions', { headers }),
+        fetch('/api/profiles', { headers })
+      ]);
       sessions = await sessRes.json() || [];
-      if (selectedSessionID === null && sessions.length > 0) {
-        selectedSessionID = sessions[0]!.id;
-      }
+      profiles = await profRes.json() || [];
+
+      if (selectedSessionID === null && sessions.length > 0) selectedSessionID = sessions[0]!.id;
+      if (selectedProfileID === null && profiles.length > 0) selectedProfileID = profiles[0]!.id;
 
       if (currentTab === 'app') {
-        const appRes = await fetch('/api/app/settings', { headers: { 'X-Session-Token': token } });
+        const appRes = await fetch('/api/app/settings', { headers });
         appSettings = await appRes.json();
-      } else if (currentTab === 'groups' && selectedSessionID) {
-        const base = `/api/sessions/${selectedSessionID}`;
-        const [groupsRes, aliasesRes, triggersRes, highlightsRes] = await Promise.all([
-          fetch(`${base}/groups`, { headers: { 'X-Session-Token': token } }),
-          fetch(`${base}/aliases`, { headers: { 'X-Session-Token': token } }),
-          fetch(`${base}/triggers`, { headers: { 'X-Session-Token': token } }),
-          fetch(`${base}/highlights`, { headers: { 'X-Session-Token': token } }),
-        ]);
-        groups = await groupsRes.json() || [];
-        aliases = await aliasesRes.json() || [];
-        triggers = await triggersRes.json() || [];
-        highlights = await highlightsRes.json() || [];
-      } else if (currentTab !== 'sessions' && selectedSessionID) {
-        const res = await fetch(`/api/sessions/${selectedSessionID}/${currentTab}`, {
-          headers: { 'X-Session-Token': token }
-        });
-        const data = await res.json();
-        if (currentTab === 'variables') variables = data || [];
-        else if (currentTab === 'aliases') aliases = data || [];
-        else if (currentTab === 'triggers') triggers = data || [];
-        else if (currentTab === 'highlights') highlights = data || [];
+      } else if (currentTab === 'sessions' && selectedSessionID) {
+        const spRes = await fetch(`/api/sessions/${selectedSessionID}/profiles`, { headers });
+        sessionProfiles = await spRes.json() || [];
+      } else if (currentTab === 'variables' && selectedSessionID) {
+        const varRes = await fetch(`/api/sessions/${selectedSessionID}/variables`, { headers });
+        variables = await varRes.json() || [];
+      } else if (['aliases', 'triggers', 'highlights', 'hotkeys', 'groups'].includes(currentTab) && selectedProfileID) {
+        const res = await fetch(`/api/profiles/${selectedProfileID}/${currentTab}`, { headers });
+        const data = await res.json() || [];
+        if (currentTab === 'aliases') aliases = data;
+        else if (currentTab === 'triggers') triggers = data;
+        else if (currentTab === 'highlights') highlights = data;
+        else if (currentTab === 'hotkeys') hotkeys = data;
+        else if (currentTab === 'groups') groups = data;
       }
     } catch (e) {
-      console.error(`Failed to fetch ${currentTab}`, e);
+      console.error(`Failed to fetch data`, e);
     } finally {
       loading = false;
     }
@@ -273,21 +268,21 @@
 
   async function saveItem(domain: string, item: any, resetFn: () => void) {
     const validationError = validateItem(domain, item);
-    if (validationError) {
-      formError = validationError;
-      return;
-    }
+    if (validationError) { formError = validationError; return; }
 
     formError = '';
     const isUpdate = domain !== 'variables' && !!item.id;
     let url = `/api/${domain}`;
-    if (domain === 'sessions') {
-      url = '/api/sessions';
+    
+    if (domain === 'variables' && selectedSessionID) {
+      url = `/api/sessions/${selectedSessionID}/variables`;
+    } else if (['aliases', 'triggers', 'highlights', 'hotkeys'].includes(domain) && selectedProfileID) {
+      url = `/api/profiles/${selectedProfileID}/${domain}`;
       if (isUpdate) url += `/${item.id}`;
-    } else if (selectedSessionID) {
-      url = `/api/sessions/${selectedSessionID}/${domain}`;
-      // For variables, we use the root /variables for now, but backend expects session-specific.
-      // Wait, I updated backend to expect /api/sessions/{id}/variables.
+    } else if (domain === 'sessions' && isUpdate) {
+      url += `/${item.id}`;
+    } else if (domain === 'profiles' && isUpdate) {
+      url += `/${item.id}`;
     }
     
     // @ts-ignore
@@ -297,10 +292,7 @@
 
     await fetch(url, {
       method,
-      headers: { 
-        'Content-Type': 'application/json',
-        'X-Session-Token': token
-      },
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
       body: JSON.stringify(body)
     });
     resetFn();
@@ -308,29 +300,13 @@
   }
 
   function validateItem(domain: string, item: any): string {
-    if (domain === 'variables') {
-      if (!newVarKey.trim()) return 'Variable key is required.';
-      return '';
-    }
-    if (domain === 'aliases') {
-      if (!item.name?.trim()) return 'Alias name is required.';
-      if (!item.template?.trim()) return 'Alias template is required.';
-      return '';
-    }
-    if (domain === 'triggers') {
-      if (!item.pattern?.trim()) return 'Trigger pattern is required.';
-      if (!item.command?.trim()) return 'Trigger command is required.';
-      return '';
-    }
-    if (domain === 'highlights') {
-      if (!item.pattern?.trim()) return 'Highlight pattern is required.';
-      return '';
-    }
-    if (domain === 'sessions') {
-      if (!item.name?.trim()) return 'Session name is required.';
-      if (!item.mud_host?.trim()) return 'MUD host is required.';
-      if (!item.mud_port) return 'MUD port is required.';
-    }
+    if (domain === 'variables') return !newVarKey.trim() ? 'Variable key is required.' : '';
+    if (domain === 'aliases') return !item.name?.trim() ? 'Alias name is required.' : (!item.template?.trim() ? 'Alias template is required.' : '');
+    if (domain === 'triggers') return !item.pattern?.trim() ? 'Trigger pattern is required.' : (!item.command?.trim() ? 'Trigger command is required.' : '');
+    if (domain === 'highlights') return !item.pattern?.trim() ? 'Highlight pattern is required.' : '';
+    if (domain === 'hotkeys') return !item.shortcut?.trim() ? 'Shortcut is required.' : (!item.command?.trim() ? 'Command is required.' : '');
+    if (domain === 'sessions') return !item.name?.trim() ? 'Session name is required.' : (!item.mud_host?.trim() ? 'MUD host is required.' : (!item.mud_port ? 'MUD port is required.' : ''));
+    if (domain === 'profiles') return !item.name?.trim() ? 'Profile name is required.' : '';
     return '';
   }
 
@@ -339,47 +315,36 @@
     // @ts-ignore
     const token = window.API_TOKEN || '';
     let url = `/api/${domain}/${id}`;
-    if (domain === 'sessions') {
-        url = `/api/sessions/${id}`;
-    } else if (selectedSessionID) {
-        const itemID = domain === 'variables' ? encodeURIComponent(String(id)) : String(id);
-        url = `/api/sessions/${selectedSessionID}/${domain}/${itemID}`;
+    if (domain === 'variables' && selectedSessionID) {
+        url = `/api/sessions/${selectedSessionID}/variables/${encodeURIComponent(String(id))}`;
+    } else if (['aliases', 'triggers', 'highlights', 'hotkeys'].includes(domain) && selectedProfileID) {
+        url = `/api/profiles/${selectedProfileID}/${domain}/${id}`;
     }
-
-    await fetch(url, { 
-      method: 'DELETE',
-      headers: { 'X-Session-Token': token }
-    });
+    await fetch(url, { method: 'DELETE', headers: { 'X-Session-Token': token } });
     await fetchData();
   }
 
-  async function toggleItem(domain: 'aliases' | 'triggers' | 'highlights', item: Alias | Trigger | Highlight, enabled: boolean) {
-    if (!selectedSessionID) return;
+  async function toggleItem(domain: 'aliases' | 'triggers' | 'highlights', item: any, enabled: boolean) {
+    if (!selectedProfileID) return;
     formError = '';
     // @ts-ignore
     const token = window.API_TOKEN || '';
-    await fetch(`/api/sessions/${selectedSessionID}/${domain}/${item.id}`, {
+    await fetch(`/api/profiles/${selectedProfileID}/${domain}/${item.id}`, {
       method: 'PUT',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Session-Token': token,
-      },
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
       body: JSON.stringify({ ...item, enabled }),
     });
     await fetchData();
   }
 
   async function toggleGroup(domain: string, groupName: string, enabled: boolean) {
-    if (!selectedSessionID) return;
+    if (!selectedProfileID) return;
     formError = '';
     // @ts-ignore
     const token = window.API_TOKEN || '';
-    await fetch(`/api/sessions/${selectedSessionID}/groups/toggle`, {
+    await fetch(`/api/profiles/${selectedProfileID}/groups/toggle`, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Session-Token': token,
-      },
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
       body: JSON.stringify({ domain, group_name: groupName, enabled }),
     });
     await fetchData();
@@ -388,10 +353,105 @@
   async function sessionAction(action: 'connect' | 'disconnect', id: number) {
     // @ts-ignore
     const token = window.API_TOKEN || '';
-    await fetch(`/api/sessions/${id}/${action}`, {
-        method: 'POST',
-        headers: { 'X-Session-Token': token }
+    await fetch(`/api/sessions/${id}/${action}`, { method: 'POST', headers: { 'X-Session-Token': token } });
+    await fetchData();
+  }
+  
+  async function addProfileToSession(profileID: number) {
+    if (!selectedSessionID) return;
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const maxOrder = sessionProfiles.length > 0 ? Math.max(...sessionProfiles.map(sp => sp.order_index)) : -1;
+    await fetch(`/api/sessions/${selectedSessionID}/profiles`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+      body: JSON.stringify({ profile_id: profileID, order_index: maxOrder + 1 })
     });
+    await fetchData();
+  }
+  
+  async function removeProfileFromSession(profileID: number) {
+    if (!selectedSessionID) return;
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    await fetch(`/api/sessions/${selectedSessionID}/profiles/${profileID}`, { method: 'DELETE', headers: { 'X-Session-Token': token } });
+    await fetchData();
+  }
+  
+  async function moveSessionProfile(index: number, direction: -1 | 1) {
+    if (!selectedSessionID) return;
+    if (index + direction < 0 || index + direction >= sessionProfiles.length) return;
+    
+    const newProfiles = [...sessionProfiles];
+    const temp = newProfiles[index];
+    newProfiles[index] = newProfiles[index + direction]!;
+    newProfiles[index + direction] = temp!;
+    
+    const payload = newProfiles.map((sp, i) => ({ profile_id: sp.profile_id, order_index: i }));
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    await fetch(`/api/sessions/${selectedSessionID}/profiles/reorder`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+      body: JSON.stringify(payload)
+    });
+    await fetchData();
+  }
+  
+  async function exportProfile(profileID: number) {
+    // Basic export implementation (ideally this should query the full profile export endpoint if available)
+    if (!confirm('Do you want to save this profile export to disk?')) return;
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const headers = { 'X-Session-Token': token };
+    const [aliasesRes, triggersRes, highlightsRes, hotkeysRes] = await Promise.all([
+      fetch(`/api/profiles/${profileID}/aliases`, { headers }),
+      fetch(`/api/profiles/${profileID}/triggers`, { headers }),
+      fetch(`/api/profiles/${profileID}/highlights`, { headers }),
+      fetch(`/api/profiles/${profileID}/hotkeys`, { headers }),
+    ]);
+    const exportData = {
+      aliases: await aliasesRes.json(),
+      triggers: await triggersRes.json(),
+      highlights: await highlightsRes.json(),
+      hotkeys: await hotkeysRes.json(),
+    };
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData, null, 2));
+    const dlAnchorElem = document.createElement('a');
+    dlAnchorElem.setAttribute("href", dataStr);
+    dlAnchorElem.setAttribute("download", `profile_${profileID}_export.json`);
+    dlAnchorElem.click();
+  }
+  
+  async function moveRule(domain: string, item: any, direction: -1 | 1) {
+    if (!selectedProfileID) return;
+    
+    let list: any[] = [];
+    if (domain === 'aliases') list = aliases;
+    else if (domain === 'triggers') list = triggers;
+    else if (domain === 'highlights') list = highlights;
+    else if (domain === 'hotkeys') list = hotkeys;
+    
+    const index = list.findIndex(x => x.id === item.id);
+    if (index === -1 || index + direction < 0 || index + direction >= list.length) return;
+    
+    const swapWith = list[index + direction];
+    const currentPos = item.position;
+    const swapPos = swapWith.position;
+    
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const headers = { 'Content-Type': 'application/json', 'X-Session-Token': token };
+    
+    // Optimistic update
+    item.position = swapPos;
+    swapWith.position = currentPos;
+    
+    await Promise.all([
+      fetch(`/api/profiles/${selectedProfileID}/${domain}/${item.id}`, { method: 'PUT', headers, body: JSON.stringify(item) }),
+      fetch(`/api/profiles/${selectedProfileID}/${domain}/${swapWith.id}`, { method: 'PUT', headers, body: JSON.stringify(swapWith) })
+    ]);
+    
     await fetchData();
   }
 
@@ -399,12 +459,8 @@
     if (!confirm('Are you sure you want to rotate the API token? This will invalidate all external clients.')) return;
     // @ts-ignore
     const token = window.API_TOKEN || '';
-    const res = await fetch('/api/app/settings/rotate-api-token', {
-        method: 'POST',
-        headers: { 'X-Session-Token': token }
-    });
+    const res = await fetch('/api/app/settings/rotate-api-token', { method: 'POST', headers: { 'X-Session-Token': token } });
     appSettings = await res.json();
-    // Update global token if it's currently used in window
     // @ts-ignore
     window.API_TOKEN = appSettings.api_token;
   }
@@ -421,7 +477,9 @@
     return 0;
   }
 
-  $: if (currentTab || selectedSessionID) fetchData();
+  $: if (currentTab || selectedSessionID || selectedProfileID) {
+    if (loading === false) fetchData();
+  }
   onMount(() => fetchData());
 </script>
 
@@ -438,8 +496,8 @@
   </nav>
 
   <section class="content">
-    {#if currentTab !== 'sessions' && currentTab !== 'app'}
-        <div class="session-selector">
+    {#if ['variables', 'sessions'].includes(currentTab) && currentTab !== 'sessions'}
+        <div class="selector-box">
             <label for="session-selector">Configuring Session:</label>
             <select id="session-selector" bind:value={selectedSessionID}>
                 {#each sessions as s}
@@ -447,6 +505,20 @@
                 {/each}
                 {#if sessions.length === 0}
                     <option value={null}>No sessions available</option>
+                {/if}
+            </select>
+        </div>
+    {/if}
+    
+    {#if ['aliases', 'triggers', 'highlights', 'groups', 'hotkeys'].includes(currentTab)}
+        <div class="selector-box">
+            <label for="profile-selector">Configuring Profile:</label>
+            <select id="profile-selector" bind:value={selectedProfileID}>
+                {#each profiles as p}
+                    <option value={p.id}>{p.name}</option>
+                {/each}
+                {#if profiles.length === 0}
+                    <option value={null}>No profiles available</option>
                 {/if}
             </select>
         </div>
@@ -478,7 +550,7 @@
       </table>
 
     {:else if currentTab === 'aliases'}
-      <header class="content-header"><h2>Aliases</h2><p class="description">Command shortcuts for {currentSession?.name}.</p></header>
+      <header class="content-header"><h2>Aliases</h2><p class="description">Command shortcuts for profile {currentProfile?.name}.</p></header>
       <div class="editor-box">
         {#if formError}<div class="form-error">{formError}</div>{/if}
         <div class="form-row">
@@ -492,10 +564,14 @@
         </div>
       </div>
       <table class="data-table">
-        <thead><tr><th style="width: 72px">Status</th><th>Name</th><th>Template</th><th>Group</th><th style="width: 140px">Actions</th></tr></thead>
+        <thead><tr><th style="width: 60px">Order</th><th style="width: 72px">Status</th><th>Name</th><th>Template</th><th>Group</th><th style="width: 140px">Actions</th></tr></thead>
         <tbody>
-          {#each aliases as a}
+          {#each aliases as a, i}
             <tr>
+              <td class="order-cell">
+                 <button class="btn-icon" disabled={i === 0} on:click={() => moveRule('aliases', a, -1)}>▲</button>
+                 <button class="btn-icon" disabled={i === aliases.length - 1} on:click={() => moveRule('aliases', a, 1)}>▼</button>
+              </td>
               <td>
                 <label class="toggle-label">
                   <input type="checkbox" checked={a.enabled} on:change={(event) => toggleItem('aliases', a, (event.currentTarget as HTMLInputElement).checked)} />
@@ -514,7 +590,7 @@
       </table>
 
     {:else if currentTab === 'triggers'}
-      <header class="content-header"><h2>Triggers</h2><p class="description">Automatic reactions for {currentSession?.name}.</p></header>
+      <header class="content-header"><h2>Triggers</h2><p class="description">Automatic reactions for profile {currentProfile?.name}.</p></header>
       <div class="editor-box">
         {#if formError}<div class="form-error">{formError}</div>{/if}
         <div class="form-grid">
@@ -531,10 +607,14 @@
         </div>
       </div>
       <table class="data-table">
-        <thead><tr><th style="width: 96px">Flags</th><th>Pattern</th><th>Command</th><th>Group</th><th style="width: 140px">Actions</th></tr></thead>
+        <thead><tr><th style="width: 60px">Order</th><th style="width: 96px">Flags</th><th>Pattern</th><th>Command</th><th>Group</th><th style="width: 140px">Actions</th></tr></thead>
         <tbody>
-          {#each triggers as t}
+          {#each triggers as t, i}
             <tr>
+              <td class="order-cell">
+                 <button class="btn-icon" disabled={i === 0} on:click={() => moveRule('triggers', t, -1)}>▲</button>
+                 <button class="btn-icon" disabled={i === triggers.length - 1} on:click={() => moveRule('triggers', t, 1)}>▼</button>
+              </td>
               <td class="flags-cell">
                 <div class="flags-wrapper">
                   <label class="toggle-label" title="Enabled">
@@ -560,7 +640,7 @@
       </table>
 
     {:else if currentTab === 'highlights'}
-      <header class="content-header"><h2>Highlights</h2><p class="description">Visual formatting for {currentSession?.name}.</p></header>
+      <header class="content-header"><h2>Highlights</h2><p class="description">Visual formatting for profile {currentProfile?.name}.</p></header>
       <div class="editor-box">
         {#if formError}<div class="form-error">{formError}</div>{/if}
         <div class="form-grid">
@@ -596,10 +676,14 @@
         </div>
       </div>
       <table class="data-table">
-        <thead><tr><th style="width: 72px">Status</th><th>Pattern</th><th>Colors</th><th>Group</th><th>Preview</th><th style="width: 140px">Actions</th></tr></thead>
+        <thead><tr><th style="width: 60px">Order</th><th style="width: 72px">Status</th><th>Pattern</th><th>Colors</th><th>Group</th><th>Preview</th><th style="width: 140px">Actions</th></tr></thead>
         <tbody>
-          {#each highlights as h}
+          {#each highlights as h, i}
             <tr>
+              <td class="order-cell">
+                 <button class="btn-icon" disabled={i === 0} on:click={() => moveRule('highlights', h, -1)}>▲</button>
+                 <button class="btn-icon" disabled={i === highlights.length - 1} on:click={() => moveRule('highlights', h, 1)}>▼</button>
+              </td>
               <td>
                 <label class="toggle-label">
                   <input type="checkbox" checked={h.enabled} on:change={(event) => toggleItem('highlights', h, (event.currentTarget as HTMLInputElement).checked)} />
@@ -635,8 +719,40 @@
           {/each}
         </tbody>
       </table>
+      
+    {:else if currentTab === 'hotkeys'}
+      <header class="content-header"><h2>Hotkeys</h2><p class="description">Keyboard shortcuts for profile {currentProfile?.name}.</p></header>
+      <div class="editor-box">
+        {#if formError}<div class="form-error">{formError}</div>{/if}
+        <div class="form-row">
+          <input type="text" bind:value={hotkeyEditor.shortcut} placeholder="Shortcut (e.g. F1, Ctrl+A)" required />
+          <input type="text" bind:value={hotkeyEditor.command} placeholder="Command" required />
+          <button class="btn-primary" on:click={() => saveItem('hotkeys', hotkeyEditor, () => hotkeyEditor = defaultHotkey())}>
+            {hotkeyEditor.id ? 'Update' : 'Add'}
+          </button>
+        </div>
+      </div>
+      <table class="data-table">
+        <thead><tr><th style="width: 60px">Order</th><th>Shortcut</th><th>Command</th><th style="width: 140px">Actions</th></tr></thead>
+        <tbody>
+          {#each hotkeys as h, i}
+            <tr>
+              <td class="order-cell">
+                 <button class="btn-icon" disabled={i === 0} on:click={() => moveRule('hotkeys', h, -1)}>▲</button>
+                 <button class="btn-icon" disabled={i === hotkeys.length - 1} on:click={() => moveRule('hotkeys', h, 1)}>▼</button>
+              </td>
+              <td class="key-cell">{h.shortcut}</td><td class="value-cell">{h.command}</td>
+              <td class="actions-cell">
+                <button class="btn-link" on:click={() => hotkeyEditor = { ...h }}>Edit</button>
+                <button class="btn-link btn-danger" on:click={() => deleteItem('hotkeys', h.id!)}>Delete</button>
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+
     {:else if currentTab === 'groups'}
-      <header class="content-header"><h2>Groups</h2><p class="description">Bulk enable/disable rule groups for {currentSession?.name}.</p></header>
+      <header class="content-header"><h2>Groups</h2><p class="description">Bulk enable/disable rule groups for profile {currentProfile?.name}.</p></header>
       {#if formError}<div class="form-error">{formError}</div>{/if}
       <table class="data-table">
         <thead><tr><th>Domain</th><th>Group</th><th>Rules</th><th>Status</th><th style="width: 180px">Actions</th></tr></thead>
@@ -655,8 +771,38 @@
           {/each}
         </tbody>
       </table>
+      
+    {:else if currentTab === 'profiles'}
+      <header class="content-header"><h2>Profiles</h2><p class="description">Manage settings profiles.</p></header>
+      <div class="editor-box">
+        {#if formError}<div class="form-error">{formError}</div>{/if}
+        <div class="form-row">
+            <input type="text" bind:value={profileEditor.name} placeholder="Profile Name" required />
+            <input type="text" bind:value={profileEditor.description} placeholder="Description" />
+            <button class="btn-primary" on:click={() => saveItem('profiles', profileEditor, () => profileEditor = defaultProfile())}>
+                {profileEditor.id ? 'Update' : 'Add'}
+            </button>
+        </div>
+      </div>
+      <table class="data-table">
+        <thead><tr><th>Name</th><th>Description</th><th>Actions</th></tr></thead>
+        <tbody>
+          {#each profiles as p}
+            <tr>
+              <td class="key-cell">{p.name}</td>
+              <td class="value-cell">{p.description || '-'}</td>
+              <td class="actions-cell">
+                <button class="btn-link" on:click={() => exportProfile(p.id)}>Export</button>
+                <button class="btn-link" style="margin-left: 12px" on:click={() => profileEditor = { ...p }}>Edit</button>
+                <button class="btn-link btn-danger" style="margin-left: 12px" on:click={() => deleteItem('profiles', p.id)}>Delete</button>
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+
     {:else if currentTab === 'sessions'}
-      <header class="content-header"><h2>Sessions</h2><p class="description">Manage your MUD connections.</p></header>
+      <header class="content-header"><h2>Sessions</h2><p class="description">Manage your MUD connections and active profiles.</p></header>
       <div class="editor-box">
         {#if formError}<div class="form-error">{formError}</div>{/if}
         <div class="form-row">
@@ -686,7 +832,7 @@
                 {:else}
                     <button class="btn-link" on:click={() => sessionAction('connect', s.id)}>Connect</button>
                 {/if}
-                <button class="btn-link" style="margin-left: 12px" on:click={() => { selectedSessionID = s.id; currentTab = 'variables'; }}>Rules</button>
+                <button class="btn-link" style="margin-left: 12px" on:click={() => { selectedSessionID = s.id; currentTab = 'variables'; }}>View</button>
                 <button class="btn-link" style="margin-left: 12px" on:click={() => sessionEditor = { ...s }}>Edit</button>
                 <button class="btn-link btn-danger" style="margin-left: 12px" on:click={() => deleteItem('sessions', s.id)}>Delete</button>
               </td>
@@ -694,6 +840,42 @@
           {/each}
         </tbody>
       </table>
+      
+      {#if currentSession}
+        <h3 style="margin-top: 40px; border-bottom: 1px solid #2d333b; padding-bottom: 8px;">Active Profiles for {currentSession.name}</h3>
+        <p class="description">Profiles at the bottom of the list have higher priority and will override rules from profiles above them.</p>
+        <table class="data-table" style="margin-bottom: 20px;">
+            <thead><tr><th style="width: 60px">Order</th><th>Profile Name</th><th style="width: 120px">Actions</th></tr></thead>
+            <tbody>
+                {#each sessionProfiles as sp, i}
+                    <tr>
+                        <td class="order-cell">
+                            <button class="btn-icon" disabled={i === 0} on:click={() => moveSessionProfile(i, -1)}>▲</button>
+                            <button class="btn-icon" disabled={i === sessionProfiles.length - 1} on:click={() => moveSessionProfile(i, 1)}>▼</button>
+                        </td>
+                        <td class="value-cell">{sp.profile_name}</td>
+                        <td class="actions-cell">
+                            <button class="btn-link btn-danger" on:click={() => removeProfileFromSession(sp.profile_id)}>Remove</button>
+                        </td>
+                    </tr>
+                {/each}
+                {#if sessionProfiles.length === 0}
+                    <tr><td colspan="3" class="dim-cell">No active profiles for this session.</td></tr>
+                {/if}
+            </tbody>
+        </table>
+        
+        <div class="form-row" style="max-width: 400px">
+            <select bind:value={profileEditor.id} style="flex: 1; background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px; border-radius: 6px;">
+                <option value={null} disabled selected>Select a profile to add</option>
+                {#each profiles as p}
+                    <option value={p.id}>{p.name}</option>
+                {/each}
+            </select>
+            <button class="btn-primary" disabled={!profileEditor.id} on:click={() => { if (profileEditor.id) addProfileToSession(profileEditor.id); profileEditor.id = undefined; }}>Add</button>
+        </div>
+      {/if}
+
     {:else if currentTab === 'app'}
         <header class="content-header"><h2>App Settings</h2><p class="description">Global application configuration.</p></header>
         <div class="editor-box">
@@ -722,6 +904,8 @@
   .description { color: #9ba3af; margin-bottom: 32px; }
   .form-error { color: #ff7b72; margin-bottom: 12px; font-size: 0.9rem; }
   .editor-box { background: #1a1d21; padding: 20px; border-radius: 8px; border: 1px solid #2d333b; margin-bottom: 32px; }
+  .selector-box { background: #1a1d21; padding: 12px 20px; border-radius: 8px; border: 1px solid #2d333b; margin-bottom: 24px; display: flex; align-items: center; gap: 12px; }
+  .selector-box select { background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 6px 12px; border-radius: 6px; }
   .form-grid { display: flex; flex-direction: column; gap: 12px; }
   .form-row { display: flex; gap: 12px; align-items: center; }
   .options-row { margin-top: 8px; border-top: 1px solid #2d333b; padding-top: 12px; flex-wrap: wrap; }
@@ -732,9 +916,14 @@
   .color-field code { color: #e8edf2; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; min-width: 72px; }
   input[type="color"] { width: 44px; height: 32px; background: none; border: none; padding: 0; }
   .btn-primary { background: #3498db; color: white; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; }
+  .btn-primary:disabled { background: #2980b9; opacity: 0.5; cursor: not-allowed; }
   .data-table { width: 100%; border-collapse: collapse; }
   .data-table th { text-align: left; padding: 12px; border-bottom: 2px solid #30363d; color: #9ba3af; font-size: 0.8rem; text-transform: uppercase; }
   .data-table td { padding: 12px; border-bottom: 1px solid #21262d; font-size: 0.9rem; vertical-align: middle; }
+  .order-cell { text-align: center; }
+  .btn-icon { background: none; border: none; color: #9ba3af; cursor: pointer; padding: 2px 6px; border-radius: 4px; }
+  .btn-icon:hover:not(:disabled) { background: #2d333b; color: #e8edf2; }
+  .btn-icon:disabled { opacity: 0.3; cursor: not-allowed; }
   .key-cell { font-family: monospace; color: #f39c12; font-weight: 600; }
   .value-cell { color: #e8edf2; }
   .dim-cell { color: #666; font-size: 0.8rem; }
@@ -757,6 +946,4 @@
   .btn-link { background: none; border: none; color: #3498db; cursor: pointer; padding: 0; font-size: 0.9rem; }
   .btn-link:hover { text-decoration: underline; }
   .btn-danger { color: #e74c3c; margin-left: 12px; }
-  .session-selector { margin-bottom: 20px; display: flex; align-items: center; gap: 12px; }
-  .session-selector select { background: #1a1d21; border: 1px solid #2d333b; color: #e8edf2; padding: 6px 12px; border-radius: 6px; }
 </style>

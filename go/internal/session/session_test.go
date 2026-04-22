@@ -104,7 +104,7 @@ func newTestStore(t *testing.T) *storage.Store {
 		t.Fatalf("gorm.Open: %v", err)
 	}
 
-	err = db.AutoMigrate(&storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{})
+	err = db.AutoMigrate(&storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{}, &storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{})
 	if err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}

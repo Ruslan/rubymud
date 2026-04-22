@@ -4,7 +4,8 @@ import "errors"
 
 type TriggerRule struct {
 	ID             int64      `gorm:"primaryKey" json:"id"`
-	SessionID      int64      `json:"session_id"`
+	ProfileID      int64      `json:"profile_id"`
+	Position       int        `json:"position"`
 	Name           string     `json:"name"`
 	Pattern        string     `json:"pattern"`
 	Command        string     `json:"command"`
@@ -19,9 +20,9 @@ func (s *TriggerRule) TableName() string {
 	return "trigger_rules"
 }
 
-func (s *Store) ListTriggers(sessionID int64) ([]TriggerRule, error) {
+func (s *Store) ListTriggers(profileID int64) ([]TriggerRule, error) {
 	var triggers []TriggerRule
-	err := s.db.Where("session_id = ?", sessionID).Order("id").Find(&triggers).Error
+	err := s.db.Where("profile_id = ?", profileID).Order("position ASC").Find(&triggers).Error
 	return triggers, err
 }
 
@@ -36,6 +37,11 @@ func (s *Store) CreateTrigger(t TriggerRule) error {
 		t.GroupName = "default"
 	}
 	t.UpdatedAt = nowSQLiteTime()
+	if t.Position == 0 {
+		var maxPos int
+		s.db.Model(&TriggerRule{}).Where("profile_id = ?", t.ProfileID).Select("COALESCE(MAX(position), 0)").Scan(&maxPos)
+		t.Position = maxPos + 1
+	}
 	return s.db.Create(&t).Error
 }
 
@@ -45,8 +51,9 @@ func (s *Store) UpdateTrigger(t TriggerRule) error {
 	}
 	t.UpdatedAt = nowSQLiteTime()
 	result := s.db.Model(&TriggerRule{}).
-		Where("id = ? AND session_id = ?", t.ID, t.SessionID).
+		Where("id = ? AND profile_id = ?", t.ID, t.ProfileID).
 		Updates(map[string]interface{}{
+			"position":         t.Position,
 			"name":             t.Name,
 			"pattern":          t.Pattern,
 			"command":          t.Command,
@@ -65,8 +72,8 @@ func (s *Store) UpdateTrigger(t TriggerRule) error {
 	return nil
 }
 
-func (s *Store) DeleteTriggerByID(id, sessionID int64) error {
-	result := s.db.Where("id = ? AND session_id = ?", id, sessionID).Delete(&TriggerRule{})
+func (s *Store) DeleteTriggerByID(id, profileID int64) error {
+	result := s.db.Where("id = ? AND profile_id = ?", id, profileID).Delete(&TriggerRule{})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -76,18 +83,25 @@ func (s *Store) DeleteTriggerByID(id, sessionID int64) error {
 	return nil
 }
 
-func (s *Store) LoadTriggers(sessionID int64) ([]TriggerRule, error) {
+func (s *Store) LoadTriggersForProfiles(profileIDs []int64) ([]TriggerRule, error) {
 	var triggers []TriggerRule
-	err := s.db.Where("session_id = ? AND enabled = ?", sessionID, true).Order("id").Find(&triggers).Error
+	if len(profileIDs) == 0 {
+		return triggers, nil
+	}
+	err := s.db.Where("profile_id IN ? AND enabled = ?", profileIDs, true).Order("position ASC").Find(&triggers).Error
 	return triggers, err
 }
 
-func (s *Store) SaveTrigger(sessionID int64, pattern, command string, isButton bool, group string) error {
+func (s *Store) SaveTrigger(profileID int64, pattern, command string, isButton bool, group string) error {
 	if group == "" {
 		group = "default"
 	}
+	var maxPos int
+	s.db.Model(&TriggerRule{}).Where("profile_id = ?", profileID).Select("COALESCE(MAX(position), 0)").Scan(&maxPos)
+
 	t := TriggerRule{
-		SessionID: sessionID,
+		ProfileID: profileID,
+		Position:  maxPos + 1,
 		Name:      pattern,
 		Pattern:   pattern,
 		Command:   command,
@@ -99,6 +113,6 @@ func (s *Store) SaveTrigger(sessionID int64, pattern, command string, isButton b
 	return s.db.Create(&t).Error
 }
 
-func (s *Store) DeleteTrigger(sessionID int64, pattern string) error {
-	return s.db.Where("session_id = ? AND pattern = ?", sessionID, pattern).Delete(&TriggerRule{}).Error
+func (s *Store) DeleteTrigger(profileID int64, pattern string) error {
+	return s.db.Where("profile_id = ? AND pattern = ?", profileID, pattern).Delete(&TriggerRule{}).Error
 }

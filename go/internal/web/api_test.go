@@ -77,12 +77,11 @@ func TestVariablesAPI(t *testing.T) {
 }
 
 func TestAliasesAPI(t *testing.T) {
-	s, sess := setupTestServer(t)
+	s, _ := setupTestServer(t)
 	ts := httptest.NewServer(s.httpServer.Handler)
 	defer ts.Close()
 
-	sessionID := sess.SessionID()
-	url := fmt.Sprintf("%s/api/sessions/%d/aliases", ts.URL, sessionID)
+	url := fmt.Sprintf("%s/api/profiles/1/aliases", ts.URL)
 
 	// 1. Create alias
 	payload, _ := json.Marshal(map[string]any{
@@ -159,9 +158,10 @@ func setupTestServer(t *testing.T) (*Server, *session.Session) {
 	if err != nil {
 		t.Fatalf("gorm.Open: %v", err)
 	}
-	db.AutoMigrate(&storage.AppSetting{}, &storage.SessionRecord{}, &storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{})
+	db.AutoMigrate(&storage.AppSetting{}, &storage.SessionRecord{}, &storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{}, &storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{})
 
 	store := storage.NewTestStore(db)
+	store.CreateProfile("Default", "")
 	
 	// Ensure a session exists
 	record, err := store.EnsureDefaultSession("localhost", 1234)
@@ -188,7 +188,7 @@ func setupTestServer(t *testing.T) (*Server, *session.Session) {
 		record.ID: sess,
 	}))
 
-	s := New(":0", manager, store, nil)
+	s := New(":0", manager, store)
 	return s, sess
 }
 

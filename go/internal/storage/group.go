@@ -10,7 +10,7 @@ type RuleGroupSummary struct {
 	DisabledCount int64  `json:"disabled_count"`
 }
 
-func (s *Store) ListRuleGroups(sessionID int64) ([]RuleGroupSummary, error) {
+func (s *Store) ListRuleGroups(profileID int64) ([]RuleGroupSummary, error) {
 	type domainSpec struct {
 		domain string
 		table  string
@@ -25,7 +25,7 @@ func (s *Store) ListRuleGroups(sessionID int64) ([]RuleGroupSummary, error) {
 		var rows []RuleGroupSummary
 		err := s.db.Table(spec.table).
 			Select("? AS domain, COALESCE(group_name, 'default') AS group_name, COUNT(*) AS total_count, SUM(CASE WHEN enabled THEN 1 ELSE 0 END) AS enabled_count, SUM(CASE WHEN enabled THEN 0 ELSE 1 END) AS disabled_count", spec.domain).
-			Where("session_id = ?", sessionID).
+			Where("profile_id = ?", profileID).
 			Group("COALESCE(group_name, 'default')").
 			Order("group_name").
 			Scan(&rows).Error
@@ -37,7 +37,7 @@ func (s *Store) ListRuleGroups(sessionID int64) ([]RuleGroupSummary, error) {
 	return groups, nil
 }
 
-func (s *Store) SetGroupEnabled(sessionID int64, domain, group string, enabled bool) error {
+func (s *Store) SetGroupEnabled(profileID int64, domain, group string, enabled bool) error {
 	if group == "" {
 		group = "default"
 	}
@@ -48,7 +48,7 @@ func (s *Store) SetGroupEnabled(sessionID int64, domain, group string, enabled b
 	}
 
 	return s.db.Table(table).
-		Where("session_id = ? AND COALESCE(group_name, 'default') = ?", sessionID, group).
+		Where("profile_id = ? AND COALESCE(group_name, 'default') = ?", profileID, group).
 		Updates(map[string]any{"enabled": enabled, "updated_at": nowSQLiteTime()}).Error
 }
 

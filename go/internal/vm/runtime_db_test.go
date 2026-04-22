@@ -2,9 +2,7 @@ package vm
 
 import (
 	"fmt"
-	"reflect"
 	"testing"
-	"unsafe"
 
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
@@ -93,28 +91,18 @@ func newRuntimeTestStore(t *testing.T) *storage.Store {
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
-	for _, stmt := range []string{
-		`CREATE TABLE variables (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, scope TEXT NOT NULL, key TEXT NOT NULL, value TEXT, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
-		`CREATE UNIQUE INDEX variables_session_scope_key_idx ON variables(session_id, scope, key);`,
-		`CREATE TABLE alias_rules (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, name TEXT NOT NULL, template TEXT NOT NULL, enabled INTEGER NOT NULL DEFAULT 1, group_name TEXT NOT NULL DEFAULT 'default', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
-		`CREATE UNIQUE INDEX alias_rules_session_name_idx ON alias_rules(session_id, name);`,
-		`CREATE TABLE trigger_rules (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, name TEXT, pattern TEXT NOT NULL, command TEXT NOT NULL, is_button INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, stop_after_match INTEGER NOT NULL DEFAULT 0, group_name TEXT NOT NULL DEFAULT 'default', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
-		`CREATE TABLE highlight_rules (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, pattern TEXT NOT NULL, fg TEXT NOT NULL DEFAULT '', bg TEXT NOT NULL DEFAULT '', bold INTEGER NOT NULL DEFAULT 0, faint INTEGER NOT NULL DEFAULT 0, italic INTEGER NOT NULL DEFAULT 0, underline INTEGER NOT NULL DEFAULT 0, strikethrough INTEGER NOT NULL DEFAULT 0, blink INTEGER NOT NULL DEFAULT 0, reverse INTEGER NOT NULL DEFAULT 0, enabled INTEGER NOT NULL DEFAULT 1, group_name TEXT NOT NULL DEFAULT 'default', updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
-		`CREATE UNIQUE INDEX highlight_rules_session_pattern_idx ON highlight_rules(session_id, pattern);`,
-		`CREATE TABLE log_overlays (id INTEGER PRIMARY KEY, log_entry_id INTEGER NOT NULL, overlay_type TEXT NOT NULL, payload_json TEXT NOT NULL, source_type TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
-	} {
-		if err := db.Exec(stmt).Error; err != nil {
-			t.Fatalf("Exec(%q): %v", stmt, err)
-		}
+	if err := db.AutoMigrate(
+		&storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{},
+		&storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{}, &storage.LogOverlay{},
+	); err != nil {
+		t.Fatalf("AutoMigrate: %v", err)
 	}
 
-	store := storage.NewTestStore(db)
-	setRuntimeTestField(t, store, "db", db)
-	return store
+	// Create default profile for session 1
+	db.Create(&storage.Profile{ID: 1, Name: "Default"})
+	db.Create(&storage.SessionProfile{SessionID: 1, ProfileID: 1, OrderIndex: 0})
+
+	return storage.NewTestStore(db)
 }
 
-func setRuntimeTestField(t *testing.T, target any, fieldName string, value any) {
-	t.Helper()
-	v := reflect.ValueOf(target).Elem().FieldByName(fieldName)
-	reflect.NewAt(v.Type(), unsafe.Pointer(v.UnsafeAddr())).Elem().Set(reflect.ValueOf(value))
-}
+

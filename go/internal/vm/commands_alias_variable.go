@@ -35,7 +35,11 @@ func (v *VM) cmdAlias(rest string) []Result {
 	}
 
 	if v.store != nil {
-		if err := v.store.SaveAlias(v.sessionID, name, template, true, "default"); err != nil {
+		pid := v.primaryProfileID()
+		if pid == 0 {
+			return echoResults([]string{"#alias: save error: no primary profile found"})
+		}
+		if err := v.store.SaveAlias(pid, name, template, true, "default"); err != nil {
 			return echoResults([]string{fmt.Sprintf("#alias: save error: %v", err)})
 		}
 		v.ensureFresh()
@@ -51,10 +55,15 @@ func (v *VM) cmdUnalias(rest string) []Result {
 	if name == "" {
 		return echoResults([]string{"#unalias: usage: #unalias {name}"})
 	}
-	if err := v.store.DeleteAlias(v.sessionID, name); err != nil {
-		return echoResults([]string{fmt.Sprintf("#unalias: error: %v", err)})
+	if v.store != nil {
+		pid := v.primaryProfileID()
+		if pid != 0 {
+			if err := v.store.DeleteAlias(pid, name); err != nil {
+				return echoResults([]string{fmt.Sprintf("#unalias: error: %v", err)})
+			}
+			v.ensureFresh()
+		}
 	}
-	v.ensureFresh()
 	return echoResults([]string{fmt.Sprintf("#unalias: %s removed", name)})
 }
 

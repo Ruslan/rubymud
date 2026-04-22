@@ -17,7 +17,6 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/gorilla/websocket"
 
-	"rubymud/go/internal/config"
 	"rubymud/go/internal/session"
 	"rubymud/go/internal/storage"
 )
@@ -31,7 +30,6 @@ type Server struct {
 	httpServer *http.Server
 	manager    *session.Manager
 	store      *storage.Store
-	hotkeys    []config.Hotkey
 	upgrader   websocket.Upgrader
 	apiToken   string
 }
@@ -43,7 +41,7 @@ type clientMessage struct {
 	SessID int64  `json:"sess_id"`
 }
 
-func New(listenAddr string, manager *session.Manager, store *storage.Store, hotkeys []config.Hotkey) *Server {
+func New(listenAddr string, manager *session.Manager, store *storage.Store) *Server {
 	log.Printf("creating web server on %s", listenAddr)
 
 	apiToken, _ := store.GetSetting("api_token")
@@ -57,7 +55,6 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, hotk
 	s := &Server{
 		manager:  manager,
 		store:    store,
-		hotkeys:  hotkeys,
 		apiToken: apiToken,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
@@ -73,19 +70,14 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, hotk
 	// Token protection: check X-Session-Token header
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip check for non-API routes (static files, index)
 			if !strings.HasPrefix(r.URL.Path, "/api") && r.URL.Path != "/ws" {
 				next.ServeHTTP(w, r)
 				return
 			}
-
-			// Validate token
 			token := r.Header.Get("X-Session-Token")
 			if token == "" {
-				// Also check query param for WebSockets
 				token = r.URL.Query().Get("token")
 			}
-
 			if token != s.apiToken {
 				http.Error(w, "Unauthorized: Invalid or missing session token", http.StatusUnauthorized)
 				return
@@ -119,36 +111,62 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, hotk
 					r.Post("/", s.setVariable)
 					r.Delete("/{key}", s.deleteVariable)
 				})
-				r.Route("/aliases", func(r chi.Router) {
-					r.Get("/", s.listAliases)
-					r.Post("/", s.createAlias)
-					r.Route("/{id}", func(r chi.Router) {
-						r.Put("/", s.updateAlias)
-						r.Delete("/", s.deleteAlias)
-					})
-				})
-				r.Route("/triggers", func(r chi.Router) {
-					r.Get("/", s.listTriggers)
-					r.Post("/", s.createTrigger)
-					r.Route("/{id}", func(r chi.Router) {
-						r.Put("/", s.updateTrigger)
-						r.Delete("/", s.deleteTrigger)
-					})
-				})
-				r.Route("/highlights", func(r chi.Router) {
-					r.Get("/", s.listHighlights)
-					r.Post("/", s.createHighlight)
-					r.Route("/{id}", func(r chi.Router) {
-						r.Put("/", s.updateHighlight)
-						r.Delete("/", s.deleteHighlight)
-					})
-				})
-				r.Route("/groups", func(r chi.Router) {
-					r.Get("/", s.listGroups)
-					r.Post("/toggle", s.toggleGroup)
+
+				r.Route("/profiles", func(r chi.Router) {
+					r.Get("/", s.listSessionProfiles)
+					r.Post("/", s.addProfileToSession)
+					r.Put("/reorder", s.reorderSessionProfiles)
+					r.Delete("/{profileID}", s.removeProfileFromSession)
 				})
 			})
 		})
+
+		r.Route("/profiles", func(r chi.Router) {
+			r.Get("/", s.listProfiles)
+			r.Post("/", s.createProfile)
+			r.Route("/{profileID}", func(r chi.Router) {
+				r.Put("/", s.updateProfile)
+				r.Delete("/", s.deleteProfile)
+				
+				r.Route("/aliases", func(r chi.Router) {
+					r.Get("/", s.listProfileAliases)
+					r.Post("/", s.createProfileAlias)
+					r.Route("/{id}", func(r chi.Router) {
+						r.Put("/", s.updateProfileAlias)
+						r.Delete("/", s.deleteProfileAlias)
+					})
+				})
+				r.Route("/triggers", func(r chi.Router) {
+					r.Get("/", s.listProfileTriggers)
+					r.Post("/", s.createProfileTrigger)
+					r.Route("/{id}", func(r chi.Router) {
+						r.Put("/", s.updateProfileTrigger)
+						r.Delete("/", s.deleteProfileTrigger)
+					})
+				})
+				r.Route("/highlights", func(r chi.Router) {
+					r.Get("/", s.listProfileHighlights)
+					r.Post("/", s.createProfileHighlight)
+					r.Route("/{id}", func(r chi.Router) {
+						r.Put("/", s.updateProfileHighlight)
+						r.Delete("/", s.deleteProfileHighlight)
+					})
+				})
+				r.Route("/hotkeys", func(r chi.Router) {
+					r.Get("/", s.listProfileHotkeys)
+					r.Post("/", s.createProfileHotkey)
+					r.Route("/{id}", func(r chi.Router) {
+						r.Put("/", s.updateProfileHotkey)
+						r.Delete("/", s.deleteProfileHotkey)
+					})
+				})
+				r.Route("/groups", func(r chi.Router) {
+					r.Get("/", s.listProfileGroups)
+					r.Post("/toggle", s.toggleProfileGroup)
+				})
+			})
+		})
+
 		r.Route("/app", func(r chi.Router) {
 			r.Get("/settings", s.getAppSettings)
 			r.Post("/settings/rotate-api-token", s.rotateAPIToken)
@@ -179,7 +197,6 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	content, err := webFiles.ReadFile("static/" + path)
 	if err != nil {
-		// If not found, serve index.html
 		content, err = webFiles.ReadFile("static/index.html")
 		if err != nil {
 			http.Error(w, "failed to load web assets", http.StatusInternalServerError)
@@ -195,8 +212,6 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 		w.Write([]byte(html))
 		return
 	}
-
-	// For other files, serve normally
 	http.ServeContent(w, r, path, time.Now(), strings.NewReader(string(content)))
 }
 
@@ -206,7 +221,6 @@ func (s *Server) handleSettingsIndex(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to load web assets", http.StatusInternalServerError)
 		return
 	}
-
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	tokenTag := "<script>window.API_TOKEN=\"" + s.apiToken + "\"</script>"
 	html := strings.Replace(string(content), "<!-- %TOKEN% -->", tokenTag, 1)
@@ -218,21 +232,17 @@ func sameOriginRequest(r *http.Request) bool {
 	if origin == "" {
 		return true
 	}
-
 	originURL, err := url.Parse(origin)
 	if err != nil {
 		return false
 	}
-
 	if !strings.EqualFold(originURL.Host, r.Host) {
 		return false
 	}
-
 	requestScheme := forwardedScheme(r)
 	if requestScheme == "" {
 		return true
 	}
-
 	return strings.EqualFold(originURL.Scheme, requestScheme)
 }
 
@@ -257,6 +267,23 @@ func (s *Server) getSession(r *http.Request) (*session.Session, int64, error) {
 	}
 	sess, _ := s.manager.GetSession(id)
 	return sess, id, nil
+}
+
+func (s *Server) getProfileID(r *http.Request) (int64, error) {
+	idStr := chi.URLParam(r, "profileID")
+	if idStr == "" {
+		return 0, nil
+	}
+	return strconv.ParseInt(idStr, 10, 64)
+}
+
+func (s *Server) notifyProfileChanged(profileID int64, domain string) {
+	sessionIDs, _ := s.store.GetSessionIDsForProfile(profileID)
+	for _, id := range sessionIDs {
+		if sess, ok := s.manager.GetSession(id); ok {
+			sess.NotifySettingsChanged(domain)
+		}
+	}
 }
 
 // App Settings
@@ -284,7 +311,7 @@ func (s *Server) rotateAPIToken(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// Variables
+// Session Variables
 
 func (s *Server) listVariables(w http.ResponseWriter, r *http.Request) {
 	_, id, err := s.getSession(r)
@@ -350,15 +377,160 @@ func (s *Server) deleteVariable(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Aliases
+// Session Profiles
 
-func (s *Server) listAliases(w http.ResponseWriter, r *http.Request) {
+func (s *Server) listSessionProfiles(w http.ResponseWriter, r *http.Request) {
 	_, id, err := s.getSession(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	aliases, err := s.store.ListAliases(id)
+	profiles, err := s.store.GetSessionProfiles(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(profiles)
+}
+
+func (s *Server) addProfileToSession(w http.ResponseWriter, r *http.Request) {
+	sess, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var req struct {
+		ProfileID  int64 `json:"profile_id"`
+		OrderIndex int   `json:"order_index"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.store.AddProfileToSession(id, req.ProfileID, req.OrderIndex); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if sess != nil {
+		sess.NotifySettingsChanged("profiles")
+	}
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (s *Server) reorderSessionProfiles(w http.ResponseWriter, r *http.Request) {
+	sess, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var req []storage.ProfileOrder
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.store.ReorderSessionProfiles(id, req); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if sess != nil {
+		sess.NotifySettingsChanged("profiles")
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) removeProfileFromSession(w http.ResponseWriter, r *http.Request) {
+	sess, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	profileID, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.store.RemoveProfileFromSession(id, profileID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if sess != nil {
+		sess.NotifySettingsChanged("profiles")
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Profiles CRUD
+
+func (s *Server) listProfiles(w http.ResponseWriter, r *http.Request) {
+	profiles, err := s.store.ListProfiles()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(profiles)
+}
+
+func (s *Server) createProfile(w http.ResponseWriter, r *http.Request) {
+	var req storage.Profile
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	p, err := s.store.CreateProfile(req.Name, req.Description)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(p)
+}
+
+func (s *Server) updateProfile(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var req storage.Profile
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	req.ID = pid
+	if err := s.store.UpdateProfile(req); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.notifyProfileChanged(pid, "profiles")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteProfile(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.store.DeleteProfile(pid); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.notifyProfileChanged(pid, "profiles")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Profile Aliases
+
+func (s *Server) listProfileAliases(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	aliases, err := s.store.ListAliases(pid)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -367,8 +539,8 @@ func (s *Server) listAliases(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(aliases)
 }
 
-func (s *Server) createAlias(w http.ResponseWriter, r *http.Request) {
-	sess, id, err := s.getSession(r)
+func (s *Server) createProfileAlias(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -378,18 +550,16 @@ func (s *Server) createAlias(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.store.SaveAlias(id, a.Name, a.Template, a.Enabled, a.GroupName); err != nil {
+	if err := s.store.SaveAlias(pid, a.Name, a.Template, a.Enabled, a.GroupName); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if sess != nil {
-		sess.NotifySettingsChanged("aliases")
-	}
+	s.notifyProfileChanged(pid, "aliases")
 	w.WriteHeader(http.StatusCreated)
 }
 
-func (s *Server) updateAlias(w http.ResponseWriter, r *http.Request) {
-	sess, sessionID, err := s.getSession(r)
+func (s *Server) updateProfileAlias(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -403,19 +573,17 @@ func (s *Server) updateAlias(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.ID = id
-	a.SessionID = sessionID
+	a.ProfileID = pid
 	if err := s.store.UpdateAlias(a); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if sess != nil {
-		sess.NotifySettingsChanged("aliases")
-	}
+	s.notifyProfileChanged(pid, "aliases")
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) deleteAlias(w http.ResponseWriter, r *http.Request) {
-	sess, sessionID, err := s.getSession(r)
+func (s *Server) deleteProfileAlias(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -423,25 +591,23 @@ func (s *Server) deleteAlias(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, _ := strconv.ParseInt(idStr, 10, 64)
 
-	if err := s.store.DeleteAliasByID(id, sessionID); err != nil {
+	if err := s.store.DeleteAliasByID(id, pid); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if sess != nil {
-		sess.NotifySettingsChanged("aliases")
-	}
+	s.notifyProfileChanged(pid, "aliases")
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Triggers
+// Profile Triggers
 
-func (s *Server) listTriggers(w http.ResponseWriter, r *http.Request) {
-	_, id, err := s.getSession(r)
+func (s *Server) listProfileTriggers(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	triggers, err := s.store.ListTriggers(id)
+	triggers, err := s.store.ListTriggers(pid)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -450,8 +616,8 @@ func (s *Server) listTriggers(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(triggers)
 }
 
-func (s *Server) createTrigger(w http.ResponseWriter, r *http.Request) {
-	sess, id, err := s.getSession(r)
+func (s *Server) createProfileTrigger(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -461,19 +627,17 @@ func (s *Server) createTrigger(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	t.SessionID = id
+	t.ProfileID = pid
 	if err := s.store.CreateTrigger(t); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if sess != nil {
-		sess.NotifySettingsChanged("triggers")
-	}
+	s.notifyProfileChanged(pid, "triggers")
 	w.WriteHeader(http.StatusCreated)
 }
 
-func (s *Server) updateTrigger(w http.ResponseWriter, r *http.Request) {
-	sess, sessionID, err := s.getSession(r)
+func (s *Server) updateProfileTrigger(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -487,19 +651,17 @@ func (s *Server) updateTrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t.ID = id
-	t.SessionID = sessionID
+	t.ProfileID = pid
 	if err := s.store.UpdateTrigger(t); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if sess != nil {
-		sess.NotifySettingsChanged("triggers")
-	}
+	s.notifyProfileChanged(pid, "triggers")
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) deleteTrigger(w http.ResponseWriter, r *http.Request) {
-	sess, sessionID, err := s.getSession(r)
+func (s *Server) deleteProfileTrigger(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -507,25 +669,23 @@ func (s *Server) deleteTrigger(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, _ := strconv.ParseInt(idStr, 10, 64)
 
-	if err := s.store.DeleteTriggerByID(id, sessionID); err != nil {
+	if err := s.store.DeleteTriggerByID(id, pid); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if sess != nil {
-		sess.NotifySettingsChanged("triggers")
-	}
+	s.notifyProfileChanged(pid, "triggers")
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Highlights
+// Profile Highlights
 
-func (s *Server) listHighlights(w http.ResponseWriter, r *http.Request) {
-	_, id, err := s.getSession(r)
+func (s *Server) listProfileHighlights(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	highlights, err := s.store.ListHighlights(id)
+	highlights, err := s.store.ListHighlights(pid)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -534,8 +694,8 @@ func (s *Server) listHighlights(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(highlights)
 }
 
-func (s *Server) createHighlight(w http.ResponseWriter, r *http.Request) {
-	sess, id, err := s.getSession(r)
+func (s *Server) createProfileHighlight(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -545,19 +705,17 @@ func (s *Server) createHighlight(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	h.SessionID = id
+	h.ProfileID = pid
 	if err := s.store.CreateHighlight(h); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if sess != nil {
-		sess.NotifySettingsChanged("highlights")
-	}
+	s.notifyProfileChanged(pid, "highlights")
 	w.WriteHeader(http.StatusCreated)
 }
 
-func (s *Server) updateHighlight(w http.ResponseWriter, r *http.Request) {
-	sess, sessionID, err := s.getSession(r)
+func (s *Server) updateProfileHighlight(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -571,19 +729,17 @@ func (s *Server) updateHighlight(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.ID = id
-	h.SessionID = sessionID
+	h.ProfileID = pid
 	if err := s.store.UpdateHighlight(h); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if sess != nil {
-		sess.NotifySettingsChanged("highlights")
-	}
+	s.notifyProfileChanged(pid, "highlights")
 	w.WriteHeader(http.StatusNoContent)
 }
 
-func (s *Server) deleteHighlight(w http.ResponseWriter, r *http.Request) {
-	sess, sessionID, err := s.getSession(r)
+func (s *Server) deleteProfileHighlight(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -591,25 +747,101 @@ func (s *Server) deleteHighlight(w http.ResponseWriter, r *http.Request) {
 	idStr := chi.URLParam(r, "id")
 	id, _ := strconv.ParseInt(idStr, 10, 64)
 
-	if err := s.store.DeleteHighlightByID(id, sessionID); err != nil {
+	if err := s.store.DeleteHighlightByID(id, pid); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if sess != nil {
-		sess.NotifySettingsChanged("highlights")
-	}
+	s.notifyProfileChanged(pid, "highlights")
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Groups
+// Profile Hotkeys
 
-func (s *Server) listGroups(w http.ResponseWriter, r *http.Request) {
-	_, id, err := s.getSession(r)
+func (s *Server) listProfileHotkeys(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	groups, err := s.store.ListRuleGroups(id)
+	hotkeys, err := s.store.ListHotkeys(pid)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(hotkeys)
+}
+
+func (s *Server) createProfileHotkey(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var h storage.HotkeyRule
+	if err := json.NewDecoder(r.Body).Decode(&h); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	_, err = s.store.CreateHotkey(pid, h.Shortcut, h.Command)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.notifyProfileChanged(pid, "hotkeys")
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (s *Server) updateProfileHotkey(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	id, _ := strconv.ParseInt(idStr, 10, 64)
+
+	var h storage.HotkeyRule
+	if err := json.NewDecoder(r.Body).Decode(&h); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	h.ID = id
+	h.ProfileID = pid
+	if err := s.store.UpdateHotkey(h); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.notifyProfileChanged(pid, "hotkeys")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteProfileHotkey(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	id, _ := strconv.ParseInt(idStr, 10, 64)
+
+	if err := s.store.DeleteHotkeyByID(id, pid); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.notifyProfileChanged(pid, "hotkeys")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Profile Groups
+
+func (s *Server) listProfileGroups(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	groups, err := s.store.ListRuleGroups(pid)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -618,8 +850,8 @@ func (s *Server) listGroups(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(groups)
 }
 
-func (s *Server) toggleGroup(w http.ResponseWriter, r *http.Request) {
-	sess, id, err := s.getSession(r)
+func (s *Server) toggleProfileGroup(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -637,17 +869,15 @@ func (s *Server) toggleGroup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing domain", http.StatusBadRequest)
 		return
 	}
-	if err := s.store.SetGroupEnabled(id, strings.TrimSpace(payload.Domain), strings.TrimSpace(payload.GroupName), payload.Enabled); err != nil {
+	if err := s.store.SetGroupEnabled(pid, strings.TrimSpace(payload.Domain), strings.TrimSpace(payload.GroupName), payload.Enabled); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if sess != nil {
-		sess.NotifySettingsChanged(strings.TrimSpace(payload.Domain))
-	}
+	s.notifyProfileChanged(pid, strings.TrimSpace(payload.Domain))
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// Sessions
+// Sessions Base Methods
 
 func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 	sessions, err := s.manager.ListSessions()
@@ -737,6 +967,8 @@ func (s *Server) disconnectSession(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// Websockets
+
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	log.Printf("websocket connect requested: remote=%s path=%s", r.RemoteAddr, r.URL.Path)
 	ws, err := s.upgrader.Upgrade(w, r, nil)
@@ -767,7 +999,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		_ = ws.Close()
 	}()
 
-	// Try to attach to session if ID provided in query
 	sessIDStr := r.URL.Query().Get("session_id")
 	if sessIDStr != "" {
 		if id, err := strconv.ParseInt(sessIDStr, 10, 64); err == nil {
@@ -777,7 +1008,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Send status reflecting actual attach state
 	var initialStatus string
 	switch {
 	case currentSess != nil:
@@ -792,7 +1022,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send restore state and attach client
 	if currentSess != nil {
 		if err := s.sendRestoreState(currentSess, writeJSON); err != nil {
 			log.Printf("websocket restore state failed: %v", err)
@@ -890,9 +1119,13 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 		return err
 	}
 	begin.Variables = variables
-	for _, hk := range s.hotkeys {
+	
+	profileIDs, _ := s.store.GetOrderedProfileIDs(sess.SessionID())
+	hotkeys, _ := s.store.LoadHotkeysForProfiles(profileIDs)
+	for _, hk := range hotkeys {
 		begin.Hotkeys = append(begin.Hotkeys, session.HotkeyJSON{Shortcut: hk.Shortcut, Command: hk.Command})
 	}
+	
 	if err := writeJSON(begin); err != nil {
 		return err
 	}

@@ -4,7 +4,8 @@ import "errors"
 
 type HighlightRule struct {
 	ID            int64      `gorm:"primaryKey" json:"id"`
-	SessionID     int64      `json:"session_id"`
+	ProfileID     int64      `json:"profile_id"`
+	Position      int        `json:"position"`
 	Pattern       string     `json:"pattern"`
 	FG            string     `json:"fg"`
 	BG            string     `json:"bg"`
@@ -24,9 +25,9 @@ func (s *HighlightRule) TableName() string {
 	return "highlight_rules"
 }
 
-func (s *Store) ListHighlights(sessionID int64) ([]HighlightRule, error) {
+func (s *Store) ListHighlights(profileID int64) ([]HighlightRule, error) {
 	var highlights []HighlightRule
-	err := s.db.Where("session_id = ?", sessionID).Order("id").Find(&highlights).Error
+	err := s.db.Where("profile_id = ?", profileID).Order("position ASC").Find(&highlights).Error
 	return highlights, err
 }
 
@@ -41,6 +42,11 @@ func (s *Store) CreateHighlight(h HighlightRule) error {
 		h.GroupName = "default"
 	}
 	h.UpdatedAt = nowSQLiteTime()
+	if h.Position == 0 {
+		var maxPos int
+		s.db.Model(&HighlightRule{}).Where("profile_id = ?", h.ProfileID).Select("COALESCE(MAX(position), 0)").Scan(&maxPos)
+		h.Position = maxPos + 1
+	}
 	return s.db.Create(&h).Error
 }
 
@@ -50,8 +56,9 @@ func (s *Store) UpdateHighlight(h HighlightRule) error {
 	}
 	h.UpdatedAt = nowSQLiteTime()
 	result := s.db.Model(&HighlightRule{}).
-		Where("id = ? AND session_id = ?", h.ID, h.SessionID).
+		Where("id = ? AND profile_id = ?", h.ID, h.ProfileID).
 		Updates(map[string]interface{}{
+			"position":      h.Position,
 			"pattern":       h.Pattern,
 			"fg":            h.FG,
 			"bg":            h.BG,
@@ -75,8 +82,8 @@ func (s *Store) UpdateHighlight(h HighlightRule) error {
 	return nil
 }
 
-func (s *Store) DeleteHighlightByID(id, sessionID int64) error {
-	result := s.db.Where("id = ? AND session_id = ?", id, sessionID).Delete(&HighlightRule{})
+func (s *Store) DeleteHighlightByID(id, profileID int64) error {
+	result := s.db.Where("id = ? AND profile_id = ?", id, profileID).Delete(&HighlightRule{})
 	if result.Error != nil {
 		return result.Error
 	}
@@ -86,28 +93,37 @@ func (s *Store) DeleteHighlightByID(id, sessionID int64) error {
 	return nil
 }
 
-func (s *Store) LoadHighlights(sessionID int64) ([]HighlightRule, error) {
+func (s *Store) LoadHighlightsForProfiles(profileIDs []int64) ([]HighlightRule, error) {
 	var highlights []HighlightRule
-	err := s.db.Where("session_id = ? AND enabled = ?", sessionID, true).Order("id").Find(&highlights).Error
+	if len(profileIDs) == 0 {
+		return highlights, nil
+	}
+	err := s.db.Where("profile_id IN ? AND enabled = ?", profileIDs, true).Order("position ASC").Find(&highlights).Error
 	return highlights, err
 }
 
-func (s *Store) SaveHighlight(sessionID int64, h HighlightRule) error {
-	h.SessionID = sessionID
+func (s *Store) SaveHighlight(profileID int64, h HighlightRule) error {
+	h.ProfileID = profileID
 	if h.GroupName == "" {
 		h.GroupName = "default"
 	}
 	h.UpdatedAt = nowSQLiteTime()
 	// UPSERT by pattern
 	var existing HighlightRule
-	err := s.db.Where("session_id = ? AND pattern = ?", sessionID, h.Pattern).First(&existing).Error
+	err := s.db.Where("profile_id = ? AND pattern = ?", profileID, h.Pattern).First(&existing).Error
 	if err == nil {
 		h.ID = existing.ID
+		h.Position = existing.Position
 		return s.db.Save(&h).Error
 	}
+
+	var maxPos int
+	s.db.Model(&HighlightRule{}).Where("profile_id = ?", profileID).Select("COALESCE(MAX(position), 0)").Scan(&maxPos)
+	h.Position = maxPos + 1
+
 	return s.db.Create(&h).Error
 }
 
-func (s *Store) DeleteHighlight(sessionID int64, pattern string) error {
-	return s.db.Where("session_id = ? AND pattern = ?", sessionID, pattern).Delete(&HighlightRule{}).Error
+func (s *Store) DeleteHighlight(profileID int64, pattern string) error {
+	return s.db.Where("profile_id = ? AND pattern = ?", profileID, pattern).Delete(&HighlightRule{}).Error
 }

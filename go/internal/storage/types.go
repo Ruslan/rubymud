@@ -67,3 +67,26 @@ type LogEntry struct {
 type commandOverlayPayload struct {
 	Command string `json:"command"`
 }
+
+type Profile struct {
+	ID          int64      `gorm:"primaryKey" json:"id"`
+	Name        string     `json:"name"`
+	Description string     `json:"description"`
+	CreatedAt   SQLiteTime `json:"created_at"`
+}
+
+type SessionProfile struct {
+	ID         int64 `gorm:"primaryKey"`
+	SessionID  int64 `gorm:"uniqueIndex:idx_session_profile" json:"session_id"`
+	ProfileID  int64 `gorm:"uniqueIndex:idx_session_profile" json:"profile_id"`
+	OrderIndex int   `json:"order_index"`
+}
+
+type HotkeyRule struct {
+	ID        int64  `gorm:"primaryKey" json:"id"`
+	ProfileID int64  `json:"profile_id"`
+	Position  int    `json:"position"`
+	Shortcut  string `json:"shortcut"`
+	Command   string `json:"command"`
+}
+

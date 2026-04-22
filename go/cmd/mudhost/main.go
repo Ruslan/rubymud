@@ -27,7 +27,12 @@ func main() {
 		log.Fatalf("failed to create data directory %s: %v", dataDir, err)
 	}
 
-	store, err := storage.Open(*dbPath)
+	hotkeys, err := config.LoadHotkeys(*configPath)
+	if err != nil {
+		log.Printf("load hotkeys warning: %v", err)
+	}
+
+	store, err := storage.Open(*dbPath, hotkeys)
 	if err != nil {
 		log.Fatalf("open storage: %v", err)
 	}
@@ -52,12 +57,7 @@ func main() {
 		}
 	}
 
-	hotkeys, err := config.LoadHotkeys(*configPath)
-	if err != nil {
-		log.Printf("load hotkeys warning: %v", err)
-	}
-
-	server := web.New(*listenAddr, manager, store, hotkeys)
+	server := web.New(*listenAddr, manager, store)
 	log.Printf("mudhost listening on %s using db %s", *listenAddr, *dbPath)
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("web server failed: %v", err)

@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(grep -n \"GetOrderedProfileIDs\\\\|GetPrimaryProfileID\" go/internal/storage/*.go)",
+      "Bash(grep:*)",
+      "Bash(go test:*)"
+    ]
+  }
+}
