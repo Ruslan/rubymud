@@ -3,6 +3,8 @@
 tmp/
 log/
 data/
+bin/*
+!bin/.keep
 
 # Ruby artifacts (legacy)
 config.rb
@@ -11,9 +13,6 @@ log.jsonl
 history.jsonl
 
 # Go artifacts
-mudhost
-server.exe
-mud-mux
 
 # Node / UI
 node_modules/

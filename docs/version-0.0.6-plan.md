@@ -30,6 +30,7 @@ Target user flow:
 2. Create SQLite DB automatically if it does not exist.
 3. Apply schema/migrations automatically at startup.
 4. Start cleanly without requiring the user to run helper commands first.
+5. Generate a persisted per-installation API key for external REST/WebSocket access.
 
 ### Sessions Backend
 
@@ -50,6 +51,15 @@ Target user flow:
 4. User can connect/disconnect/reconnect from the UI.
 5. UI clearly shows when no session is currently connected.
 
+### API Access
+
+1. Keep the embedded browser UI working without manual auth setup.
+2. Add a persisted per-installation API key stored locally, not hardcoded in the binary.
+3. Allow external REST clients to authenticate with that API key.
+4. Allow external WebSocket clients to authenticate with that API key.
+5. Expose the current API key in settings UI with an obvious copy path.
+6. Allow rotating the API key from the settings UI.
+
 ### Game UI Integration
 
 1. Game page must tolerate startup with no active MUD connection.
@@ -64,6 +74,7 @@ Target user flow:
 4. User can connect to that session without editing CLI flags or files.
 5. Disconnect and reconnect are real operations, not UI stubs.
 6. Existing restore/log/history behavior still works after reconnect.
+7. User can retrieve and use the local API key for direct REST access when needed.
 
 ## Non-Goals
 
@@ -78,3 +89,4 @@ Target user flow:
 2. Keep the final release as a single executable serving embedded frontend assets.
 3. Prefer a minimal `SessionManager` rather than scattering lifecycle logic across web handlers.
 4. Do not fake connect/reconnect behavior in the UI before the runtime actually supports it.
+5. The API key should be installation-specific and persisted locally, not shared across all binaries.

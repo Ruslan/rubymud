@@ -19,6 +19,20 @@ The current runtime is Go-based. The browser UI source of truth lives in `ui/` a
 - Node.js + npm
 - `sqlite3`
 
+## First-Time Setup
+
+Install frontend dependencies once after cloning:
+
+```bash
+make ui-install
+```
+
+Or manually:
+
+```bash
+cd ui && npm install
+```
+
 ## Running
 
 Start the app against a MUD server:
@@ -43,10 +57,18 @@ Build the frontend assets and the Go binary:
 make build
 ```
 
+This writes the compiled binary to `bin/mudhost`.
+
 Build only the frontend assets:
 
 ```bash
 make ui
+```
+
+Run the Go server directly without `make`:
+
+```bash
+cd go && go run ./cmd/mudhost --mud "rmud.org:4000" --listen ":8080" --db "../data/mudhost.db"
 ```
 
 ## Testing
@@ -61,3 +83,25 @@ make test
 
 - The generated Vite assets in `go/internal/web/static/` are derived artifacts, not the frontend source of truth
 - If the browser UI looks stale after frontend changes, rebuild with `make ui` or `make run` and hard-refresh the page
+
+## Troubleshooting
+
+### `vite: command not found`
+
+The frontend dependencies have not been installed yet.
+
+```bash
+make ui-install
+```
+
+Then rerun `make ui`, `make build`, or `make run`.
+
+### `go run ./cmd/mudhost`: directory not found
+
+The Go entrypoint lives at `go/cmd/mudhost/main.go` and should be run as a package from the `go/` module root:
+
+```bash
+cd go && go run ./cmd/mudhost
+```
+
+Compiled binaries are written to `bin/`, not next to the source package.
