@@ -65,6 +65,15 @@
     command: string;
   }
 
+  interface ProfileVariable {
+    id?: number;
+    position?: number;
+    name: string;
+    default_value: string;
+    description: string;
+  }
+
+
   interface RuleGroupSummary {
     domain: string;
     group_name: string;
@@ -105,6 +114,7 @@
     { id: 'sessions', label: 'Sessions' },
     { id: 'profiles', label: 'Profiles' },
     { id: 'variables', label: 'Variables' },
+    { id: 'declared_variables', label: 'Declared Vars' },
     { id: 'aliases', label: 'Aliases' },
     { id: 'triggers', label: 'Triggers' },
     { id: 'highlights', label: 'Highlights' },
@@ -151,6 +161,12 @@
   let hotkeys: Hotkey[] = [];
   const defaultHotkey = (): Hotkey => ({ shortcut: '', command: '' });
   let hotkeyEditor: Hotkey = defaultHotkey();
+
+  // Profile Variables State
+  let profileVariables: ProfileVariable[] = [];
+  const defaultProfileVariable = (): ProfileVariable => ({ name: '', default_value: '', description: '' });
+  let profileVariableEditor: ProfileVariable = defaultProfileVariable();
+
 
   // Groups State
   let groups: RuleGroupSummary[] = [];
@@ -257,14 +273,16 @@
       } else if (currentTab === 'variables' && selectedSessionID) {
         const varRes = await fetch(`/api/sessions/${selectedSessionID}/variables`, { headers });
         variables = await varRes.json() || [];
-      } else if (['aliases', 'triggers', 'highlights', 'hotkeys', 'groups'].includes(currentTab) && selectedProfileID) {
-        const res = await fetch(`/api/profiles/${selectedProfileID}/${currentTab}`, { headers });
+      } else if (['aliases', 'triggers', 'highlights', 'hotkeys', 'groups', 'declared_variables'].includes(currentTab) && selectedProfileID) {
+        const endpoint = currentTab === 'declared_variables' ? 'variables' : currentTab;
+        const res = await fetch(`/api/profiles/${selectedProfileID}/${endpoint}`, { headers });
         const data = await res.json() || [];
         if (currentTab === 'aliases') aliases = data;
         else if (currentTab === 'triggers') triggers = data;
         else if (currentTab === 'highlights') highlights = data;
         else if (currentTab === 'hotkeys') hotkeys = data;
         else if (currentTab === 'groups') groups = data;
+        else if (currentTab === 'declared_variables') profileVariables = data;
       }
     } catch (e) {
       console.error(`Failed to fetch data`, e);
@@ -283,8 +301,9 @@
     
     if (domain === 'variables' && selectedSessionID) {
       url = `/api/sessions/${selectedSessionID}/variables`;
-    } else if (['aliases', 'triggers', 'highlights', 'hotkeys'].includes(domain) && selectedProfileID) {
-      url = `/api/profiles/${selectedProfileID}/${domain}`;
+    } else if (['aliases', 'triggers', 'highlights', 'hotkeys', 'declared_variables'].includes(domain) && selectedProfileID) {
+      const endpoint = domain === 'declared_variables' ? 'variables' : domain;
+      url = `/api/profiles/${selectedProfileID}/${endpoint}`;
       if (isUpdate) url += `/${item.id}`;
     } else if (domain === 'sessions' && isUpdate) {
       url += `/${item.id}`;
@@ -312,6 +331,7 @@
     if (domain === 'triggers') return !item.pattern?.trim() ? 'Trigger pattern is required.' : (!item.command?.trim() ? 'Trigger command is required.' : '');
     if (domain === 'highlights') return !item.pattern?.trim() ? 'Highlight pattern is required.' : '';
     if (domain === 'hotkeys') return !item.shortcut?.trim() ? 'Shortcut is required.' : (!item.command?.trim() ? 'Command is required.' : '');
+    if (domain === 'declared_variables') return !item.name?.trim() ? 'Variable name is required.' : '';
     if (domain === 'sessions') return !item.name?.trim() ? 'Session name is required.' : (!item.mud_host?.trim() ? 'MUD host is required.' : (!item.mud_port ? 'MUD port is required.' : ''));
     if (domain === 'profiles') return !item.name?.trim() ? 'Profile name is required.' : '';
     return '';
@@ -324,8 +344,9 @@
     let url = `/api/${domain}/${id}`;
     if (domain === 'variables' && selectedSessionID) {
         url = `/api/sessions/${selectedSessionID}/variables/${encodeURIComponent(String(id))}`;
-    } else if (['aliases', 'triggers', 'highlights', 'hotkeys'].includes(domain) && selectedProfileID) {
-        url = `/api/profiles/${selectedProfileID}/${domain}/${id}`;
+    } else if (['aliases', 'triggers', 'highlights', 'hotkeys', 'declared_variables'].includes(domain) && selectedProfileID) {
+        const endpoint = domain === 'declared_variables' ? 'variables' : domain;
+        url = `/api/profiles/${selectedProfileID}/${endpoint}/${id}`;
     }
     await fetch(url, { method: 'DELETE', headers: { 'X-Session-Token': token } });
     await fetchData();
@@ -431,8 +452,7 @@
     const token = window.API_TOKEN || '';
     const res = await fetch('/api/profiles/import/all', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify({ session_id: selectedSessionID })
+      headers: { 'X-Session-Token': token }
     });
     if (!res.ok) { alert('Import failed: ' + await res.text()); return; }
     await fetchData();
@@ -459,6 +479,7 @@
     else if (domain === 'triggers') list = triggers;
     else if (domain === 'highlights') list = highlights;
     else if (domain === 'hotkeys') list = hotkeys;
+    else if (domain === 'declared_variables') list = profileVariables;
     
     const index = list.findIndex(x => x.id === item.id);
     if (index === -1 || index + direction < 0 || index + direction >= list.length) return;
@@ -475,9 +496,10 @@
     item.position = swapPos;
     swapWith.position = currentPos;
     
+    const endpoint = domain === 'declared_variables' ? 'variables' : domain;
     await Promise.all([
-      fetch(`/api/profiles/${selectedProfileID}/${domain}/${item.id}`, { method: 'PUT', headers, body: JSON.stringify(item) }),
-      fetch(`/api/profiles/${selectedProfileID}/${domain}/${swapWith.id}`, { method: 'PUT', headers, body: JSON.stringify(swapWith) })
+      fetch(`/api/profiles/${selectedProfileID}/${endpoint}/${item.id}`, { method: 'PUT', headers, body: JSON.stringify(item) }),
+      fetch(`/api/profiles/${selectedProfileID}/${endpoint}/${swapWith.id}`, { method: 'PUT', headers, body: JSON.stringify(swapWith) })
     ]);
     
     await fetchData();
@@ -584,6 +606,40 @@
           {/each}
         </tbody>
       </table>
+
+    {:else if currentTab === 'declared_variables'}
+      <header class="content-header"><h2>Declared Variables</h2><p class="description">Variables declared by profile {currentProfile?.name}.</p></header>
+      <div class="editor-box">
+        {#if formError}<div class="form-error">{formError}</div>{/if}
+        <div class="form-row">
+          <input type="text" bind:value={profileVariableEditor.name} placeholder="Name" required />
+          <input type="text" bind:value={profileVariableEditor.default_value} placeholder="Default Value" />
+          <input type="text" bind:value={profileVariableEditor.description} placeholder="Description" />
+          <button class="btn-primary" on:click={() => saveItem('declared_variables', profileVariableEditor, () => profileVariableEditor = defaultProfileVariable())}>
+            {profileVariableEditor.id ? 'Update' : 'Add'}
+          </button>
+        </div>
+      </div>
+      <table class="data-table">
+        <thead><tr><th style="width: 60px">Order</th><th>Name</th><th>Default Value</th><th>Description</th><th style="width: 140px">Actions</th></tr></thead>
+        <tbody>
+          {#each profileVariables as v, i}
+            <tr>
+              <td class="order-cell">
+                 <button class="btn-icon" disabled={i === 0} on:click={() => moveRule('declared_variables', v, -1)}>▲</button>
+                 <button class="btn-icon" disabled={i === profileVariables.length - 1} on:click={() => moveRule('declared_variables', v, 1)}>▼</button>
+              </td>
+              <td class="key-cell">{v.name}</td><td class="value-cell">{v.default_value || '-'}</td>
+              <td class="dim-cell">{v.description || '-'}</td>
+              <td class="actions-cell">
+                <button class="btn-link" on:click={() => profileVariableEditor = { ...v }}>Edit</button>
+                <button class="btn-link btn-danger" on:click={() => deleteItem('declared_variables', v.id!)}>Delete</button>
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+
 
     {:else if currentTab === 'aliases'}
       <header class="content-header"><h2>Aliases</h2><p class="description">Command shortcuts for profile {currentProfile?.name}.</p></header>

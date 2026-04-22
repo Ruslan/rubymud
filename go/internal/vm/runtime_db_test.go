@@ -94,6 +94,7 @@ func newRuntimeTestStore(t *testing.T) *storage.Store {
 	if err := db.AutoMigrate(
 		&storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{},
 		&storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{}, &storage.LogOverlay{},
+		&storage.ProfileVariable{},
 	); err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
 	}

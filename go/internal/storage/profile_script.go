@@ -12,13 +12,15 @@ import (
 )
 
 type ProfileScript struct {
-	Name        string
-	Description string
-	Aliases     []AliasRule
-	Triggers    []TriggerRule
-	Highlights  []HighlightRule
-	Hotkeys     []HotkeyRule
+	Name              string
+	Description       string
+	Aliases           []AliasRule
+	Triggers          []TriggerRule
+	Highlights        []HighlightRule
+	Hotkeys           []HotkeyRule
+	DeclaredVariables []ProfileVariable
 }
+
 
 func splitBraceArg(s string) (string, string) {
 	s = strings.TrimSpace(s)
@@ -78,6 +80,19 @@ func (s *Store) ExportProfileScript(profileID int64) (string, error) {
 	meta := map[string]string{"version": "1", "exported": time.Now().UTC().Format(time.RFC3339)}
 	metaJson, _ := json.Marshal(meta)
 	sb.WriteString(fmt.Sprintf("#nop rubymud:profile %s\n\n", string(metaJson)))
+
+	dvars, _ := s.ListProfileVariables(profileID)
+	if len(dvars) > 0 {
+		for _, dv := range dvars {
+			if dv.Description != "" {
+				meta := map[string]string{"description": dv.Description}
+				mj, _ := json.Marshal(meta)
+				sb.WriteString(fmt.Sprintf("#nop rubymud:rule %s\n", string(mj)))
+			}
+			sb.WriteString(fmt.Sprintf("#var {%s} {%s}\n", dv.Name, dv.DefaultValue))
+		}
+		sb.WriteString("\n")
+	}
 
 	aliases, _ := s.ListAliases(profileID)
 	if len(aliases) > 0 {
@@ -163,6 +178,7 @@ func ParseProfileScript(text string) (*ProfileScript, error) {
 	triggerPos := 1
 	hlPos := 1
 	hkPos := 1
+	varPos := 1
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -318,6 +334,26 @@ func ParseProfileScript(text string) (*ProfileScript, error) {
 				hkPos++
 			}
 			pendingMeta = nil
+		} else if strings.HasPrefix(line, "#var ") {
+			rest := strings.TrimSpace(strings.TrimPrefix(line, "#var "))
+			name, rest := splitBraceArg(rest)
+			defaultValue, _ := splitBraceArg(rest)
+
+			if name != "" {
+				dv := ProfileVariable{
+					Position:     varPos,
+					Name:         name,
+					DefaultValue: defaultValue,
+				}
+				if pendingMeta != nil {
+					if desc, ok := pendingMeta["description"].(string); ok {
+						dv.Description = desc
+					}
+				}
+				ps.DeclaredVariables = append(ps.DeclaredVariables, dv)
+				varPos++
+			}
+			pendingMeta = nil
 		}
 	}
 	return ps, nil
@@ -367,8 +403,18 @@ func (s *Store) ImportProfileScript(ps *ProfileScript) (Profile, error) {
 		if err := tx.Where("profile_id = ?", p.ID).Delete(&HotkeyRule{}).Error; err != nil {
 			return Profile{}, err
 		}
+		if err := tx.Where("profile_id = ?", p.ID).Delete(&ProfileVariable{}).Error; err != nil {
+			return Profile{}, err
+		}
 	}
 
+	for _, dv := range ps.DeclaredVariables {
+		dv.ProfileID = p.ID
+		dv.UpdatedAt = nowSQLiteTime()
+		if err := tx.Create(&dv).Error; err != nil {
+			return Profile{}, err
+		}
+	}
 	for _, a := range ps.Aliases {
 		a.ProfileID = p.ID
 		a.UpdatedAt = nowSQLiteTime()

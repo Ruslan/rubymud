@@ -1,7 +1,8 @@
 import type { AnsiUp } from 'ansi_up';
 
 import type { AppElements } from './dom';
-import type { Hotkey, LogEntry, Variable } from './types';
+import type { Hotkey, LogEntry, ResolvedVariable, Variable } from './types';
+import { fetchWithToken } from './dom';
 
 interface RendererState {
   activePanel: 'keyboard' | 'variables' | null;
@@ -73,7 +74,12 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     }
   }
 
-  function renderVariables(items: Variable[]) {
+  function renderVariables(items: (Variable | ResolvedVariable)[]) {
+    // Preserve focused input state so in-progress typing survives re-renders
+    const focused = document.activeElement as HTMLInputElement | null;
+    const focusedKey = focused?.dataset['varKey'] ?? null;
+    const focusedValue = focusedKey != null ? focused!.value : null;
+
     elements.variablesList.innerHTML = '';
 
     if (!items || !items.length) {
@@ -84,22 +90,119 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
       return;
     }
 
+    const params = new URLSearchParams(window.location.search);
+    const sessionID = params.get('session_id');
+
+    // Add "Fill Missing From Defaults" button if session is selected
+    if (sessionID) {
+      const header = document.createElement('div');
+      header.className = 'variables-header';
+      header.style.display = 'flex';
+      header.style.justifyContent = 'flex-end';
+      header.style.marginBottom = '10px';
+
+      const fillBtn = document.createElement('button');
+      fillBtn.className = 'btn-small';
+      fillBtn.textContent = 'Fill Defaults';
+      fillBtn.addEventListener('click', async () => {
+        for (const item of (items as ResolvedVariable[])) {
+          if (item.declared && item.default_value && !item.has_value) {
+            await fetchWithToken(`/api/sessions/${sessionID}/variables`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ key: item.name, value: item.default_value })
+            });
+          }
+        }
+        requestVariables();
+      });
+      header.appendChild(fillBtn);
+      elements.variablesList.appendChild(header);
+    }
+
     items.forEach((item) => {
+      const isResolved = 'name' in item;
+      const keyStr = isResolved ? (item as ResolvedVariable).name : (item as Variable).key;
+      const valStr = item.value || '';
+      const usesDefault = isResolved ? (item as ResolvedVariable).uses_default : false;
+      const isDeclared = isResolved ? (item as ResolvedVariable).declared : true;
+
       const row = document.createElement('div');
       row.className = 'variable-row';
+      if (usesDefault) row.classList.add('variable-row_default');
+      if (!isDeclared) row.classList.add('variable-row_undeclared');
 
       const key = document.createElement('div');
       key.className = 'variable-key';
-      key.textContent = `$${item.key}`;
+      key.textContent = `$${keyStr}`;
       row.appendChild(key);
 
-      const value = document.createElement('div');
-      value.className = 'variable-value';
-      value.textContent = item.value || '';
-      row.appendChild(value);
+      const valueContainer = document.createElement('div');
+      valueContainer.className = 'variable-value-container';
+      valueContainer.style.flex = '1';
+      valueContainer.style.display = 'flex';
+      valueContainer.style.gap = '8px';
 
+      const input = document.createElement('input');
+      input.type = 'text';
+      input.className = 'variable-input';
+      input.dataset['varKey'] = keyStr;
+      input.value = valStr;
+      if (usesDefault) {
+        input.placeholder = (item as ResolvedVariable).default_value;
+        input.value = '';
+      }
+      // Restore in-progress value if this was the focused field
+      if (keyStr === focusedKey && focusedValue !== null) {
+        input.value = focusedValue;
+      }
+      
+      input.addEventListener('keydown', async (e) => {
+        if (e.key === 'Enter') {
+          const newVal = input.value.trim();
+          if (!newVal) return; // empty = no-op; use Clear button to remove override
+          if (sessionID) {
+            await fetchWithToken(`/api/sessions/${sessionID}/variables`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ key: keyStr, value: newVal })
+            });
+            requestVariables();
+          }
+        }
+      });
+      valueContainer.appendChild(input);
+
+      if (isResolved && (item as ResolvedVariable).has_value) {
+        const clearBtn = document.createElement('button');
+        clearBtn.className = 'btn-clear';
+        clearBtn.innerHTML = '×';
+        clearBtn.title = 'Clear override';
+        clearBtn.addEventListener('click', async () => {
+          if (sessionID) {
+            await fetchWithToken(`/api/sessions/${sessionID}/variables/${encodeURIComponent(keyStr)}`, {
+              method: 'DELETE'
+            });
+            requestVariables();
+          }
+        });
+        valueContainer.appendChild(clearBtn);
+      }
+
+      row.appendChild(valueContainer);
       elements.variablesList.appendChild(row);
     });
+
+    // Restore focus to the previously active input
+    if (focusedKey != null) {
+      const restored = elements.variablesList.querySelector<HTMLInputElement>(`[data-var-key="${CSS.escape(focusedKey)}"]`);
+      if (restored) {
+        restored.focus();
+        // Move cursor to end
+        const len = restored.value.length;
+        restored.setSelectionRange(len, len);
+      }
+    }
   }
 
   function appendEntry(entry: LogEntry) {

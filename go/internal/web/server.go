@@ -110,6 +110,7 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 
 				r.Route("/variables", func(r chi.Router) {
 					r.Get("/", s.listVariables)
+					r.Get("/resolved", s.listResolvedVariables)
 					r.Post("/", s.setVariable)
 					r.Delete("/{key}", s.deleteVariable)
 				})
@@ -142,6 +143,14 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 					r.Route("/{id}", func(r chi.Router) {
 						r.Put("/", s.updateProfileAlias)
 						r.Delete("/", s.deleteProfileAlias)
+					})
+				})
+				r.Route("/variables", func(r chi.Router) {
+					r.Get("/", s.listProfileVariables)
+					r.Post("/", s.createProfileVariable)
+					r.Route("/{id}", func(r chi.Router) {
+						r.Put("/", s.updateProfileVariable)
+						r.Delete("/", s.deleteProfileVariable)
 					})
 				})
 				r.Route("/triggers", func(r chi.Router) {
@@ -1158,4 +1167,99 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 	}
 
 	return writeJSON(session.ServerMsg{Type: "restore_end"})
+}
+
+// Profile Variables
+
+func (s *Server) listProfileVariables(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	vars, err := s.store.ListProfileVariables(pid)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(vars)
+}
+
+func (s *Server) createProfileVariable(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var v storage.ProfileVariable
+	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	res, err := s.store.CreateProfileVariable(pid, v.Name, v.DefaultValue, v.Description)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.notifyProfileChanged(pid, "variables")
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(res)
+}
+
+func (s *Server) updateProfileVariable(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	id, _ := strconv.ParseInt(idStr, 10, 64)
+
+	var v storage.ProfileVariable
+	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	v.ID = id
+	v.ProfileID = pid
+	if err := s.store.UpdateProfileVariable(v); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.notifyProfileChanged(pid, "variables")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteProfileVariable(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	id, _ := strconv.ParseInt(idStr, 10, 64)
+
+	if err := s.store.DeleteProfileVariable(id, pid); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.notifyProfileChanged(pid, "variables")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) listResolvedVariables(w http.ResponseWriter, r *http.Request) {
+	_, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	vars, err := s.store.ListResolvedVariablesForSession(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(vars)
 }

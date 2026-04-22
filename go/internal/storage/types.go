@@ -90,3 +90,14 @@ type HotkeyRule struct {
 	Command   string `json:"command"`
 }
 
+type ProfileVariable struct {
+	ID           int64      `gorm:"primaryKey" json:"id"`
+	ProfileID    int64      `gorm:"uniqueIndex:idx_profile_var" json:"profile_id"`
+	Position     int        `json:"position"`
+	Name         string     `gorm:"uniqueIndex:idx_profile_var" json:"name"`
+	DefaultValue string     `json:"default_value"`
+	Description  string     `json:"description"`
+	UpdatedAt    SQLiteTime `json:"updated_at"`
+}
+
+

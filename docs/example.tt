@@ -1,9 +1,26 @@
-#nop Profile: Example
-#nop Description: Curated .tt example built from config.rb using only TT-compatible rubymud features.
+#nop Profile: default
+#nop Description: Curated default profile built from config.rb using only TT-compatible rubymud features.
 #nop rubymud:profile {"version":"1","exported":"2026-04-22T23:50:00Z"}
 
 #nop This file intentionally shows the features that survive Ruby config -> .tt export/import.
 #nop Ruby-only block aliases, transform lambdas, say/wecho/window routing are not represented here.
+
+#nop --- Declared variables ---
+#var {сумка} {}
+#var {двуруч} {}
+#var {вруке} {}
+#var {щит} {}
+#var {прайм} {}
+#var {оффхенд} {}
+#var {t1} {}
+#var {t2} {}
+#var {t3} {}
+#var {t4} {}
+#var {t5} {}
+#var {r1} {}
+#var {r2} {}
+#var {r3} {}
+#var {r4} {}
 
 #nop --- Aliases ---
 #alias {уу} {у %1;пари}

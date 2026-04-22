@@ -5,7 +5,7 @@ import { getAppElements, fetchWithToken } from './dom';
 import { InputHistory } from './history';
 import { matchHotkey } from './hotkeys';
 import { createRenderer } from './render';
-import { createSocket, requestSocketVariables, sendSocketCommand } from './socket';
+import { createSocket, sendSocketCommand } from './socket';
 import type { Hotkey, ServerMessage } from './types';
 
 function logBoot(stage: string, extra?: unknown) {
@@ -114,15 +114,12 @@ function focusInputForTyping(event: KeyboardEvent): boolean {
 }
 
 function requestVariables() {
-  if (socket.readyState !== WebSocket.OPEN) return;
   if (!sessionID) {
     renderer.renderVariables([]);
     return;
   }
-
-  requestSocketVariables(socket);
-
-  fetchWithToken(`/api/sessions/${sessionID}/variables`)
+  // /resolved is the canonical source: declared vars + defaults + session overrides
+  fetchWithToken(`/api/sessions/${sessionID}/variables/resolved`)
     .then(res => res.json())
     .then(data => renderer.renderVariables(data))
     .catch(err => console.error('Failed to sync variables:', err));
@@ -211,7 +208,7 @@ socket.onmessage = (event) => {
     history.merge(message.history || []);
     configuredHotkeys = message.hotkeys || [];
     renderer.renderHotkeys(configuredHotkeys);
-    renderer.renderVariables(message.variables || []);
+    requestVariables();
   }
 
   if (message.type === 'restore_chunk') {
@@ -231,8 +228,8 @@ socket.onmessage = (event) => {
   }
 
   if (message.type === 'variables') {
-    logBoot('variables message', { variables: message.variables?.length || 0 });
-    renderer.renderVariables(message.variables || []);
+    logBoot('variables message -> fetch resolved');
+    requestVariables();
   }
 
   if (message.type === 'settings.changed' && message.settings?.domain === 'variables') {

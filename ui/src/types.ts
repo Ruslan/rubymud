@@ -8,6 +8,16 @@ export interface Variable {
   value: string;
 }
 
+export interface ResolvedVariable {
+  name: string;
+  value: string;
+  default_value: string;
+  declared: boolean;
+  has_value: boolean;
+  uses_default: boolean;
+}
+
+
 export interface ButtonOverlay {
   label: string;
   command: string;

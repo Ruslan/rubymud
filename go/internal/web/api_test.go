@@ -159,7 +159,7 @@ func setupTestServer(t *testing.T) (*Server, *session.Session) {
 	if err != nil {
 		t.Fatalf("gorm.Open: %v", err)
 	}
-	db.AutoMigrate(&storage.AppSetting{}, &storage.SessionRecord{}, &storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{}, &storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{})
+	db.AutoMigrate(&storage.AppSetting{}, &storage.SessionRecord{}, &storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{}, &storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{}, &storage.ProfileVariable{})
 
 	store := storage.NewTestStore(db)
 	store.CreateProfile("Default", "")

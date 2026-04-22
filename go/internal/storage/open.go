@@ -20,7 +20,7 @@ func Open(path string) (*Store, error) {
 	if err := db.AutoMigrate(
 		&AppSetting{}, &SessionRecord{}, &Variable{},
 		&AliasRule{}, &TriggerRule{}, &HighlightRule{},
-		&Profile{}, &SessionProfile{}, &HotkeyRule{},
+		&Profile{}, &SessionProfile{}, &HotkeyRule{}, &ProfileVariable{},
 	); err != nil {
 		return nil, err
 	}
