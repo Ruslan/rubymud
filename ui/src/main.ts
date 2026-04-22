@@ -25,7 +25,25 @@ logBoot('dom elements resolved');
 
 const params = new URLSearchParams(window.location.search);
 
-type SessionSummary = { id: number };
+type SessionSummary = {
+  id: number;
+  name: string;
+  mud_host: string;
+  mud_port: number;
+};
+
+function sessionTitle(session: SessionSummary): string {
+  const name = session.name.trim();
+  if (name) return name;
+  return `${session.mud_host}:${session.mud_port}`;
+}
+
+function updateDocumentTitle(sessions: SessionSummary[]) {
+  if (!sessionID) return;
+  const current = sessions.find((session) => session.id === sessionID);
+  if (!current) return;
+  document.title = sessionTitle(current);
+}
 
 if (!params.get('session_id')) {
   fetchWithToken('/api/sessions')
@@ -42,6 +60,11 @@ if (!params.get('session_id')) {
 const sessionID = params.get('session_id') ? parseInt(params.get('session_id')!, 10) : undefined;
 const socket = createSocket(sessionID);
 logBoot('socket created', { readyState: socket.readyState, url: socket.url, sessionID });
+
+fetchWithToken('/api/sessions')
+  .then((res) => res.json())
+  .then((sessions: SessionSummary[]) => updateDocumentTitle(sessions))
+  .catch((err) => console.error('Failed to load sessions for title:', err));
 
 const history = new InputHistory();
 logBoot('history initialized');

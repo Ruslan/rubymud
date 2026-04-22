@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"reflect"
 	"testing"
 	"unsafe"
@@ -188,7 +189,7 @@ func setupTestServer(t *testing.T) (*Server, *session.Session) {
 		record.ID: sess,
 	}))
 
-	s := New(":0", manager, store)
+	s := New(":0", manager, store, t.TempDir())
 	return s, sess
 }
 
@@ -208,4 +209,114 @@ func newAuthenticatedRequest(method, url string, body io.Reader, token string) (
 	}
 	req.Header.Set("X-Session-Token", token)
 	return req, nil
+}
+
+func TestProfileFileEndpoints(t *testing.T) {
+	s, _ := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	profileID := int64(1) // "Default" profile created in setupTestServer
+	tok := s.apiToken
+
+	// 1. Add an alias so the export file has content to round-trip
+	payload, _ := json.Marshal(map[string]any{"name": "n", "template": "north", "enabled": true})
+	req, _ := newAuthenticatedRequest(http.MethodPost, fmt.Sprintf("%s/api/profiles/%d/aliases", ts.URL, profileID), bytes.NewBuffer(payload), tok)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil || resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create alias: status=%d err=%v", resp.StatusCode, err)
+	}
+
+	// 2. Export single profile → file written to configDir
+	req, _ = newAuthenticatedRequest(http.MethodPost, fmt.Sprintf("%s/api/profiles/%d/export", ts.URL, profileID), nil, tok)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST export: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST export status = %d, want 200", resp.StatusCode)
+	}
+	var exportResult map[string]string
+	json.NewDecoder(resp.Body).Decode(&exportResult)
+	filename := exportResult["filename"]
+	if filename == "" {
+		t.Fatal("export response missing filename")
+	}
+
+	// Verify file exists on disk
+	if _, err := os.Stat(s.configDir + "/" + filename); err != nil {
+		t.Fatalf("exported file not on disk: %v", err)
+	}
+
+	// 3. List files → should include the exported file
+	req, _ = newAuthenticatedRequest(http.MethodGet, fmt.Sprintf("%s/api/profiles/files", ts.URL), nil, tok)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET files: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET files status = %d, want 200", resp.StatusCode)
+	}
+	var files []map[string]string
+	json.NewDecoder(resp.Body).Decode(&files)
+	found := false
+	for _, f := range files {
+		if f["filename"] == filename {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("exported file %q not in /api/profiles/files listing: %v", filename, files)
+	}
+
+	// 4. Import from file → creates a new profile with the same rules
+	payload, _ = json.Marshal(map[string]string{"filename": filename})
+	req, _ = newAuthenticatedRequest(http.MethodPost, fmt.Sprintf("%s/api/profiles/import", ts.URL), bytes.NewBuffer(payload), tok)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST import: %v", err)
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("POST import status = %d, want 204", resp.StatusCode)
+	}
+
+	// Verify a new profile exists
+	req, _ = newAuthenticatedRequest(http.MethodGet, fmt.Sprintf("%s/api/profiles", ts.URL), nil, tok)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET profiles: %v", err)
+	}
+	var profiles []storage.Profile
+	json.NewDecoder(resp.Body).Decode(&profiles)
+	if len(profiles) < 2 {
+		t.Fatalf("expected at least 2 profiles after import, got %d", len(profiles))
+	}
+
+	// 5. Export all profiles → one file per profile
+	req, _ = newAuthenticatedRequest(http.MethodPost, fmt.Sprintf("%s/api/profiles/export/all", ts.URL), nil, tok)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST export/all: %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("POST export/all status = %d, want 200", resp.StatusCode)
+	}
+	var allFiles []string
+	json.NewDecoder(resp.Body).Decode(&allFiles)
+	if len(allFiles) < 2 {
+		t.Fatalf("expected at least 2 filenames from export/all, got %d: %v", len(allFiles), allFiles)
+	}
+
+	// 6. Import all → idempotent (profiles with same name get recreated)
+	req, _ = newAuthenticatedRequest(http.MethodPost, fmt.Sprintf("%s/api/profiles/import/all", ts.URL), nil, tok)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST import/all: %v", err)
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("POST import/all status = %d, want 204", resp.StatusCode)
+	}
 }

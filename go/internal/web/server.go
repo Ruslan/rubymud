@@ -32,6 +32,7 @@ type Server struct {
 	store      *storage.Store
 	upgrader   websocket.Upgrader
 	apiToken   string
+	configDir  string
 }
 
 type clientMessage struct {
@@ -41,7 +42,7 @@ type clientMessage struct {
 	SessID int64  `json:"sess_id"`
 }
 
-func New(listenAddr string, manager *session.Manager, store *storage.Store) *Server {
+func New(listenAddr string, manager *session.Manager, store *storage.Store, configDir string) *Server {
 	log.Printf("creating web server on %s", listenAddr)
 
 	apiToken, _ := store.GetSetting("api_token")
@@ -53,9 +54,10 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store) *Ser
 	}
 
 	s := &Server{
-		manager:  manager,
-		store:    store,
-		apiToken: apiToken,
+		manager:   manager,
+		store:     store,
+		configDir: configDir,
+		apiToken:  apiToken,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return sameOriginRequest(r)
@@ -124,7 +126,13 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store) *Ser
 		r.Route("/profiles", func(r chi.Router) {
 			r.Get("/", s.listProfiles)
 			r.Post("/", s.createProfile)
+			r.Post("/export/all", s.exportAllProfilesToFiles)
+			r.Post("/import/all", s.importAllProfilesFromFiles)
+			r.Post("/import", s.importProfileFromFile)
+			r.Get("/files", s.listProfileFiles)
+			
 			r.Route("/{profileID}", func(r chi.Router) {
+				r.Post("/export", s.exportProfileToFile)
 				r.Put("/", s.updateProfile)
 				r.Delete("/", s.deleteProfile)
 				

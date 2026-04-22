@@ -2,6 +2,13 @@
 
 Local-first MUD host and browser client.
 
+If you downloaded a ready-made binary (`mudhost.exe` on Windows), the most important folders are:
+
+- `data/mudhost.db` - your local database
+- `data/config/` - import/export folder for `.tt` profile files
+
+If you already have your own `.tt` file, put it into `data/config/`, start `mudhost`, open `http://localhost:8080/settings#profiles`, and import it from the `Files in config/` section.
+
 The current runtime is Go-based. The browser UI source of truth lives in `ui/` and is built with Vite into Go-embedded static assets under `go/internal/web/static/`.
 
 ## Source Of Truth
@@ -20,6 +27,35 @@ The current runtime is Go-based. The browser UI source of truth lives in `ui/` a
 - `sqlite3`
 
 ## First-Time Setup
+
+## Using A Downloaded Binary
+
+If you are not building from source and just want to run the app:
+
+1. Put `mudhost.exe` in any folder you like.
+2. Create a `data/` folder next to it if it does not exist yet.
+3. Put your `.tt` profile files into `data/config/`.
+4. Start `mudhost.exe`.
+5. Open `http://localhost:8080/settings#profiles`.
+6. In `Files in config/`, click `Import` for your `.tt` file.
+7. Open the `Sessions` tab and make sure the imported profile is attached to your session.
+
+Expected layout:
+
+```text
+mudhost.exe
+data/
+  mudhost.db
+  config/
+    my-profile.tt
+    healer.tt
+```
+
+Notes:
+
+- `data/mudhost.db` is created automatically on first start
+- `data/config/` is created automatically on first start
+- exported profiles are also written back into `data/config/`
 
 Install frontend dependencies once after cloning:
 
@@ -68,7 +104,7 @@ make ui
 Run the Go server directly without `make`:
 
 ```bash
-cd go && go run ./cmd/mudhost --mud "rmud.org:4000" --listen ":8080" --db "../data/mudhost.db"
+cd go && go run ./cmd/mudhost --mud "rmud.org:4000" --listen ":8080" --db "../data/mudhost.db" --config-dir "../data/config"
 ```
 
 ## Testing

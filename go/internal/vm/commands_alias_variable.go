@@ -116,3 +116,22 @@ func (v *VM) cmdUnvariable(rest string) []Result {
 	v.ensureFresh()
 	return echoResults([]string{fmt.Sprintf("#unvariable: %s removed", name)})
 }
+
+func (v *VM) cmdHotkey(rest string) []Result {
+	shortcut, afterShortcut := splitBraceArg(strings.TrimSpace(rest))
+	command, _ := splitBraceArg(strings.TrimSpace(afterShortcut))
+	if shortcut == "" || command == "" {
+		return echoResults([]string{"#hotkey: usage: #hotkey {shortcut} {command}"})
+	}
+	if v.store != nil {
+		pid := v.primaryProfileID()
+		if pid == 0 {
+			return echoResults([]string{"#hotkey: error: no primary profile"})
+		}
+		if _, err := v.store.CreateHotkey(pid, shortcut, command); err != nil {
+			return echoResults([]string{fmt.Sprintf("#hotkey: error: %v", err)})
+		}
+		v.ensureFresh()
+	}
+	return echoResults([]string{fmt.Sprintf("#hotkey {%s} {%s}", shortcut, command)})
+}

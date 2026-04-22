@@ -1,0 +1,100 @@
+#nop Profile: Example
+#nop Description: Curated .tt example built from config.rb using only TT-compatible rubymud features.
+#nop rubymud:profile {"version":"1","exported":"2026-04-22T23:50:00Z"}
+
+#nop This file intentionally shows the features that survive Ruby config -> .tt export/import.
+#nop Ruby-only block aliases, transform lambdas, say/wecho/window routing are not represented here.
+
+#nop --- Aliases ---
+#alias {уу} {у %1;пари}
+#alias {сняя} {сня %1;пол %1 $сумка}
+#alias {надее} {взя %1 $сумка;наде %1}
+#alias {ц1} {вар t1 %1}
+#alias {ц2} {вар t2 %1}
+#alias {ц3} {вар t3 %1}
+#alias {ц4} {вар t4 %1}
+#alias {ц5} {вар t5 %1}
+#alias {мод0} {сня $двуруч;пол $двуруч $сумка;сня $вруке;пол $вруке $сумка;сня $щит;пол $щит $сумка;сня $прайм;пол $прайм $сумка;сня $оффхенд;пол $оффхенд $сумка}
+#alias {моддву} {взя $двуруч $сумка;дву $двуруч}
+#alias {модбаш} {взя $прайм $сумка;воор $прайм;взя $щит $сумка;наде $щит;взя $вруке $сумка;д $вруке}
+#alias {модтанк} {взя $прайм $сумка;воор $прайм;взя $оффхенд $сумка;д $оффхенд}
+
+#nop --- Group-gated automation migrated from if <var> == '1' ---
+#nop rubymud:rule {"group_name":"лид"}
+#action {^Ворота закрыты} {откр воро}
+#nop rubymud:rule {"group_name":"лид"}
+#action {R\.I\.P\.$} {взя все *.тру}
+
+#nop rubymud:rule {"group_name":"пари"}
+#action {^Вам не удалось парировать} {пари}
+#nop rubymud:rule {"group_name":"пари"}
+#action {^Вы чуть не потеряли равновесие и сбились с боевого ритма} {пари}
+
+#nop rubymud:rule {"group_name":"баш"}
+#action {удара, Вы не удержали равновесия и упали!$} {вста;соск;вста;сби;вста;вскоч}
+#nop rubymud:rule {"group_name":"баш"}
+#action {на землю своим сокрушающим ударом!$} {соск;сби;вста;вскоч}
+
+#nop rubymud:rule {"group_name":"вращ"}
+#action {^Вы подняли свое оружие над головой и начали быстро его вращать} {вста;вращ}
+
+#nop rubymud:rule {"group_name":"loot"}
+#action {R\.I\.P\.} {взя все *.тру}
+
+#nop --- Always-on combat and utility triggers ---
+#action {отказывается передвигаться в этом направлении.$} {соск}
+#action {^Вам следует встать на ноги!} {вста}
+#action {^Вы полетели на землю} {вста}
+#action {^Вы не удержали равновесия и упали!} {вста}
+#action {выбил (.*) из Ваших рук своим мощным ударом} {взя %1;воор %1}
+#action {^Вы замерли на месте, не в силах шелохнуться!} {преодолеть}
+#action {^Вы попытались преодолеть парализующую магию усилием воли.} {преодолеть}
+#action {группе: "вст"} {прос;вст}
+#action {группе: "рест"} {отд}
+
+#nop --- Button triggers ---
+#nop rubymud:rule {"is_button":true}
+#action {R.I.P.$} {взя все *.тру}
+#nop rubymud:rule {"is_button":true}
+#action {R.I.P.$} {взя моне *.тру}
+#nop rubymud:rule {"is_button":true}
+#action {^Угрюмый человек идет по проходу.} {у клад}
+#nop rubymud:rule {"is_button":true}
+#action {^Дверь закрыта} {откр две}
+
+#nop --- Notification highlights (representative .tt syntax example) ---
+#nop rubymud:rule {"bold":true,"faint":false,"italic":false,"underline":false,"strikethrough":false,"blink":false,"reverse":false,"bg":""}
+#highlight {256:196} {^Ваши глаза перестали видеть!} {alerts}
+#nop rubymud:rule {"bold":true,"faint":false,"italic":false,"underline":false,"strikethrough":false,"blink":false,"reverse":false,"bg":""}
+#highlight {256:46} {^Ваше зрение вернулось!} {alerts}
+
+#nop --- Hotkeys ---
+#hotkey {pageup} {север}
+#hotkey {pagedown} {юг}
+#hotkey {end} {восток}
+#hotkey {home} {запад}
+#hotkey {ctrl+o} {подняться}
+#hotkey {ctrl+l} {опуститься}
+#hotkey {num_8} {n}
+#hotkey {num_2} {s}
+#hotkey {num_4} {w}
+#hotkey {num_6} {e}
+#hotkey {num_9} {u}
+#hotkey {num_3} {d}
+#hotkey {num_5} {scan}
+#hotkey {f2} {пом;сби;вста}
+#hotkey {f3} {спас $r1;спас $r2;спас $r3;спас $r4}
+#hotkey {f4} {взя тру;взя все тру;брос тру}
+#hotkey {f5} {вращщ}
+#hotkey {f7} {сбить $t1}
+#hotkey {f8} {сбить $t2}
+#hotkey {f9} {сбить $t3}
+#hotkey {f10} {сбить $t4}
+#hotkey {f11} {сбить $t5}
+#hotkey {f12} {зачит возвра}
+#hotkey {ctrl+1} {статус_переменных}
+#hotkey {ctrl+q} {пну}
+#hotkey {ctrl+w} {пари}
+#hotkey {ctrl+e} {сби}
+#hotkey {ctrl+a} {вста}
+#hotkey {ctrl+z} {отд}

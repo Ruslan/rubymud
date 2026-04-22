@@ -72,6 +72,8 @@ func (v *VM) dispatchCommand(input string) []Result {
 		return v.cmdHighlight(rest)
 	case "unhighlight", "unhigh":
 		return v.cmdUnhighlight(rest)
+	case "hotkey", "hot":
+		return v.cmdHotkey(rest)
 	}
 
 	return []Result{{Text: input, Kind: ResultCommand}}

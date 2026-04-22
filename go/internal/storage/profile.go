@@ -28,6 +28,12 @@ func (s *Store) GetProfile(id int64) (*Profile, error) {
 	return &p, err
 }
 
+func (s *Store) GetProfileByName(name string) (*Profile, error) {
+	var p Profile
+	err := s.db.Where("name = ?", name).First(&p).Error
+	return &p, err
+}
+
 func (s *Store) UpdateProfile(p Profile) error {
 	result := s.db.Model(&Profile{}).Where("id = ?", p.ID).Updates(map[string]interface{}{
 		"name":        p.Name,
@@ -105,6 +111,71 @@ func (s *Store) AddProfileToSession(sessionID, profileID int64, orderIndex int) 
 		OrderIndex: orderIndex,
 	}
 	return s.db.Create(&sp).Error
+}
+
+func (s *Store) EnsureProfileInSession(sessionID, profileID int64) error {
+	var count int64
+	if err := s.db.Model(&SessionProfile{}).
+		Where("session_id = ? AND profile_id = ?", sessionID, profileID).
+		Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+
+	var maxOrder int
+	if err := s.db.Model(&SessionProfile{}).
+		Where("session_id = ?", sessionID).
+		Select("COALESCE(MAX(order_index), -1)").
+		Scan(&maxOrder).Error; err != nil {
+		return err
+	}
+
+	return s.AddProfileToSession(sessionID, profileID, maxOrder+1)
+}
+
+func (s *Store) EnsureSessionProfiles(sessionID int64, sessionName string) error {
+	var count int64
+	if err := s.db.Model(&SessionProfile{}).Where("session_id = ?", sessionID).Count(&count).Error; err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil
+	}
+
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		primaryName := sessionName
+		if primaryName == "" {
+			primaryName = "Default"
+		}
+
+		var primary Profile
+		if err := tx.Where("name = ?", primaryName).First(&primary).Error; err != nil {
+			if !errors.Is(err, gorm.ErrRecordNotFound) {
+				return err
+			}
+			primary = Profile{Name: primaryName, CreatedAt: nowSQLiteTime()}
+			if err := tx.Create(&primary).Error; err != nil {
+				return err
+			}
+		}
+
+		return tx.Create(&SessionProfile{SessionID: sessionID, ProfileID: primary.ID, OrderIndex: 0}).Error
+	})
+}
+
+func (s *Store) BackfillMissingSessionProfiles() error {
+	var sessions []SessionRecord
+	if err := s.db.Order("id ASC").Find(&sessions).Error; err != nil {
+		return err
+	}
+	for _, session := range sessions {
+		if err := s.EnsureSessionProfiles(session.ID, session.Name); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (s *Store) RemoveProfileFromSession(sessionID, profileID int64) error {

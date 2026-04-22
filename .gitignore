@@ -18,6 +18,7 @@ history.jsonl
 node_modules/
 ui/node_modules/
 ui/dist/
+go/coverage.out
 
 # UI Build Artifacts (Go-embedded)
 # We ignore generated assets and built scripts/styles

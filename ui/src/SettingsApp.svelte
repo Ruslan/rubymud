@@ -84,6 +84,7 @@
   let currentTab = window.location.hash.slice(1) || 'variables';
   let loading = true;
   let formError = '';
+  let lastFetchKey: string | null = null;
   
   let selectedSessionID: number | null = null;
   let selectedProfileID: number | null = null;
@@ -153,6 +154,9 @@
 
   // Groups State
   let groups: RuleGroupSummary[] = [];
+
+  // Profile Files State
+  let profileFiles: { filename: string }[] = [];
 
   type RGB = { r: number; g: number; b: number };
 
@@ -244,6 +248,9 @@
       if (currentTab === 'app') {
         const appRes = await fetch('/api/app/settings', { headers });
         appSettings = await appRes.json();
+      } else if (currentTab === 'profiles') {
+        const filesRes = await fetch('/api/profiles/files', { headers });
+        profileFiles = await filesRes.json() || [];
       } else if (currentTab === 'sessions' && selectedSessionID) {
         const spRes = await fetch(`/api/sessions/${selectedSessionID}/profiles`, { headers });
         sessionProfiles = await spRes.json() || [];
@@ -399,28 +406,49 @@
   }
   
   async function exportProfile(profileID: number) {
-    // Basic export implementation (ideally this should query the full profile export endpoint if available)
-    if (!confirm('Do you want to save this profile export to disk?')) return;
     // @ts-ignore
     const token = window.API_TOKEN || '';
-    const headers = { 'X-Session-Token': token };
-    const [aliasesRes, triggersRes, highlightsRes, hotkeysRes] = await Promise.all([
-      fetch(`/api/profiles/${profileID}/aliases`, { headers }),
-      fetch(`/api/profiles/${profileID}/triggers`, { headers }),
-      fetch(`/api/profiles/${profileID}/highlights`, { headers }),
-      fetch(`/api/profiles/${profileID}/hotkeys`, { headers }),
-    ]);
-    const exportData = {
-      aliases: await aliasesRes.json(),
-      triggers: await triggersRes.json(),
-      highlights: await highlightsRes.json(),
-      hotkeys: await hotkeysRes.json(),
-    };
-    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(exportData, null, 2));
-    const dlAnchorElem = document.createElement('a');
-    dlAnchorElem.setAttribute("href", dataStr);
-    dlAnchorElem.setAttribute("download", `profile_${profileID}_export.json`);
-    dlAnchorElem.click();
+    const res = await fetch(`/api/profiles/${profileID}/export`, { method: 'POST', headers: { 'X-Session-Token': token } });
+    if (!res.ok) { alert('Export failed: ' + await res.text()); return; }
+    const data = await res.json();
+    alert(`Exported to config/${data.filename}`);
+    await fetchData();
+  }
+
+  async function exportAllProfiles() {
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const res = await fetch('/api/profiles/export/all', { method: 'POST', headers: { 'X-Session-Token': token } });
+    if (!res.ok) { alert('Export failed: ' + await res.text()); return; }
+    const filenames: string[] = await res.json();
+    alert(`Exported ${filenames.length} profile(s) to config/`);
+    await fetchData();
+  }
+
+  async function importAllProfiles() {
+    if (!confirm('Import all .tt files from config/? This will create new profiles for each file.')) return;
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const res = await fetch('/api/profiles/import/all', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+      body: JSON.stringify({ session_id: selectedSessionID })
+    });
+    if (!res.ok) { alert('Import failed: ' + await res.text()); return; }
+    await fetchData();
+  }
+
+  async function importProfileFromFile(filename: string) {
+    if (!confirm(`Import profile from ${filename}?`)) return;
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const res = await fetch('/api/profiles/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+      body: JSON.stringify({ filename, session_id: selectedSessionID })
+    });
+    if (!res.ok) { alert('Import failed: ' + await res.text()); return; }
+    await fetchData();
   }
   
   async function moveRule(domain: string, item: any, direction: -1 | 1) {
@@ -477,10 +505,18 @@
     return 0;
   }
 
-  $: if (currentTab || selectedSessionID || selectedProfileID) {
-    if (loading === false) fetchData();
+  $: {
+    const fetchKey = `${currentTab}|${selectedSessionID ?? ''}|${selectedProfileID ?? ''}`;
+    if (lastFetchKey !== null && fetchKey !== lastFetchKey) {
+      lastFetchKey = fetchKey;
+      void fetchData();
+    }
   }
-  onMount(() => fetchData());
+
+  onMount(() => {
+    lastFetchKey = `${currentTab}|${selectedSessionID ?? ''}|${selectedProfileID ?? ''}`;
+    void fetchData();
+  });
 </script>
 
 <main class="settings-layout">
@@ -774,6 +810,12 @@
       
     {:else if currentTab === 'profiles'}
       <header class="content-header"><h2>Profiles</h2><p class="description">Manage settings profiles.</p></header>
+      
+      <div class="editor-box" style="display: flex; gap: 12px; align-items: center; margin-bottom: 24px;">
+        <button class="btn-primary" on:click={exportAllProfiles}>Export All to config/</button>
+        <button class="btn-primary" style="background: #2ecc71" on:click={importAllProfiles}>Import All from config/</button>
+      </div>
+
       <div class="editor-box">
         {#if formError}<div class="form-error">{formError}</div>{/if}
         <div class="form-row">
@@ -798,6 +840,24 @@
               </td>
             </tr>
           {/each}
+        </tbody>
+      </table>
+
+      <h3 style="margin-top: 40px; border-bottom: 1px solid #2d333b; padding-bottom: 8px;">Files in config/</h3>
+      <table class="data-table" style="margin-bottom: 20px;">
+        <thead><tr><th>Filename</th><th style="width: 120px">Actions</th></tr></thead>
+        <tbody>
+            {#each profileFiles as file}
+                <tr>
+                    <td class="value-cell">{file.filename}</td>
+                    <td class="actions-cell">
+                        <button class="btn-link" on:click={() => importProfileFromFile(file.filename)}>Import</button>
+                    </td>
+                </tr>
+            {/each}
+            {#if profileFiles.length === 0}
+                <tr><td colspan="2" class="dim-cell">No .tt files found in config/ directory.</td></tr>
+            {/if}
         </tbody>
       </table>
 

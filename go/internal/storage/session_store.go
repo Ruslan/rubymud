@@ -22,9 +22,15 @@ func (s *Store) EnsureDefaultSession(host string, port int) (SessionRecord, erro
 		if err := s.db.Create(&record).Error; err != nil {
 			return SessionRecord{}, err
 		}
+		if err := s.EnsureSessionProfiles(record.ID, record.Name); err != nil {
+			return SessionRecord{}, err
+		}
 		return record, nil
 	}
 	if err != nil {
+		return SessionRecord{}, err
+	}
+	if err := s.EnsureSessionProfiles(record.ID, record.Name); err != nil {
 		return SessionRecord{}, err
 	}
 
@@ -45,6 +51,10 @@ func (s *Store) CreateSession(name, host string, port int) (SessionRecord, error
 		Status:  "disconnected",
 	}
 	err := s.db.Create(&record).Error
+	if err != nil {
+		return record, err
+	}
+	err = s.EnsureSessionProfiles(record.ID, record.Name)
 	return record, err
 }
 

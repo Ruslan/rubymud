@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 
-	"rubymud/go/internal/config"
 	"rubymud/go/internal/session"
 	"rubymud/go/internal/storage"
 	"rubymud/go/internal/web"
@@ -18,7 +17,7 @@ func main() {
 	mudAddr := flag.String("mud", "", "Optional: initial MUD server address in host:port format")
 	listenAddr := flag.String("listen", ":8080", "HTTP listen address")
 	dbPath := flag.String("db", "data/mudhost.db", "SQLite database path")
-	configPath := flag.String("config", "config.rb", "Config file path for hotkeys")
+	configDirPath := flag.String("config-dir", "", "Directory for exported profile .tt files (default: config/ next to --db)")
 	flag.Parse()
 
 	// Ensure data directory exists
@@ -27,12 +26,17 @@ func main() {
 		log.Fatalf("failed to create data directory %s: %v", dataDir, err)
 	}
 
-	hotkeys, err := config.LoadHotkeys(*configPath)
-	if err != nil {
-		log.Printf("load hotkeys warning: %v", err)
+	// Default config-dir is sibling of the DB file
+	if *configDirPath == "" {
+		*configDirPath = filepath.Join(dataDir, "config")
 	}
 
-	store, err := storage.Open(*dbPath, hotkeys)
+	// Ensure config directory exists
+	if err := os.MkdirAll(*configDirPath, 0755); err != nil {
+		log.Fatalf("failed to create config directory %s: %v", *configDirPath, err)
+	}
+
+	store, err := storage.Open(*dbPath)
 	if err != nil {
 		log.Fatalf("open storage: %v", err)
 	}
@@ -57,7 +61,7 @@ func main() {
 		}
 	}
 
-	server := web.New(*listenAddr, manager, store)
+	server := web.New(*listenAddr, manager, store, *configDirPath)
 	log.Printf("mudhost listening on %s using db %s", *listenAddr, *dbPath)
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("web server failed: %v", err)

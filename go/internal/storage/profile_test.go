@@ -150,3 +150,31 @@ func TestRulesPositionAssignment(t *testing.T) {
 		}
 	}
 }
+
+func TestEnsureSessionProfilesBackfillsMissingProfiles(t *testing.T) {
+	s := newProfileTestStore(t)
+
+	if err := s.db.Create(&SessionRecord{ID: 200, Name: "default"}).Error; err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+
+	if err := s.EnsureSessionProfiles(200, "default"); err != nil {
+		t.Fatalf("EnsureSessionProfiles: %v", err)
+	}
+
+	entries, err := s.GetSessionProfiles(200)
+	if err != nil {
+		t.Fatalf("GetSessionProfiles: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 session profile, got %d", len(entries))
+	}
+
+	ids, err := s.GetOrderedProfileIDs(200)
+	if err != nil {
+		t.Fatalf("GetOrderedProfileIDs: %v", err)
+	}
+	if len(ids) != 1 {
+		t.Fatalf("expected 1 ordered profile, got %d", len(ids))
+	}
+}
