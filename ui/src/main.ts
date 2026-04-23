@@ -197,7 +197,6 @@ window.addEventListener('keydown', (event) => {
   logBoot('hotkey matched', { shortcut: match.shortcut, command: match.command });
   event.preventDefault();
   renderer.appendCommandHint(match.command);
-  renderer.scrollOutputToBottom();
   sendCommand(match.command, 'key');
 });
 
@@ -331,7 +330,6 @@ elements.input.addEventListener('keydown', (event) => {
   logBoot('input enter', { value, readyState: socket.readyState });
   history.push(value);
   renderer.appendCommandHint(value);
-  renderer.scrollOutputToBottom();
   if (sendCommand(value, 'input')) {
     elements.input.value = '';
   }

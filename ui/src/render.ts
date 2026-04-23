@@ -18,7 +18,7 @@ interface RendererDeps {
   state: RendererState;
 }
 
-const maxRenderedLines = 2000;
+const maxRenderedLines = 5000;
 const pruneRenderedLines = 500;
 
 interface PaneNode {
@@ -500,7 +500,9 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
   }
 
   function shouldStickToBottom(pane: RenderedPane): boolean {
-    return Math.abs(pane.outputEl.scrollTop - (pane.outputEl.scrollHeight - pane.outputEl.clientHeight)) < pane.outputEl.clientHeight / 2;
+    const threshold = 100; // pixels from bottom
+    const distanceToBottom = pane.outputEl.scrollHeight - pane.outputEl.scrollTop - pane.outputEl.clientHeight;
+    return distanceToBottom <= threshold;
   }
 
   function setActivePanel(panel: 'keyboard' | 'variables') {
