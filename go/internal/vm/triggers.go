@@ -74,15 +74,20 @@ func expandTriggerCommand(template string, matches []string) string {
 	})
 }
 
-func (v *VM) ApplyEffects(effects []Effect, sendFunc func(string) error) []Effect {
+func (v *VM) ApplyEffects(effects []Effect, sendFn func(string) error, echoFn func(Result)) []Effect {
 	var buttons []Effect
 	for _, e := range effects {
 		switch e.Type {
 		case "send":
-			commands := v.ExpandInput(e.Command)
-			for _, cmd := range commands {
-				if err := sendFunc(cmd); err != nil {
-					log.Printf("trigger send error: %v", err)
+			// Process trigger command through the full pipeline (variables, aliases, local commands)
+			results := v.ProcessInputDetailed(e.Command)
+			for _, res := range results {
+				if res.Kind == ResultEcho {
+					echoFn(res)
+				} else {
+					if err := sendFn(res.Text); err != nil {
+						log.Printf("trigger send error: %v", err)
+					}
 				}
 			}
 		case "button":

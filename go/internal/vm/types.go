@@ -48,4 +48,5 @@ type VM struct {
 	highlights []storage.HighlightRule
 	variables  map[string]string
 	varPattern *regexp.Regexp
+	ttsFn      func(string)
 }

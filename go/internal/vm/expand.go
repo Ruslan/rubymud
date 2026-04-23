@@ -7,24 +7,6 @@ import (
 	"time"
 )
 
-func (v *VM) ExpandInput(input string) []string {
-	return v.expand(input, 0)
-}
-
-func (v *VM) expand(input string, depth int) []string {
-	if depth >= maxExpandDepth {
-		return []string{input}
-	}
-
-	segments := splitSemicolons(input)
-	var result []string
-	for _, segment := range segments {
-		segment = v.substituteVars(segment)
-		result = append(result, v.expandAlias(segment, depth)...)
-	}
-	return result
-}
-
 func (v *VM) substituteVars(s string) string {
 	return v.varPattern.ReplaceAllStringFunc(s, func(match string) string {
 		key := match[1:]
@@ -56,23 +38,6 @@ func builtinVar(key string) (string, bool) {
 	default:
 		return "", false
 	}
-}
-
-func (v *VM) expandAlias(input string, depth int) []string {
-	trimmed := strings.TrimSpace(input)
-	if trimmed == "" {
-		return nil
-	}
-
-	cmd, args := splitFirstWord(trimmed)
-	for i := range v.aliases {
-		if v.aliases[i].Name == cmd {
-			expanded := substituteTemplate(v.aliases[i].Template, args)
-			return v.expand(expanded, depth+1)
-		}
-	}
-
-	return []string{input}
 }
 
 func substituteTemplate(template string, args []string) string {

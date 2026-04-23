@@ -29,7 +29,7 @@ func TestSubstituteTemplate(t *testing.T) {
 	}
 }
 
-func TestSplitSemicolons(t *testing.T) {
+func TestSplitStatements(t *testing.T) {
 	tests := []struct {
 		input    string
 		expected []string
@@ -41,17 +41,20 @@ func TestSplitSemicolons(t *testing.T) {
 		{" a ; b ", []string{"a", "b"}},
 		{"one\ntwo", []string{"one", "two"}},
 		{"one\r\ntwo", []string{"one", "two"}},
+		{"#alias {a} {b;c}; d", []string{"#alias {a} {b;c}", "d"}},
+		{"say 'hello;world'; e", []string{"say 'hello;world'", "e"}},
+		{"say \"hello;world\"; f", []string{"say \"hello;world\"", "f"}},
 	}
 
 	for _, tt := range tests {
-		result := splitSemicolons(tt.input)
+		result := splitStatements(tt.input)
 		if len(result) != len(tt.expected) {
-			t.Errorf("splitSemicolons(%q) = %v, want %v", tt.input, result, tt.expected)
+			t.Errorf("splitStatements(%q) = %v, want %v", tt.input, result, tt.expected)
 			continue
 		}
 		for i := range result {
 			if result[i] != tt.expected[i] {
-				t.Errorf("splitSemicolons(%q)[%d] = %q, want %q", tt.input, i, result[i], tt.expected[i])
+				t.Errorf("splitStatements(%q)[%d] = %q, want %q", tt.input, i, result[i], tt.expected[i])
 			}
 		}
 	}
@@ -64,9 +67,9 @@ func TestExpandNoInfiniteLoop(t *testing.T) {
 		{Name: "b", Template: "a", Enabled: true},
 	}
 
-	result := v.ExpandInput("a")
+	result := v.ProcessInput("a")
 	if len(result) == 0 {
-		t.Error("ExpandInput should not return empty result on recursive alias")
+		t.Error("ProcessInput should not return empty result on recursive alias")
 	}
 }
 
@@ -77,11 +80,11 @@ func TestExpandSemicolonInInput(t *testing.T) {
 	}
 	v.variables["t1"] = "крыса"
 
-	result := v.ExpandInput("ц1 босс;отд")
+	result := v.ProcessInput("ц1 босс;отд")
 	expected := []string{"вар t1 босс", "отд"}
 
 	if len(result) != len(expected) {
-		t.Errorf("ExpandInput(%q) = %v, want %v", "ц1 босс;отд", result, expected)
+		t.Errorf("ProcessInput(%q) = %v, want %v", "ц1 босс;отд", result, expected)
 		return
 	}
 	for i := range result {
@@ -93,9 +96,9 @@ func TestExpandSemicolonInInput(t *testing.T) {
 
 func TestAliasWithPercentZeroNoArgs(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {вздох} {вздохнуть %0}")
+	v.dispatchCommand("#alias {вздох} {вздохнуть %0}", 0)
 
-	result := v.ExpandInput("вздох")
+	result := v.ProcessInput("вздох")
 	if len(result) != 1 {
 		t.Fatalf("alias %%0 no args = %v, want 1 result", result)
 	}

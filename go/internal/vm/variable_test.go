@@ -46,7 +46,7 @@ func TestBuiltinVars(t *testing.T) {
 
 func TestCmdVariableBracesStripped(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#var {weapon} {фламберг}")
+	v.dispatchCommand("#var {weapon} {фламберг}", 0)
 
 	if v.variables["weapon"] != "фламберг" {
 		t.Errorf("variable value should be 'фламберг', got %q", v.variables["weapon"])
@@ -61,9 +61,9 @@ func TestCmdVariableBracesStripped(t *testing.T) {
 func TestVariableInAliasTemplate(t *testing.T) {
 	v := New(nil, 1)
 	v.variables["двуруч"] = "фламберг"
-	v.dispatchCommand("#alias {моддву} {взя $двуруч;дву $двуруч}")
+	v.dispatchCommand("#alias {моддву} {взя $двуруч;дву $двуруч}", 0)
 
-	result := v.ExpandInput("моддву")
+	result := v.ProcessInput("моддву")
 	if len(result) != 2 {
 		t.Fatalf("моддву = %d commands, want 2: %v", len(result), result)
 	}
@@ -87,7 +87,7 @@ func TestVariableInTriggerCommand(t *testing.T) {
 		t.Fatalf("var in trigger = %d effects, want 1", len(effects))
 	}
 
-	commands := v.ExpandInput(effects[0].Command)
+	commands := v.ProcessInput(effects[0].Command)
 	if len(commands) != 1 || commands[0] != "у крыса" {
 		t.Errorf("$таргет in trigger command = %v, want [у крыса]", commands)
 	}

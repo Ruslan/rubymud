@@ -74,9 +74,15 @@
 #action {^Вы попытались преодолеть парализующую магию усилием воли.} {преодолеть}
 #action {группе: "вст"} {прос;вст}
 #action {группе: "рест"} {отд}
-#nop TODO(0.0.7.2): uncomment after alias->local-#command / buffer-routing-.tt support lands.
-#nop Example group-chat routing target: said-to-group lines should be copied or echoed into buffer `chat` via #woutput / trigger buffer routing.
-#nop #action {^(\p{L}+) сказал.? группе: "(.+)"$} {#woutput {chat} {%1: %2}}
+#nop Group chat routed into buffer `chat` via local #woutput.
+#action {^Вы сказали группе: "([^"\r\n]*)"$} {#woutput {chat} {[$TIME] Вы сказали группе: %1}}
+#action {^((?!Вы\b)[^":\r\n]+?) сказа(л|ла) группе: "([^"\r\n]*)"$} {#woutput {chat} {[$TIME] %1 сказа%2 группе: %3}}
+#action {^((?!Вы\b)[^":\r\n]+?) сказа(л|ла) Вам: "([^"\r\n]*)"$} {#woutput {chat} {[$TIME] %1 сказа%2 Вам: %3}}
+#action {^Вы произнесли: "([^"\r\n]*)"$} {#woutput {chat} {[$TIME] Вы произнесли: %1}}
+
+#nop Kill feed routed into buffer `kills` via local #woutput.
+#action {^(.+?) мертв! R\.I\.P\.$} {#woutput {kills} {[$TIME] %0}}
+#action {^Вы получили \d+ очков опыта\.$} {#woutput {kills} {[$TIME] %0}}
 
 #nop --- Buff and status notifications migrated as plain triggers ---
 #action {^Волшебная поддержка закончилась.} {гг <<< -Эйд >>>}
@@ -101,9 +107,9 @@
 #nop --- Возложение notifications ---
 #action {^Ваши руки вновь наполнила исцеляющая сила.} {гг ++ Готов Возлагать ++}
 #action {^Вы произнесли короткую молитву и прикоснулись} {гг -- Возложение --}
-#nop TODO(0.0.7.2): uncomment for local speech / pane notifications.
-#nop #action {^Ваши руки вновь наполнила исцеляющая сила.} {#tts {ready};#woutput {chat} {Возложение+}}
-#nop #action {^Вы произнесли короткую молитву и прикоснулись} {#woutput {chat} {Возложение-}}
+#nop Local speech / pane notifications.
+#action {^Ваши руки вновь наполнила исцеляющая сила.} {#tts {ready};#woutput {chat} {[$TIME] Возложение+}}
+#action {^Вы произнесли короткую молитву и прикоснулись} {#woutput {chat} {[$TIME] Возложение-}}
 #action {(.+) рассыпал\p{L}+ в пыль в Ваших руках.} {гг %1 распался}
 
 #nop --- Button triggers ---

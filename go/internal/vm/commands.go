@@ -13,24 +13,55 @@ func (v *VM) ProcessInput(input string) []string {
 
 func (v *VM) ProcessInputDetailed(input string) []Result {
 	v.ensureFresh()
+	return v.evalLine(input, 0)
+}
 
-	input = strings.TrimSpace(input)
-	if input == "" {
+func (v *VM) evalLine(input string, depth int) []Result {
+	if depth >= maxExpandDepth {
+		return []Result{{Text: input, Kind: ResultCommand}}
+	}
+
+	statements := splitStatements(input)
+	var results []Result
+	for _, stmt := range statements {
+		results = append(results, v.evalStatement(stmt, depth)...)
+	}
+	return results
+}
+
+func (v *VM) evalStatement(stmt string, depth int) []Result {
+	stmt = strings.TrimSpace(stmt)
+	if stmt == "" {
 		return nil
 	}
 
-	if strings.HasPrefix(input, "#") {
-		return v.dispatchCommand(input)
+	// 1. Variable substitution
+	stmt = v.substituteVars(stmt)
+
+	// 2. System command dispatch
+	if strings.HasPrefix(stmt, "#") {
+		return v.dispatchCommand(stmt, depth)
 	}
 
-	if expanded, ok := expandSpeedwalk(input); ok {
+	// 3. Alias expansion
+	cmd, args := splitFirstWord(stmt)
+	for _, a := range v.aliases {
+		if a.Name == cmd {
+			expanded := substituteTemplate(a.Template, args)
+			return v.evalLine(expanded, depth+1)
+		}
+	}
+
+	// 4. Speedwalk expansion
+	if expanded, ok := expandSpeedwalk(stmt); ok {
 		return commandResults(expanded)
 	}
 
-	return commandResults(v.ExpandInput(input))
+	// 5. Default: send to MUD
+	return []Result{{Text: stmt, Kind: ResultCommand}}
 }
 
-func (v *VM) dispatchCommand(input string) []Result {
+func (v *VM) dispatchCommand(input string, depth int) []Result {
 	cmd := strings.TrimPrefix(input, "#")
 	cmd = strings.TrimSpace(cmd)
 
@@ -44,12 +75,11 @@ func (v *VM) dispatchCommand(input string) []Result {
 
 	if numRepeat(cmd) > 0 {
 		n, rest := parseRepeat(cmd)
-		expanded := v.ExpandInput(rest)
-		var result []string
+		var result []Result
 		for i := 0; i < n; i++ {
-			result = append(result, expanded...)
+			result = append(result, v.evalLine(rest, depth+1)...)
 		}
-		return commandResults(result)
+		return result
 	}
 
 	keyword, args := splitFirstWord(cmd)
@@ -74,11 +104,21 @@ func (v *VM) dispatchCommand(input string) []Result {
 		return v.cmdUnhighlight(rest)
 	case "hotkey", "hot":
 		return v.cmdHotkey(rest)
+	case "tts", "ts":
+		return v.cmdTTS(rest)
 	case "showme", "show":
-		return []Result{{Text: rest, Kind: ResultEcho, TargetBuffer: "main"}}
+		text, _ := splitBraceArg(rest)
+		if text == "" {
+			text = rest // Fallback if no braces
+		}
+		return []Result{{Text: text, Kind: ResultEcho, TargetBuffer: "main"}}
 	case "woutput":
-		buffer, textArgs := splitFirstWord(rest)
-		return []Result{{Text: strings.Join(textArgs, " "), Kind: ResultEcho, TargetBuffer: buffer}}
+		buffer, afterBuffer := splitBraceArg(rest)
+		text, _ := splitBraceArg(afterBuffer)
+		if text == "" {
+			text = strings.TrimSpace(afterBuffer) // Fallback
+		}
+		return []Result{{Text: text, Kind: ResultEcho, TargetBuffer: buffer}}
 	}
 
 	return []Result{{Text: input, Kind: ResultCommand}}

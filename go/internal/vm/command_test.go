@@ -1,10 +1,43 @@
 package vm
 
 import (
+	"runtime"
+	"strings"
 	"testing"
 
 	"rubymud/go/internal/storage"
 )
+
+func TestTTSCommand(t *testing.T) {
+	v := New(nil, 1)
+
+	// Mock TTS to prevent actual sound
+	var spokenText string
+	v.ttsFn = func(t string) {
+		spokenText = t
+	}
+
+	// Usage message
+	results := v.ProcessInputDetailed("#tts")
+	if len(results) != 1 || results[0].Text != "#tts: usage: #tts {text}" {
+		t.Errorf("expected usage message, got %+v", results)
+	}
+
+	// Execution
+	results = v.ProcessInputDetailed("#tts {ready}")
+	if runtime.GOOS == "darwin" {
+		if len(results) != 0 {
+			t.Errorf("expected silent success on macOS, got %+v", results)
+		}
+		if spokenText != "ready" {
+			t.Errorf("expected spoken text 'ready', got %q", spokenText)
+		}
+	} else {
+		if len(results) == 0 {
+			t.Errorf("expected support message on %s, got nothing", runtime.GOOS)
+		}
+	}
+}
 
 func TestNopCommand(t *testing.T) {
 	v := New(nil, 1)
@@ -30,7 +63,7 @@ func TestRepeatSyntax(t *testing.T) {
 
 func TestRepeatWithAlias(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {кул} {удар}")
+	v.dispatchCommand("#alias {кул} {удар}", 0)
 
 	result := v.ProcessInput("#3 кул")
 	if len(result) != 3 {
@@ -45,7 +78,7 @@ func TestRepeatWithAlias(t *testing.T) {
 
 func TestCmdAliasBracesStripped(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {тест11} {смо деву}")
+	v.dispatchCommand("#alias {тест11} {смо деву}", 0)
 
 	template := ""
 	for _, a := range v.aliases {
@@ -57,13 +90,55 @@ func TestCmdAliasBracesStripped(t *testing.T) {
 		t.Errorf("alias template should be 'смо деву', got %q", template)
 	}
 
-	expanded := v.ExpandInput("тест11")
+	expanded := v.ProcessInput("тест11")
 	if len(expanded) != 1 || expanded[0] != "смо деву" {
 		t.Errorf("alias expansion should be 'смо деву', got %v", expanded)
 	}
 }
 
-func TestExpandInput(t *testing.T) {
+func TestAliasRecursiveLocalCommands(t *testing.T) {
+	v := New(nil, 1)
+
+	// Define a complex alias that updates a variable and outputs a local message to a specific buffer
+	v.dispatchCommand("#alias {ц1} {#var t1 %1; #woutput {vars} {[$TIME]: set t1 = $t1}}", 0)
+
+	// Execute the alias
+	results := v.ProcessInputDetailed("ц1 орк")
+
+	// Verify the variable was updated
+	if val := v.variables["t1"]; val != "орк" {
+		t.Errorf("expected variable t1 to be 'орк', got %q", val)
+	}
+
+	// Verify the output was routed correctly and nothing was sent to the server
+	// We expect 2 results:
+	// 1. The automatic echo from #var: "#variable {t1} = {орк}"
+	// 2. Our custom #woutput echo
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	varRes := results[0]
+	if varRes.Kind != ResultEcho || varRes.Text != "#variable {t1} = {орк}" {
+		t.Errorf("unexpected var result: %+v", varRes)
+	}
+
+	woutRes := results[1]
+	if woutRes.Kind != ResultEcho {
+		t.Errorf("expected kind to be echo for woutput, got %s", woutRes.Kind)
+	}
+	if woutRes.TargetBuffer != "vars" {
+		t.Errorf("expected target buffer to be 'vars', got %q", woutRes.TargetBuffer)
+	}
+
+	// The text should contain the evaluated variable and the $TIME builtin
+	// $TIME format is HH:MM:SS, so we just check for the static parts
+	if woutRes.Text[0] != '[' || !strings.HasSuffix(woutRes.Text, "]: set t1 = орк") {
+		t.Errorf("unexpected woutput text: %q", woutRes.Text)
+	}
+}
+
+func TestProcessInput(t *testing.T) {
 	v := New(nil, 1)
 	v.aliases = []storage.AliasRule{
 		{Name: "уу", Template: "у %1;пари", Enabled: true},
@@ -84,14 +159,14 @@ func TestExpandInput(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := v.ExpandInput(tt.input)
+		result := v.ProcessInput(tt.input)
 		if len(result) != len(tt.expected) {
-			t.Errorf("ExpandInput(%q) = %v, want %v", tt.input, result, tt.expected)
+			t.Errorf("ProcessInput(%q) = %v, want %v", tt.input, result, tt.expected)
 			continue
 		}
 		for i := range result {
 			if result[i] != tt.expected[i] {
-				t.Errorf("ExpandInput(%q)[%d] = %q, want %q", tt.input, i, result[i], tt.expected[i])
+				t.Errorf("ProcessInput(%q)[%d] = %q, want %q", tt.input, i, result[i], tt.expected[i])
 			}
 		}
 	}
@@ -121,9 +196,9 @@ func TestSplitBraceArg(t *testing.T) {
 
 func TestArcticLootallAlias(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {lootall} {get all corpse;get all 2.corpse;get all 3.corpse;get all 4.corpse}")
+	v.dispatchCommand("#alias {lootall} {get all corpse;get all 2.corpse;get all 3.corpse;get all 4.corpse}", 0)
 
-	result := v.ExpandInput("lootall")
+	result := v.ProcessInput("lootall")
 	expected := []string{
 		"get all corpse",
 		"get all 2.corpse",
@@ -142,9 +217,9 @@ func TestArcticLootallAlias(t *testing.T) {
 
 func TestArcticFeacuAlias(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {feacu} {fea;order all.elemental get all vine;order all.elemental drop all.grapes;order all.elemental eat all}")
+	v.dispatchCommand("#alias {feacu} {fea;order all.elemental get all vine;order all.elemental drop all.grapes;order all.elemental eat all}", 0)
 
-	result := v.ExpandInput("feacu")
+	result := v.ProcessInput("feacu")
 	if len(result) != 4 {
 		t.Fatalf("feacu expansion got %d commands, want 4: %v", len(result), result)
 	}
@@ -158,9 +233,9 @@ func TestArcticFeacuAlias(t *testing.T) {
 
 func TestArcticCastAliasWithQuotes(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {mm} {cast 'magic missile'}")
+	v.dispatchCommand("#alias {mm} {cast 'magic missile'}", 0)
 
-	result := v.ExpandInput("mm")
+	result := v.ProcessInput("mm")
 	if len(result) != 1 || result[0] != "cast 'magic missile'" {
 		t.Errorf("mm expansion = %v, want [cast 'magic missile']", result)
 	}
@@ -168,9 +243,9 @@ func TestArcticCastAliasWithQuotes(t *testing.T) {
 
 func TestArcticAliasWithArgs(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {hr} {cast 'regenerate' %1}")
+	v.dispatchCommand("#alias {hr} {cast 'regenerate' %1}", 0)
 
-	result := v.ExpandInput("hr крыса")
+	result := v.ProcessInput("hr крыса")
 	if len(result) != 1 || result[0] != "cast 'regenerate' крыса" {
 		t.Errorf("hr expansion = %v, want [cast 'regenerate' крыса]", result)
 	}
@@ -178,9 +253,9 @@ func TestArcticAliasWithArgs(t *testing.T) {
 
 func TestArcticCastAliasWithSingleWordArg(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {ab} {cast 'acid blast'}")
+	v.dispatchCommand("#alias {ab} {cast 'acid blast'}", 0)
 
-	result := v.ExpandInput("ab")
+	result := v.ProcessInput("ab")
 	if len(result) != 1 || result[0] != "cast 'acid blast'" {
 		t.Errorf("ab = %v, want [cast 'acid blast']", result)
 	}
@@ -188,9 +263,9 @@ func TestArcticCastAliasWithSingleWordArg(t *testing.T) {
 
 func TestArcticBrewscribeAlias(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {brewscribe} {rest;brew 'cure light';scribe 'cu l';stand}")
+	v.dispatchCommand("#alias {brewscribe} {rest;brew 'cure light';scribe 'cu l';stand}", 0)
 
-	result := v.ExpandInput("brewscribe")
+	result := v.ProcessInput("brewscribe")
 	expected := []string{"rest", "brew 'cure light'", "scribe 'cu l'", "stand"}
 	if len(result) != len(expected) {
 		t.Fatalf("brewscribe = %d commands, want %d: %v", len(result), len(expected), result)
@@ -204,9 +279,9 @@ func TestArcticBrewscribeAlias(t *testing.T) {
 
 func TestArcticCompAlias(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {comp} {get all.component;put all.component pouch}")
+	v.dispatchCommand("#alias {comp} {get all.component;put all.component pouch}", 0)
 
-	result := v.ExpandInput("comp")
+	result := v.ProcessInput("comp")
 	if len(result) != 2 {
 		t.Fatalf("comp = %d commands, want 2: %v", len(result), result)
 	}

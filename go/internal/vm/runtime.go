@@ -2,18 +2,30 @@ package vm
 
 import (
 	"log"
+	"os/exec"
 	"regexp"
+	"runtime"
 
 	"rubymud/go/internal/storage"
 )
 
 func New(store *storage.Store, sessionID int64) *VM {
-	return &VM{
+	v := &VM{
 		store:      store,
 		sessionID:  sessionID,
 		variables:  make(map[string]string),
 		varPattern: regexp.MustCompile(`\$([\p{L}\p{N}_]+)`),
 	}
+
+	if runtime.GOOS == "darwin" {
+		v.ttsFn = func(text string) {
+			go func() { _ = exec.Command("say", text).Run() }()
+		}
+	} else {
+		v.ttsFn = func(string) {}
+	}
+
+	return v
 }
 
 func (v *VM) primaryProfileID() int64 {

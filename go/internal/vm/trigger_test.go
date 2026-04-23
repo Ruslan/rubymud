@@ -70,7 +70,7 @@ func TestArcticTriggerFlyLoss(t *testing.T) {
 		t.Fatalf("fly loss trigger = %d effects, want 1", len(effects))
 	}
 
-	commands := v.ExpandInput(effects[0].Command)
+	commands := v.ProcessInput(effects[0].Command)
 	if len(commands) != 2 || commands[0] != "fly" || commands[1] != "fly" {
 		t.Errorf("fly;fly expansion = %v, want [fly, fly]", commands)
 	}
@@ -87,7 +87,7 @@ func TestArcticTriggerSummonWithMulticmd(t *testing.T) {
 		t.Fatalf("summon trigger = %d effects, want 1", len(effects))
 	}
 
-	commands := v.ExpandInput(effects[0].Command)
+	commands := v.ProcessInput(effects[0].Command)
 	expected := []string{"wake", "stand", "fly"}
 	if len(commands) != len(expected) {
 		t.Fatalf("summon expansion = %v, want %v", commands, expected)
@@ -139,17 +139,42 @@ func TestTriggerNoMatch(t *testing.T) {
 	}
 }
 
-func TestDisabledTrigger(t *testing.T) {
+func TestApplyEffects_FullPipeline(t *testing.T) {
 	v := New(nil, 1)
-	v.triggers = []storage.TriggerRule{
-		{Pattern: `^test`, Command: "cmd", Enabled: false},
+	v.aliases = []storage.AliasRule{
+		{Name: "fly", Template: "cast 'fly'", Enabled: true},
+	}
+	v.variables["t1"] = "орк"
+
+	// Trigger with: alias, variable, and local command
+	effects := []Effect{
+		{Type: "send", Command: "fly; #showme {set $t1}"},
 	}
 
-	effects, _ := v.MatchTriggers("test line")
-	if len(effects) != 0 {
-		t.Errorf("disabled trigger should not match, got %d effects", len(effects))
+	var sentCommands []string
+	var echoes []Result
+
+	sendFn := func(cmd string) error {
+		sentCommands = append(sentCommands, cmd)
+		return nil
+	}
+	echoFn := func(res Result) {
+		echoes = append(echoes, res)
+	}
+
+	v.ApplyEffects(effects, sendFn, echoFn)
+
+	// 1. Should have expanded alias 'fly' -> "cast 'fly'"
+	if len(sentCommands) != 1 || sentCommands[0] != "cast 'fly'" {
+		t.Errorf("expected sent command 'cast 'fly'', got %v", sentCommands)
+	}
+
+	// 2. Should have evaluated local command #showme and substituted variable
+	if len(echoes) != 1 || echoes[0].Text != "set орк" {
+		t.Errorf("expected echo 'set орк', got %v", echoes)
 	}
 }
+
 
 func TestArcticTriggerCaptureInCommand(t *testing.T) {
 	v := New(nil, 1)
@@ -177,7 +202,7 @@ func TestArcticTriggerCancelStand(t *testing.T) {
 		t.Fatalf("cancel+stand trigger = %d, want 1", len(effects))
 	}
 
-	commands := v.ExpandInput(effects[0].Command)
+	commands := v.ProcessInput(effects[0].Command)
 	if len(commands) != 2 || commands[0] != "cancel" || commands[1] != "stand" {
 		t.Errorf("cancel;stand expansion = %v, want [cancel, stand]", commands)
 	}

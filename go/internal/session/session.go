@@ -92,6 +92,33 @@ func (s *Session) HighlightText(text string) string {
 	return s.vm.ApplyHighlights(text)
 }
 
+func (s *Session) BroadcastResult(res vm.Result) {
+	if res.Kind != vm.ResultEcho {
+		return
+	}
+
+	target := res.TargetBuffer
+	if target == "" {
+		target = "main"
+	}
+
+	// Echo to database
+	id, err := s.store.AppendLogEntry(s.sessionID, target, res.Text, res.Text)
+	if err != nil {
+		log.Printf("failed to append echo to logs: %v", err)
+		return
+	}
+
+	// Apply highlights and broadcast
+	highlighted := s.HighlightText(res.Text)
+	s.broadcastEntryWithText(storage.LogEntry{
+		ID:        id,
+		Buffer:    target,
+		RawText:   res.Text,
+		PlainText: res.Text,
+	}, highlighted)
+}
+
 func (s *Session) Close() error {
 	s.mu.Lock()
 	if s.closed {

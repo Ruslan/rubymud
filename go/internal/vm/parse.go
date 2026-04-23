@@ -10,17 +10,56 @@ func splitFirstWord(input string) (string, []string) {
 	return fields[0], fields[1:]
 }
 
-func splitSemicolons(input string) []string {
-	parts := strings.FieldsFunc(input, func(r rune) bool {
-		return r == ';' || r == '\n' || r == '\r'
-	})
-	result := make([]string, 0, len(parts))
-	for _, p := range parts {
-		trimmed := strings.TrimSpace(p)
-		if trimmed != "" {
-			result = append(result, trimmed)
+func splitStatements(input string) []string {
+	var result []string
+	var current strings.Builder
+
+	inBrace := 0
+	inQuote := false
+	var quoteChar rune
+
+	for _, r := range input {
+		if inQuote {
+			current.WriteRune(r)
+			if r == quoteChar {
+				inQuote = false
+			}
+			continue
+		}
+
+		switch r {
+		case '{':
+			inBrace++
+			current.WriteRune(r)
+		case '}':
+			if inBrace > 0 {
+				inBrace--
+			}
+			current.WriteRune(r)
+		case '\'', '"':
+			inQuote = true
+			quoteChar = r
+			current.WriteRune(r)
+		case ';', '\n', '\r':
+			if inBrace == 0 {
+				trimmed := strings.TrimSpace(current.String())
+				if trimmed != "" {
+					result = append(result, trimmed)
+				}
+				current.Reset()
+			} else {
+				current.WriteRune(r)
+			}
+		default:
+			current.WriteRune(r)
 		}
 	}
+
+	trimmed := strings.TrimSpace(current.String())
+	if trimmed != "" {
+		result = append(result, trimmed)
+	}
+
 	return result
 }
 

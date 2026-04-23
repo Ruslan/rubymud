@@ -54,7 +54,7 @@ func (s *Session) RunReadLoop() {
 					}
 				}
 
-				buttons := s.vm.ApplyEffects(effects, s.sendTriggerCommand)
+				buttons := s.vm.ApplyEffects(effects, s.sendTriggerCommand, s.BroadcastResult)
 
 				entry := storage.LogEntry{ID: id, Buffer: routing.TargetBuffer, RawText: line, PlainText: plainText}
 				for _, b := range buttons {
