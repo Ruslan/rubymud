@@ -299,6 +299,11 @@ socket.onmessage = (event) => {
     logBoot('settings changed -> request variables');
     requestVariables();
   }
+
+  if (message.type === 'command_hint' && message.entry_id && message.command) {
+    logBoot('command hint received', { id: message.entry_id, buffer: message.buffer, cmd: message.command });
+    renderer.addCommandHint(message.entry_id, message.buffer || 'main', message.command);
+  }
 };
 
 socket.onerror = (event) => {

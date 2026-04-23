@@ -31,6 +31,7 @@ export interface ButtonOverlay {
 }
 
 export interface LogEntry {
+  id?: number;
   text?: string;
   buffer?: string;
   commands?: string[];
@@ -46,4 +47,8 @@ export interface ServerMessage {
   entries?: LogEntry[];
   buffers?: Record<string, LogEntry[]>;
   settings?: { domain: string };
+  // Targeted updates
+  entry_id?: number;
+  command?: string;
+  buffer?: string;
 }

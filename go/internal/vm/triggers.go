@@ -75,7 +75,7 @@ func expandTriggerCommand(template string, matches []string) string {
 	})
 }
 
-func (v *VM) ApplyEffects(effects []Effect, sendFn func(string) error, echoFn func(Result)) []Effect {
+func (v *VM) ApplyEffects(effects []Effect, entryID int64, buffer string, sendFn func(string, int64, string) error, echoFn func(Result)) []Effect {
 	var buttons []Effect
 	for _, e := range effects {
 		switch e.Type {
@@ -86,7 +86,7 @@ func (v *VM) ApplyEffects(effects []Effect, sendFn func(string) error, echoFn fu
 				if res.Kind == ResultEcho {
 					echoFn(res)
 				} else {
-					if err := sendFn(res.Text); err != nil {
+					if err := sendFn(res.Text, entryID, buffer); err != nil {
 						log.Printf("trigger send error: %v", err)
 					}
 				}

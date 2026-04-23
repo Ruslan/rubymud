@@ -28,7 +28,7 @@ func (s *Session) DetachClient(id int) {
 }
 
 func (s *Session) broadcastEntry(entry storage.LogEntry) {
-	cle := ClientLogEntry{Text: entry.RawText, Buffer: entry.Buffer, Commands: entry.Commands}
+	cle := ClientLogEntry{ID: entry.ID, Text: entry.RawText, Buffer: entry.Buffer, Commands: entry.Commands}
 	for _, b := range entry.Buttons {
 		cle.Buttons = append(cle.Buttons, ButtonOverlay{Label: b.Label, Command: b.Command})
 	}
@@ -36,7 +36,7 @@ func (s *Session) broadcastEntry(entry storage.LogEntry) {
 }
 
 func (s *Session) broadcastEntryWithText(entry storage.LogEntry, text string) {
-	cle := ClientLogEntry{Text: text, Buffer: entry.Buffer, Commands: entry.Commands}
+	cle := ClientLogEntry{ID: entry.ID, Text: text, Buffer: entry.Buffer, Commands: entry.Commands}
 	for _, b := range entry.Buttons {
 		cle.Buttons = append(cle.Buttons, ButtonOverlay{Label: b.Label, Command: b.Command})
 	}
@@ -54,6 +54,15 @@ func (s *Session) BroadcastVariables() {
 		return
 	}
 	s.broadcastMsg(ServerMsg{Type: "variables", Variables: variables})
+}
+
+func (s *Session) broadcastCommandHint(cmd string, entryID int64, buffer string) {
+	s.broadcastMsg(ServerMsg{
+		Type:    "command_hint",
+		Command: cmd,
+		EntryID: entryID,
+		Buffer:  buffer,
+	})
 }
 
 func (s *Session) broadcastMsg(msg ServerMsg) {

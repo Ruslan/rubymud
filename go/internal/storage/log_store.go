@@ -154,6 +154,21 @@ func (s *Store) LogRangeDetailed(sessionID, beforeID int64, limit int) ([]LogEnt
 	return entries, nil
 }
 
+func (s *Store) AppendCommandOverlay(entryID int64, command string) error {
+	command = strings.TrimSpace(command)
+	if command == "" || entryID == 0 {
+		return nil
+	}
+
+	payload, _ := json.Marshal(commandOverlayPayload{Command: command})
+
+	return s.db.Create(&LogOverlay{
+		LogEntryID:  entryID,
+		OverlayType: "command",
+		PayloadJSON: string(payload),
+	}).Error
+}
+
 func (s *Store) AppendCommandHintToLatestLogEntry(sessionID int64, command string) error {
 	command = strings.TrimSpace(command)
 	if command == "" {

@@ -79,7 +79,7 @@
 
 #nop Kill feed routed into buffer `kills` via local #woutput.
 #action {^(.+?) мертв! R\.I\.P\.$} {#woutput {kills} {[$TIME] %0}}
-#action {^Вы получили \d+ очков опыта\.$} {#woutput {kills} {[$TIME] %0}}
+#action {^Вы получили \d+ очк(?:о|а|ов) опыта\.$} {#woutput {kills} {[$TIME] %0}}
 
 #nop --- Buff and status notifications migrated as plain triggers ---
 #action {^Волшебная поддержка закончилась.} {гг <<< -Эйд >>>}

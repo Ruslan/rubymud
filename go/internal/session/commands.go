@@ -8,11 +8,18 @@ import (
 	"rubymud/go/internal/vm"
 )
 
-func (s *Session) sendTriggerCommand(cmd string) error {
-	log.Printf("trigger sending command: %q", cmd)
+func (s *Session) sendTriggerCommand(cmd string, entryID int64, buffer string) error {
+	log.Printf("trigger sending command: %q (entry=%d, buffer=%s)", cmd, entryID, buffer)
 	if err := s.store.AppendHistoryEntry(s.sessionID, "trigger", cmd); err != nil {
 		log.Printf("append history entry failed: %v", err)
 	}
+	// Add visual hint to the log entry that triggered this
+	if err := s.store.AppendCommandOverlay(entryID, cmd); err != nil {
+		log.Printf("append command overlay failed: %v", err)
+	}
+	// Broadcast hint to clients immediately with correct context
+	s.broadcastCommandHint(cmd, entryID, buffer)
+
 	_, err := s.conn.Write([]byte(cmd + "\n"))
 	return err
 }

@@ -186,7 +186,7 @@ func TestApplyEffects_FullPipeline(t *testing.T) {
 	var sentCommands []string
 	var echoes []Result
 
-	sendFn := func(cmd string) error {
+	sendFn := func(cmd string, entryID int64, buffer string) error {
 		sentCommands = append(sentCommands, cmd)
 		return nil
 	}
@@ -194,7 +194,7 @@ func TestApplyEffects_FullPipeline(t *testing.T) {
 		echoes = append(echoes, res)
 	}
 
-	v.ApplyEffects(effects, sendFn, echoFn)
+	v.ApplyEffects(effects, 123, "main", sendFn, echoFn)
 
 	// 1. Should have expanded alias 'fly' -> "cast 'fly'"
 	if len(sentCommands) != 1 || sentCommands[0] != "cast 'fly'" {

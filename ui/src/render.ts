@@ -373,6 +373,9 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
   function createEntryDOM(entry: LogEntry): HTMLElement {
     const line = document.createElement('div');
     line.className = 'output-line';
+    if (entry.id) {
+      line.dataset['entryId'] = String(entry.id);
+    }
 
     const span = document.createElement('span');
     span.innerHTML = entry.text ? ansiUp.ansi_to_html(entry.text) : '&nbsp;';
@@ -458,6 +461,29 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
         }
       }
     });
+  }
+
+  function addCommandHint(entryId: number, buffer: string, command: string) {
+    // 1. Persist in memory so it survives pane re-renders
+    const data = getBufferData(buffer);
+    const entry = data.find(e => e.id === entryId);
+    if (entry) {
+      entry.commands = entry.commands || [];
+      entry.commands.push(command);
+    }
+
+    // 2. Update existing DOM if present
+    for (const pane of renderedPanes.values()) {
+      if (pane.node.buffer === buffer) {
+        const line = pane.outputEl.querySelector<HTMLElement>(`[data-entry-id="${entryId}"]`);
+        if (line) {
+          const hint = document.createElement('span');
+          hint.className = 'output-hint';
+          hint.textContent = `-> ${command}`;
+          line.appendChild(hint);
+        }
+      }
+    }
   }
 
   function appendCommandHint(command: string) {
@@ -744,6 +770,7 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
   // Expose API
   return {
     appendCommandHint,
+    addCommandHint,
     appendEntry,
     clearOutput,
     renderHotkeys,

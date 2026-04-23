@@ -10,6 +10,9 @@ type ServerMsg struct {
 	Status    string                        `json:"status,omitempty"`
 	Message   string                        `json:"message,omitempty"`
 	Settings  *SettingsChangedJSON          `json:"settings,omitempty"`
+	EntryID   int64                         `json:"entry_id,omitempty"` // For targeted updates
+	Command   string                        `json:"command,omitempty"`  // For targeted updates
+	Buffer    string                        `json:"buffer,omitempty"`   // For targeted updates
 }
 
 type SettingsChangedJSON struct {
@@ -17,6 +20,7 @@ type SettingsChangedJSON struct {
 }
 
 type ClientLogEntry struct {
+	ID       int64           `json:"id,omitempty"`
 	Text     string          `json:"text"`
 	Buffer   string          `json:"buffer,omitempty"`
 	Commands []string        `json:"commands,omitempty"`

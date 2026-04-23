@@ -1221,7 +1221,7 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 	for bufName, logs := range logsPerBuffer {
 		entries := make([]session.ClientLogEntry, 0, len(logs))
 		for _, entry := range logs {
-			cle := session.ClientLogEntry{Text: sess.HighlightText(entry.RawText), Buffer: bufName, Commands: entry.Commands}
+			cle := session.ClientLogEntry{ID: entry.ID, Text: sess.HighlightText(entry.RawText), Buffer: bufName, Commands: entry.Commands}
 			for _, b := range entry.Buttons {
 				cle.Buttons = append(cle.Buttons, session.ButtonOverlay{Label: b.Label, Command: b.Command})
 			}
