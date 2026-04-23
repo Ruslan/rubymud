@@ -262,3 +262,9 @@ Each pane:
 | Multi-target copy in 0.0.7? | No — deferred |
 | Split creation: command or UI? | UI button first, command deferred |
 | Separate history retention per buffer? | No — all buffers share the main log model, just filtered by `buffer` column |
+
+### Commands for Compatibility
+Added for compatibility with third-party scripts:
+* `#showme {text}` — outputs text to the main window.
+* `#woutput {window_name} {text}` — outputs text to the specified additional window (analogous to `wecho`).
+If text needs to be output with colors, it uses format similar to highlights: `#woutput {window_name} {text with ANSI/highlight tags}`. We will use our existing ANSI/highlight coloring format for this.

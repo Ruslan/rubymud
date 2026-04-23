@@ -171,6 +171,7 @@ const renderer = createRenderer({
   onButtonRendered,
   state,
 });
+renderer.createPane('main');
 logBoot('renderer initialized');
 
 window.addEventListener('keydown', (event) => {
@@ -203,13 +204,15 @@ window.addEventListener('keydown', (event) => {
 elements.keyboardToggle.addEventListener('click', () => renderer.setActivePanel('keyboard'));
 elements.variablesToggle.addEventListener('click', () => renderer.setActivePanel('variables'));
 elements.settingsToggle.addEventListener('click', () => window.open('/settings', 'settings'));
-elements.output.addEventListener('click', (event) => {
+elements.splitPaneToggle.addEventListener('click', () => renderer.createPane('main'));
+
+elements.panesContainer.addEventListener('click', (event) => {
   const selection = window.getSelection();
   if (selection && selection.toString()) {
     return;
   }
 
-  if ((event.target as HTMLElement | null)?.closest('button')) {
+  if ((event.target as HTMLElement | null)?.closest('button') || (event.target as HTMLElement | null)?.closest('select')) {
     return;
   }
 
@@ -236,6 +239,7 @@ socket.onmessage = (event) => {
       history: message.history?.length || 0,
       hotkeys: message.hotkeys?.length || 0,
       variables: message.variables?.length || 0,
+      buffers: Object.keys(message.buffers || {}).join(', ') || 'none',
     });
     state.restoreInProgress = true;
     renderer.clearOutput();
@@ -243,10 +247,14 @@ socket.onmessage = (event) => {
     configuredHotkeys = message.hotkeys || [];
     renderer.renderHotkeys(configuredHotkeys);
     requestVariables();
+    for (const entries of Object.values(message.buffers || {})) {
+      entries.forEach(renderer.appendEntry);
+    }
   }
 
   if (message.type === 'restore_chunk') {
-    logBoot('restore chunk', { entries: message.entries?.length || 0 });
+    // Legacy fallback: server no longer sends chunks, but handle gracefully.
+    logBoot('restore chunk (legacy)', { entries: message.entries?.length || 0 });
     (message.entries || []).forEach(renderer.appendEntry);
   }
 

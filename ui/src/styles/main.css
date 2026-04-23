@@ -528,3 +528,64 @@ body {
   border-color: #9ece6a !important;
   transform: scale(1.05);
 }
+
+/* Panes Management */
+
+.panes-container {
+  flex: 1;
+  display: flex;
+  flex-direction: row; /* or column depending on split */
+  overflow: hidden;
+  background: #111315;
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 200px;
+  min-height: 100px;
+  border-right: 1px solid #232a31;
+}
+
+.pane:last-child {
+  border-right: none;
+}
+
+.pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 8px;
+  background: #1a2027;
+  border-bottom: 1px solid #232a31;
+  font-size: 12px;
+}
+
+.pane-select {
+  background: #0d1117;
+  color: #e8edf2;
+  border: 1px solid #30363d;
+  border-radius: 4px;
+  padding: 2px 4px;
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.pane-close {
+  background: transparent;
+  color: #97a4b3;
+  border: none;
+  cursor: pointer;
+  font-size: 14px;
+}
+
+.pane-close:hover {
+  color: #f7768e;
+}
+
+.pane-output {
+  flex: 1;
+  overflow: auto;
+  padding: 12px;
+}

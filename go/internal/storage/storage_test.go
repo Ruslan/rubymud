@@ -29,7 +29,7 @@ func TestRecentLogsLoadsButtonOverlays(t *testing.T) {
 
 	store := NewTestStore(db)
 	for _, stmt := range []string{
-		`CREATE TABLE log_entries (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, stream TEXT NOT NULL, window_name TEXT, raw_text TEXT NOT NULL, plain_text TEXT NOT NULL, source_type TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
+		`CREATE TABLE log_entries (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, buffer TEXT NOT NULL DEFAULT 'main', stream TEXT NOT NULL, window_name TEXT, raw_text TEXT NOT NULL, plain_text TEXT NOT NULL, source_type TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
 		`CREATE TABLE log_overlays (id INTEGER PRIMARY KEY, log_entry_id INTEGER NOT NULL, overlay_type TEXT NOT NULL, payload_json TEXT NOT NULL, source_type TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
 	} {
 		if err := db.Exec(stmt).Error; err != nil {
@@ -37,7 +37,7 @@ func TestRecentLogsLoadsButtonOverlays(t *testing.T) {
 		}
 	}
 
-	logEntryID, err := store.AppendLogEntry(1, "R.I.P.", "R.I.P.")
+	logEntryID, err := store.AppendLogEntry(1, "main", "R.I.P.", "R.I.P.")
 	if err != nil {
 		t.Fatalf("AppendLogEntry: %v", err)
 	}

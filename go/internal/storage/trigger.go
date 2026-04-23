@@ -13,6 +13,8 @@ type TriggerRule struct {
 	Enabled        bool       `json:"enabled"`
 	StopAfterMatch bool       `json:"stop_after_match"`
 	GroupName      string     `json:"group_name"`
+	TargetBuffer   string     `json:"target_buffer"`
+	BufferAction   string     `json:"buffer_action"`
 	UpdatedAt      SQLiteTime `json:"updated_at"`
 }
 
@@ -61,6 +63,8 @@ func (s *Store) UpdateTrigger(t TriggerRule) error {
 			"is_button":        t.IsButton,
 			"stop_after_match": t.StopAfterMatch,
 			"group_name":       t.GroupName,
+			"target_buffer":    t.TargetBuffer,
+			"buffer_action":    t.BufferAction,
 			"updated_at":       t.UpdatedAt,
 		})
 	if result.Error != nil {

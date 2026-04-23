@@ -4,6 +4,7 @@ import (
 	"log"
 	"strings"
 
+	"rubymud/go/internal/storage"
 	"rubymud/go/internal/vm"
 )
 
@@ -23,19 +24,34 @@ func (s *Session) SendCommand(command string, source string) error {
 	}
 
 	results := s.vm.ProcessInputDetailed(command)
-	echoMessages := make([]string, 0)
+	type echoMsg struct {
+		Text         string
+		TargetBuffer string
+	}
+	echoMessages := make([]echoMsg, 0)
 	commands := make([]string, 0)
 	for _, r := range results {
 		switch r.Kind {
 		case vm.ResultEcho:
-			echoMessages = append(echoMessages, r.Text)
+			echoMessages = append(echoMessages, echoMsg{Text: r.Text, TargetBuffer: r.TargetBuffer})
 		default:
 			commands = append(commands, r.Text)
 		}
 	}
 
 	for _, msg := range echoMessages {
-		s.BroadcastEcho(msg)
+		buf := msg.TargetBuffer
+		if buf == "" {
+			buf = "main"
+		}
+		plain := stripANSI(msg.Text)
+		id, err := s.store.AppendLogEntry(s.sessionID, buf, msg.Text, plain)
+		if err == nil {
+			entry := storage.LogEntry{ID: id, Buffer: buf, RawText: msg.Text, PlainText: plain}
+			s.broadcastEntryWithText(entry, s.vm.ApplyHighlights(msg.Text))
+		} else {
+			log.Printf("failed to save echo: %v", err)
+		}
 	}
 
 	for _, cmd := range commands {

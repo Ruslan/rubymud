@@ -1118,7 +1118,7 @@ func parseClientMessage(payload []byte) clientMessage {
 }
 
 func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.ServerMsg) error) error {
-	logs, err := sess.RecentLogs(500)
+	logsPerBuffer, err := sess.RecentLogsPerBuffer(500)
 	if err != nil {
 		return err
 	}
@@ -1128,48 +1128,43 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 		return err
 	}
 
-	begin := session.ServerMsg{
-		Type:    "restore_begin",
-		History: history,
+	buffers := make(map[string][]session.ClientLogEntry, len(logsPerBuffer))
+	for bufName, logs := range logsPerBuffer {
+		entries := make([]session.ClientLogEntry, 0, len(logs))
+		for _, entry := range logs {
+			cle := session.ClientLogEntry{Text: sess.HighlightText(entry.RawText), Buffer: bufName, Commands: entry.Commands}
+			for _, b := range entry.Buttons {
+				cle.Buttons = append(cle.Buttons, session.ButtonOverlay{Label: b.Label, Command: b.Command})
+			}
+			entries = append(entries, cle)
+		}
+		buffers[bufName] = entries
 	}
+
 	variables, err := sess.CurrentVariables()
 	if err != nil {
 		return err
 	}
-	begin.Variables = variables
-	
+
+	begin := session.ServerMsg{
+		Type:      "restore_begin",
+		History:   history,
+		Variables: variables,
+		Buffers:   buffers,
+	}
+
 	profileIDs, _ := s.store.GetOrderedProfileIDs(sess.SessionID())
 	hotkeys, _ := s.store.LoadHotkeysForProfiles(profileIDs)
 	for _, hk := range hotkeys {
 		begin.Hotkeys = append(begin.Hotkeys, session.HotkeyJSON{Shortcut: hk.Shortcut, Command: hk.Command})
 	}
-	
+
 	if err := writeJSON(begin); err != nil {
 		return err
 	}
 
-	entries := make([]session.ClientLogEntry, 0, len(logs))
-	for _, entry := range logs {
-		cle := session.ClientLogEntry{Text: sess.HighlightText(entry.RawText), Commands: entry.Commands}
-		for _, b := range entry.Buttons {
-			cle.Buttons = append(cle.Buttons, session.ButtonOverlay{Label: b.Label, Command: b.Command})
-		}
-		entries = append(entries, cle)
-	}
-
-	for start := 0; start < len(entries); start += restoreChunkSize {
-		end := start + restoreChunkSize
-		if end > len(entries) {
-			end = len(entries)
-		}
-		if err := writeJSON(session.ServerMsg{Type: "restore_chunk", Entries: entries[start:end]}); err != nil {
-			return err
-		}
-	}
-
 	return writeJSON(session.ServerMsg{Type: "restore_end"})
 }
-
 // Profile Variables
 
 func (s *Server) listProfileVariables(w http.ResponseWriter, r *http.Request) {

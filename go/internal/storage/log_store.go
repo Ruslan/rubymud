@@ -16,9 +16,13 @@ func (o *LogOverlay) TableName() string {
 	return "log_overlays"
 }
 
-func (s *Store) AppendLogEntry(sessionID int64, rawText, plainText string) (int64, error) {
+func (s *Store) AppendLogEntry(sessionID int64, buffer, rawText, plainText string) (int64, error) {
+	if buffer == "" {
+		buffer = "main"
+	}
 	entry := LogRecord{
 		SessionID:  sessionID,
+		Buffer:     buffer,
 		Stream:     "mud",
 		RawText:    rawText,
 		PlainText:  plainText,
@@ -29,8 +33,59 @@ func (s *Store) AppendLogEntry(sessionID int64, rawText, plainText string) (int6
 	return entry.ID, err
 }
 
+func (s *Store) LogEntriesForBuffer(sessionID int64, buffer string, limit int) ([]LogEntry, error) {
+	if buffer == "" {
+		buffer = "main"
+	}
+	var records []LogRecord
+	err := s.db.Where("session_id = ? AND buffer = ?", sessionID, buffer).
+		Order("created_at DESC, id DESC").
+		Limit(limit).
+		Find(&records).Error
+	if err != nil {
+		return nil, err
+	}
+
+	entries := make([]LogEntry, 0, len(records))
+	for _, r := range records {
+		entries = append(entries, LogEntry{
+			ID:        r.ID,
+			Buffer:    r.Buffer,
+			RawText:   r.RawText,
+			PlainText: r.PlainText,
+		})
+	}
+
+	// Reverse to get chronological order (oldest first)
+	for i, j := 0, len(entries)-1; i < j; i, j = i+1, j-1 {
+		entries[i], entries[j] = entries[j], entries[i]
+	}
+
+	if err := s.loadOverlays(entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
 func (s *Store) RecentLogs(sessionID int64, limit int) ([]LogEntry, error) {
 	return s.LogRangeDetailed(sessionID, 9223372036854775807, limit)
+}
+
+func (s *Store) RecentLogsPerBuffer(sessionID int64, limit int) (map[string][]LogEntry, error) {
+	var distinctBuffers []string
+	if err := s.db.Model(&LogRecord{}).Where("session_id = ?", sessionID).Distinct("buffer").Pluck("buffer", &distinctBuffers).Error; err != nil {
+		return nil, err
+	}
+
+	result := make(map[string][]LogEntry)
+	for _, b := range distinctBuffers {
+		entries, err := s.LogEntriesForBuffer(sessionID, b, limit)
+		if err != nil {
+			return nil, err
+		}
+		result[b] = entries
+	}
+	return result, nil
 }
 
 // LatestLogID returns the highest log entry ID for the session, or 0 if none.
@@ -54,6 +109,7 @@ func (s *Store) LogsSinceID(sessionID, afterID int64, limit int) ([]LogEntry, er
 	for _, r := range records {
 		entries = append(entries, LogEntry{
 			ID:        r.ID,
+			Buffer:    r.Buffer,
 			RawText:   r.RawText,
 			PlainText: r.PlainText,
 			CreatedAt: r.CreatedAt,
@@ -79,6 +135,7 @@ func (s *Store) LogRangeDetailed(sessionID, beforeID int64, limit int) ([]LogEnt
 	for _, r := range records {
 		entries = append(entries, LogEntry{
 			ID:        r.ID,
+			Buffer:    r.Buffer,
 			RawText:   r.RawText,
 			PlainText: r.PlainText,
 			CreatedAt: r.CreatedAt,
@@ -258,6 +315,7 @@ func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines i
 	for _, r := range records {
 		allEntries = append(allEntries, LogEntry{
 			ID:        r.ID,
+			Buffer:    r.Buffer,
 			RawText:   r.RawText,
 			PlainText: r.PlainText,
 			CreatedAt: r.CreatedAt,

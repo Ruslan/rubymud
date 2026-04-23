@@ -40,7 +40,7 @@ func TestSearchLogsDetailed_OverlappingContext(t *testing.T) {
 		if i == 5 || i == 7 {
 			text += " [MATCH]"
 		}
-		s.AppendLogEntry(sessionID, text, text)
+		s.AppendLogEntry(sessionID, "main", text, text)
 	}
 
 	// Search with context 2. 
@@ -48,7 +48,7 @@ func TestSearchLogsDetailed_OverlappingContext(t *testing.T) {
 	// Match at 7 should get [5, 6, 7, 8, 9]
 	// Since they overlap, they should be merged into one group [3, 4, 5, 6, 7, 8, 9]
 	
-	groups, err := s.SearchLogsDetailed(sessionID, "[MATCH]", 2)
+	groups, err := s.SearchLogsDetailed(sessionID, "[MATCH]", 2, 9223372036854775807)
 	if err != nil {
 		t.Fatalf("SearchLogsDetailed: %v", err)
 	}
@@ -76,10 +76,10 @@ func TestSearchLogsDetailed_SeparateGroups(t *testing.T) {
 		if i == 10 || i == 40 {
 			text += " [MATCH]"
 		}
-		s.AppendLogEntry(sessionID, text, text)
+		s.AppendLogEntry(sessionID, "main", text, text)
 	}
 
-	groups, err := s.SearchLogsDetailed(sessionID, "[MATCH]", 2)
+	groups, err := s.SearchLogsDetailed(sessionID, "[MATCH]", 2, 9223372036854775807)
 	if err != nil {
 		t.Fatalf("SearchLogsDetailed: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestLogRangeDetailed(t *testing.T) {
 
 	for i := 1; i <= 10; i++ {
 		text := fmt.Sprintf("Line %d", i)
-		s.AppendLogEntry(sessionID, text, text)
+		s.AppendLogEntry(sessionID, "main", text, text)
 	}
 
 	// Get logs before ID 6 (exclusive), limit 3. Should get 3, 4, 5

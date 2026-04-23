@@ -8,7 +8,8 @@ function requireElement<T extends HTMLElement>(id: string): T {
 
 export function getAppElements() {
   return {
-    output: requireElement<HTMLDivElement>('output'),
+    panesContainer: requireElement<HTMLDivElement>('panes-container'),
+    splitPaneToggle: requireElement<HTMLButtonElement>('btn-split-pane'),
     bottomPanels: requireElement<HTMLDivElement>('bottom-panels'),
     bottomToolbarHint: requireElement<HTMLSpanElement>('bottom-toolbar-hint'),
     hotkeysBox: requireElement<HTMLDivElement>('hotkeys'),

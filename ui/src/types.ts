@@ -25,6 +25,7 @@ export interface ButtonOverlay {
 
 export interface LogEntry {
   text?: string;
+  buffer?: string;
   commands?: string[];
   buttons?: ButtonOverlay[];
 }
@@ -36,5 +37,6 @@ export interface ServerMessage {
   hotkeys?: Hotkey[];
   variables?: Variable[];
   entries?: LogEntry[];
+  buffers?: Record<string, LogEntry[]>;
   settings?: { domain: string };
 }

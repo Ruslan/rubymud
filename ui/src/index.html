@@ -9,11 +9,15 @@
 </head>
 <body>
   <div class="app">
-    <div id="output"></div>
+    <div id="panes-container" class="panes-container"></div>
     <input id="input" type="text" placeholder="Type a command and press Enter">
     <div id="bottom-dock" class="bottom-dock">
       <div class="bottom-toolbar">
         <div class="bottom-toolbar__tabs">
+          <button id="btn-split-pane" class="panel-tab" type="button" title="Split pane">
+            <span class="panel-tab__icon">⊞</span>
+            <span class="panel-tab__label">Split</span>
+          </button>
           <button id="panel-toggle-keyboard" class="panel-tab" type="button" title="Keyboard panel">
             <span class="panel-tab__icon">⌨</span>
             <span class="panel-tab__label">Keyboard</span>

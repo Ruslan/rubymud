@@ -5,10 +5,12 @@ import (
 	"regexp"
 )
 
-func (v *VM) MatchTriggers(plainText string, logEntryID int64) []Effect {
+func (v *VM) MatchTriggers(plainText string) ([]Effect, RoutingInfo) {
 	v.ensureFresh()
 
 	var effects []Effect
+	routing := RoutingInfo{TargetBuffer: "main"}
+
 	for i := range v.triggers {
 		t := &v.triggers[i]
 		if !t.Enabled {
@@ -32,9 +34,22 @@ func (v *VM) MatchTriggers(plainText string, logEntryID int64) []Effect {
 			if len(label) > 40 {
 				label = label[:37] + "..."
 			}
-			effects = append(effects, Effect{Type: "button", Label: label, Command: cmd, LogEntryID: logEntryID})
+			effects = append(effects, Effect{Type: "button", Label: label, Command: cmd})
 		} else {
 			effects = append(effects, Effect{Type: "send", Command: cmd})
+		}
+
+		if t.TargetBuffer != "" {
+			switch t.BufferAction {
+			case "move":
+				if routing.TargetBuffer == "main" {
+					routing.TargetBuffer = t.TargetBuffer
+				}
+			case "copy":
+				routing.CopyBuffers = append(routing.CopyBuffers, t.TargetBuffer)
+			case "echo":
+				routing.Echoes = append(routing.Echoes, EchoAction{TargetBuffer: t.TargetBuffer, Text: cmd})
+			}
 		}
 
 		if t.StopAfterMatch {
@@ -42,7 +57,7 @@ func (v *VM) MatchTriggers(plainText string, logEntryID int64) []Effect {
 		}
 	}
 
-	return effects
+	return effects, routing
 }
 
 func expandTriggerCommand(template string, matches []string) string {

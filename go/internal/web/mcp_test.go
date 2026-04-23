@@ -138,7 +138,7 @@ func TestMCPGetOutput(t *testing.T) {
 	defer ts.Close()
 
 	// Add some logs
-	s.store.AppendLogEntry(sess.SessionID(), "Hello world", "Hello world")
+	s.store.AppendLogEntry(sess.SessionID(), "main", "Hello world", "Hello world")
 	s.store.AppendCommandHintToLatestLogEntry(sess.SessionID(), "look")
 
 	reqBody := fmt.Sprintf(`{"jsonrpc":"2.0","method":"tools/call","id":3,"params":{"name":"mud_get_output","arguments":{"session_id":%d}}}`, sess.SessionID())
@@ -189,9 +189,9 @@ func TestMCPSearch(t *testing.T) {
 	defer ts.Close()
 
 	// Add some logs
-	s.store.AppendLogEntry(sess.SessionID(), "First line", "First line")
-	s.store.AppendLogEntry(sess.SessionID(), "Matching target here", "Matching target here")
-	s.store.AppendLogEntry(sess.SessionID(), "Last line", "Last line")
+	s.store.AppendLogEntry(sess.SessionID(), "main", "First line", "First line")
+	s.store.AppendLogEntry(sess.SessionID(), "main", "Matching target here", "Matching target here")
+	s.store.AppendLogEntry(sess.SessionID(), "main", "Last line", "Last line")
 
 	reqBody := fmt.Sprintf(`{"jsonrpc":"2.0","method":"tools/call","id":5,"params":{"name":"mud_search","arguments":{"session_id":%d,"query":"target","context":1}}}`, sess.SessionID())
 	resp, err := http.Post(ts.URL, "application/json", bytes.NewBufferString(reqBody))

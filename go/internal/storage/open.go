@@ -21,9 +21,11 @@ func Open(path string) (*Store, error) {
 		&AppSetting{}, &SessionRecord{}, &Variable{},
 		&AliasRule{}, &TriggerRule{}, &HighlightRule{},
 		&Profile{}, &SessionProfile{}, &HotkeyRule{}, &ProfileVariable{},
+		&LogRecord{}, &LogOverlay{}, &HistoryEntry{},
 	); err != nil {
 		return nil, err
 	}
+
 	store := &Store{db: db}
 	if err := store.BackfillMissingSessionProfiles(); err != nil {
 		return nil, err

@@ -39,23 +39,54 @@ func (s *Session) RunReadLoop() {
 			}
 
 			for _, line := range splitLinesForLogs(processed) {
-				id, err := s.store.AppendLogEntry(s.sessionID, line, line)
+				plainText := stripANSI(line)
+				effects, routing := s.vm.MatchTriggers(plainText)
+
+				id, err := s.store.AppendLogEntry(s.sessionID, routing.TargetBuffer, line, plainText)
 				if err != nil {
 					log.Printf("append log entry failed: %v", err)
 					continue
 				}
 
-				plainText := stripANSI(line)
-				effects := s.vm.MatchTriggers(plainText, id)
+				for i := range effects {
+					if effects[i].Type == "button" {
+						effects[i].LogEntryID = id
+					}
+				}
+
 				buttons := s.vm.ApplyEffects(effects, s.sendTriggerCommand)
 
-				entry := storage.LogEntry{ID: id, RawText: line}
+				entry := storage.LogEntry{ID: id, Buffer: routing.TargetBuffer, RawText: line, PlainText: plainText}
 				for _, b := range buttons {
 					entry.Buttons = append(entry.Buttons, storage.ButtonOverlay{Label: b.Label, Command: b.Command})
 				}
 
 				highlighted := s.vm.ApplyHighlights(line)
 				s.broadcastEntryWithText(entry, highlighted)
+
+				// Handle copies
+				for _, copyBuffer := range routing.CopyBuffers {
+					copyID, err := s.store.AppendLogEntry(s.sessionID, copyBuffer, line, plainText)
+					if err == nil {
+						for _, b := range entry.Buttons {
+							_ = s.store.AppendButtonOverlay(copyID, b.Label, b.Command)
+						}
+						copyEntry := entry
+						copyEntry.ID = copyID
+						copyEntry.Buffer = copyBuffer
+						s.broadcastEntryWithText(copyEntry, highlighted)
+					}
+				}
+
+				// Handle echoes
+				for _, echo := range routing.Echoes {
+					echoPlain := stripANSI(echo.Text)
+					echoID, err := s.store.AppendLogEntry(s.sessionID, echo.TargetBuffer, echo.Text, echoPlain)
+					if err == nil {
+						echoEntry := storage.LogEntry{ID: echoID, Buffer: echo.TargetBuffer, RawText: echo.Text, PlainText: echoPlain}
+						s.broadcastEntryWithText(echoEntry, s.vm.ApplyHighlights(echo.Text))
+					}
+				}
 			}
 		}
 	}

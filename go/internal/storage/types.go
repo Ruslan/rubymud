@@ -36,6 +36,7 @@ type HistoryEntry struct {
 type LogRecord struct {
 	ID         int64      `gorm:"primaryKey"`
 	SessionID  int64      `json:"session_id"`
+	Buffer     string     `json:"buffer"`
 	Stream     string     `json:"stream"`
 	RawText    string     `json:"raw_text"`
 	PlainText  string     `json:"plain_text"`
@@ -59,6 +60,7 @@ type ButtonOverlay struct {
 
 type LogEntry struct {
 	ID        int64
+	Buffer    string
 	RawText   string
 	PlainText string
 	CreatedAt SQLiteTime

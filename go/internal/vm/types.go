@@ -9,10 +9,22 @@ import (
 const maxExpandDepth = 10
 
 type Effect struct {
-	Type       string
-	Command    string
-	Label      string
-	LogEntryID int64
+	Type         string
+	Command      string
+	Label        string
+	LogEntryID   int64
+	TargetBuffer string
+}
+
+type RoutingInfo struct {
+	TargetBuffer string
+	CopyBuffers  []string
+	Echoes       []EchoAction
+}
+
+type EchoAction struct {
+	TargetBuffer string
+	Text         string
 }
 
 type ResultKind string
@@ -23,8 +35,9 @@ const (
 )
 
 type Result struct {
-	Text string
-	Kind ResultKind
+	Text         string
+	Kind         ResultKind
+	TargetBuffer string
 }
 
 type VM struct {

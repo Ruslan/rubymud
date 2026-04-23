@@ -12,12 +12,12 @@ func TestArcticTriggerAnchoredCaret(t *testing.T) {
 		{Pattern: `^You are thirsty\.`, Command: "drink all", Enabled: true},
 	}
 
-	effects := v.MatchTriggers("You are thirsty.", 1)
+	effects, _ := v.MatchTriggers("You are thirsty.")
 	if len(effects) != 1 {
 		t.Fatalf("anchored trigger match = %d, want 1", len(effects))
 	}
 
-	effects = v.MatchTriggers("Someone says: You are thirsty.", 2)
+	effects, _ = v.MatchTriggers("Someone says: You are thirsty.")
 	if len(effects) != 0 {
 		t.Errorf("anchored trigger should NOT match mid-line, got %d matches", len(effects))
 	}
@@ -29,7 +29,7 @@ func TestArcticTriggerWithCapture(t *testing.T) {
 		{Pattern: `^(.+) is dead!`, Command: "get coins corpse", Enabled: true},
 	}
 
-	effects := v.MatchTriggers("The Dragon is dead!", 1)
+	effects, _ := v.MatchTriggers("The Dragon is dead!")
 	if len(effects) != 1 || effects[0].Command != "get coins corpse" {
 		t.Errorf("is dead trigger = %v, want send{get coins corpse}", effects)
 	}
@@ -41,7 +41,7 @@ func TestArcticTriggerSplitCoins(t *testing.T) {
 		{Pattern: `^There were (\d+) coins\.`, Command: "split %1", Enabled: true},
 	}
 
-	effects := v.MatchTriggers("There were 42 coins.", 1)
+	effects, _ := v.MatchTriggers("There were 42 coins.")
 	if len(effects) != 1 || effects[0].Command != "split 42" {
 		t.Errorf("split coins trigger = %v, want send{split 42}", effects)
 	}
@@ -53,7 +53,7 @@ func TestArcticTriggerTwoCaptures(t *testing.T) {
 		{Pattern: `^(.+) swings madly at you with (.+), knocking you to the ground\.`, Command: "stand", Enabled: true},
 	}
 
-	effects := v.MatchTriggers("Гоблин swings madly at you with дубина, knocking you to the ground.", 1)
+	effects, _ := v.MatchTriggers("Гоблин swings madly at you with дубина, knocking you to the ground.")
 	if len(effects) != 1 || effects[0].Command != "stand" {
 		t.Errorf("two-capture trigger = %v, want send{stand}", effects)
 	}
@@ -65,7 +65,7 @@ func TestArcticTriggerFlyLoss(t *testing.T) {
 		{Pattern: `^You feel much heavier\.`, Command: "fly;fly", Enabled: true},
 	}
 
-	effects := v.MatchTriggers("You feel much heavier.", 1)
+	effects, _ := v.MatchTriggers("You feel much heavier.")
 	if len(effects) != 1 {
 		t.Fatalf("fly loss trigger = %d effects, want 1", len(effects))
 	}
@@ -82,7 +82,7 @@ func TestArcticTriggerSummonWithMulticmd(t *testing.T) {
 		{Pattern: `^(.+) has summoned you!`, Command: "wake;stand;fly", Enabled: true},
 	}
 
-	effects := v.MatchTriggers("Маг has summoned you!", 1)
+	effects, _ := v.MatchTriggers("Маг has summoned you!")
 	if len(effects) != 1 {
 		t.Fatalf("summon trigger = %d effects, want 1", len(effects))
 	}
@@ -105,7 +105,7 @@ func TestArcticRipButtonTrigger(t *testing.T) {
 		{Pattern: `R\.I\.P\.$`, Command: "взя все *.тру", IsButton: true, Enabled: true},
 	}
 
-	effects := v.MatchTriggers("Крыса R.I.P.", 42)
+	effects, _ := v.MatchTriggers("Крыса R.I.P.")
 	if len(effects) != 1 || effects[0].Type != "button" {
 		t.Fatalf("RIP button trigger = %v, want button", effects)
 	}
@@ -121,7 +121,7 @@ func TestMultipleTriggersMatch(t *testing.T) {
 		{Pattern: `^You are`, Command: "look", Enabled: true},
 	}
 
-	effects := v.MatchTriggers("You are hungry.", 1)
+	effects, _ := v.MatchTriggers("You are hungry.")
 	if len(effects) != 2 {
 		t.Errorf("two triggers matching same line = %d effects, want 2", len(effects))
 	}
@@ -133,7 +133,7 @@ func TestTriggerNoMatch(t *testing.T) {
 		{Pattern: `^You are thirsty\.`, Command: "drink all", Enabled: true},
 	}
 
-	effects := v.MatchTriggers("You are hungry.", 1)
+	effects, _ := v.MatchTriggers("You are hungry.")
 	if len(effects) != 0 {
 		t.Errorf("non-matching trigger = %d effects, want 0", len(effects))
 	}
@@ -145,7 +145,7 @@ func TestDisabledTrigger(t *testing.T) {
 		{Pattern: `^test`, Command: "cmd", Enabled: false},
 	}
 
-	effects := v.MatchTriggers("test line", 1)
+	effects, _ := v.MatchTriggers("test line")
 	if len(effects) != 0 {
 		t.Errorf("disabled trigger should not match, got %d effects", len(effects))
 	}
@@ -157,7 +157,7 @@ func TestArcticTriggerCaptureInCommand(t *testing.T) {
 		{Pattern: `^(.+) pants heavily\.`, Command: "cast 'refresh' %1", Enabled: true},
 	}
 
-	effects := v.MatchTriggers("Воин pants heavily.", 1)
+	effects, _ := v.MatchTriggers("Воин pants heavily.")
 	if len(effects) != 1 {
 		t.Fatalf("refresh trigger = %d, want 1", len(effects))
 	}
@@ -172,7 +172,7 @@ func TestArcticTriggerCancelStand(t *testing.T) {
 		{Pattern: `^You should probably stand up!`, Command: "cancel;stand", Enabled: true},
 	}
 
-	effects := v.MatchTriggers("You should probably stand up!", 1)
+	effects, _ := v.MatchTriggers("You should probably stand up!")
 	if len(effects) != 1 {
 		t.Fatalf("cancel+stand trigger = %d, want 1", len(effects))
 	}

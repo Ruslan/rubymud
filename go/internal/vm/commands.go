@@ -74,6 +74,11 @@ func (v *VM) dispatchCommand(input string) []Result {
 		return v.cmdUnhighlight(rest)
 	case "hotkey", "hot":
 		return v.cmdHotkey(rest)
+	case "showme", "show":
+		return []Result{{Text: rest, Kind: ResultEcho, TargetBuffer: "main"}}
+	case "woutput":
+		buffer, textArgs := splitFirstWord(rest)
+		return []Result{{Text: strings.Join(textArgs, " "), Kind: ResultEcho, TargetBuffer: buffer}}
 	}
 
 	return []Result{{Text: input, Kind: ResultCommand}}

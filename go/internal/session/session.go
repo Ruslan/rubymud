@@ -77,6 +77,10 @@ func (s *Session) RecentLogs(limit int) ([]storage.LogEntry, error) {
 	return s.store.RecentLogs(s.sessionID, limit)
 }
 
+func (s *Session) RecentLogsPerBuffer(limit int) (map[string][]storage.LogEntry, error) {
+	return s.store.RecentLogsPerBuffer(s.sessionID, limit)
+}
+
 func (s *Session) RecentInputHistory(limit int) ([]string, error) {
 	return s.store.RecentInputHistory(s.sessionID, limit)
 }

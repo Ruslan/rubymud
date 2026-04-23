@@ -46,7 +46,7 @@ func TestMatchTriggersLoadsLatestStateFromDB(t *testing.T) {
 		t.Fatalf("SaveTrigger: %v", err)
 	}
 
-	effects := v.MatchTriggers("You are thirsty.", 1)
+	effects, _ := v.MatchTriggers("You are thirsty.")
 	if len(effects) != 1 || effects[0].Command != "drink all" {
 		t.Fatalf("MatchTriggers = %v, want one send effect", effects)
 	}

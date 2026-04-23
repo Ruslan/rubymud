@@ -104,22 +104,14 @@ func newTestStore(t *testing.T) *storage.Store {
 		t.Fatalf("gorm.Open: %v", err)
 	}
 
-	err = db.AutoMigrate(&storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{}, &storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{})
+	err = db.AutoMigrate(
+		&storage.AppSetting{}, &storage.SessionRecord{}, &storage.Variable{},
+		&storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{},
+		&storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{}, &storage.ProfileVariable{},
+		&storage.LogRecord{}, &storage.LogOverlay{}, &storage.HistoryEntry{},
+	)
 	if err != nil {
 		t.Fatalf("AutoMigrate: %v", err)
-	}
-
-	// Manual table creation for tables we didn't GORM-ify yet but tests might expect
-	sqlDB, _ := db.DB()
-	for _, stmt := range []string{
-		`CREATE TABLE log_entries (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, raw_text TEXT NOT NULL DEFAULT '', plain_text TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, stream TEXT NOT NULL DEFAULT 'main', source_type TEXT NOT NULL DEFAULT 'mud');`,
-		`CREATE TABLE log_overlays (id INTEGER PRIMARY KEY, log_entry_id INTEGER NOT NULL, overlay_type TEXT NOT NULL, payload_json TEXT NOT NULL, source_type TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, layer INTEGER NOT NULL DEFAULT 0);`,
-		`CREATE TABLE history_entries (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, kind TEXT NOT NULL, line TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
-		`CREATE TABLE sessions (id INTEGER PRIMARY KEY, name TEXT, mud_host TEXT NOT NULL, mud_port INTEGER NOT NULL, status TEXT NOT NULL DEFAULT 'new', created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP, last_connected_at TEXT, last_disconnected_at TEXT);`,
-	} {
-		if _, err := sqlDB.Exec(stmt); err != nil {
-			t.Fatalf("Exec(%q): %v", stmt, err)
-		}
 	}
 
 	return storage.NewTestStore(db)

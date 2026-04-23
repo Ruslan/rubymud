@@ -82,7 +82,7 @@ func TestVariableInTriggerCommand(t *testing.T) {
 		{Pattern: `^Вы упали`, Command: "у $таргет", Enabled: true},
 	}
 
-	effects := v.MatchTriggers("Вы упали на землю!", 1)
+	effects, _ := v.MatchTriggers("Вы упали на землю!")
 	if len(effects) != 1 {
 		t.Fatalf("var in trigger = %d effects, want 1", len(effects))
 	}

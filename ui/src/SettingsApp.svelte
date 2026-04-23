@@ -39,6 +39,8 @@
     is_button: boolean;
     stop_after_match: boolean;
     group_name: string;
+    target_buffer?: string;
+    buffer_action?: string;
   }
 
   interface Highlight {
@@ -149,7 +151,7 @@
 
   // Triggers State
   let triggers: Trigger[] = [];
-  const defaultTrigger = (): Trigger => ({ name: '', pattern: '', command: '', enabled: true, is_button: false, stop_after_match: false, group_name: '' });
+  const defaultTrigger = (): Trigger => ({ name: '', pattern: '', command: '', enabled: true, is_button: false, stop_after_match: false, group_name: '', target_buffer: '', buffer_action: '' });
   let triggerEditor: Trigger = defaultTrigger();
 
   // Highlights State
@@ -568,7 +570,7 @@
         </div>
     {/if}
     
-    {#if ['aliases', 'triggers', 'highlights', 'groups', 'hotkeys'].includes(currentTab)}
+    {#if ['aliases', 'triggers', 'highlights', 'groups', 'hotkeys', 'declared_variables'].includes(currentTab)}
         <div class="selector-box">
             <label for="profile-selector">Configuring Profile:</label>
             <select id="profile-selector" bind:value={selectedProfileID}>
@@ -688,6 +690,15 @@
         <div class="form-grid">
           <div class="form-row"><input type="text" bind:value={triggerEditor.name} placeholder="Trigger Name" /><input type="text" bind:value={triggerEditor.pattern} placeholder="Pattern (Regex)" required /></div>
           <div class="form-row"><input type="text" bind:value={triggerEditor.command} placeholder="Command" required /><input type="text" bind:value={triggerEditor.group_name} placeholder="Group Name" /></div>
+          <div class="form-row" style="grid-template-columns: 120px 1fr;">
+            <select bind:value={triggerEditor.buffer_action}>
+              <option value="">No Routing</option>
+              <option value="move">Move</option>
+              <option value="copy">Copy</option>
+              <option value="echo">Echo</option>
+            </select>
+            <input type="text" bind:value={triggerEditor.target_buffer} placeholder="Target Buffer (e.g. chat)" disabled={!triggerEditor.buffer_action} />
+          </div>
           <div class="form-row options-row">
             <label class="checkbox-label"><input type="checkbox" bind:checked={triggerEditor.enabled} /> Enabled</label>
             <label class="checkbox-label"><input type="checkbox" bind:checked={triggerEditor.is_button} /> Is Button</label>
@@ -721,7 +732,13 @@
                 <div class="key-cell">{t.pattern}</div>
                 <div class="comment-text">{t.name || '(no name)'}</div>
               </td>
-              <td class="value-cell">{t.command}</td><td class="dim-cell">{t.group_name || '-'}</td>
+              <td class="value-cell">
+                {t.command}
+                {#if t.buffer_action && t.target_buffer}
+                  <div class="routing-hint" style="font-size:11px; color:#58a6ff; margin-top:2px;">↳ {t.buffer_action} to [{t.target_buffer}]</div>
+                {/if}
+              </td>
+              <td class="dim-cell">{t.group_name || '-'}</td>
               <td class="actions-cell">
                 <button class="btn-link" on:click={() => triggerEditor = { ...t }}>Edit</button>
                 <button class="btn-link btn-danger" on:click={() => deleteItem('triggers', t.id!)}>Delete</button>
