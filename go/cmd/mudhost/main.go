@@ -18,6 +18,7 @@ func main() {
 	listenAddr := flag.String("listen", ":8080", "HTTP listen address")
 	dbPath := flag.String("db", "data/mudhost.db", "SQLite database path")
 	configDirPath := flag.String("config-dir", "", "Directory for exported profile .tt files (default: config/ next to --db)")
+	migrateOnly := flag.Bool("migrate-only", false, "Run migrations and exit")
 	flag.Parse()
 
 	// Ensure data directory exists
@@ -41,6 +42,11 @@ func main() {
 		log.Fatalf("open storage: %v", err)
 	}
 	defer store.Close()
+
+	if *migrateOnly {
+		log.Println("migrations completed successfully")
+		return
+	}
 
 	manager := session.NewManager(store)
 

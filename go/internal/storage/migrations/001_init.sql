@@ -145,3 +145,106 @@ CREATE TABLE IF NOT EXISTS plugins (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS plugins_session_name_idx ON plugins(session_id, name);
+
+-- Configuration and Rules Tables
+
+CREATE TABLE IF NOT EXISTS app_settings (
+  "key" TEXT PRIMARY KEY,
+  "value" TEXT
+);
+
+CREATE TABLE IF NOT EXISTS variables (
+  session_id INTEGER NOT NULL,
+  scope TEXT NOT NULL DEFAULT 'session',
+  "key" TEXT NOT NULL,
+  "value" TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (session_id, scope, "key")
+);
+
+CREATE TABLE IF NOT EXISTS profiles (
+  id INTEGER PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS session_profiles (
+  id INTEGER PRIMARY KEY,
+  session_id INTEGER NOT NULL,
+  profile_id INTEGER NOT NULL,
+  order_index INTEGER NOT NULL DEFAULT 0,
+  UNIQUE(session_id, profile_id),
+  FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE CASCADE,
+  FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS alias_rules (
+  id INTEGER PRIMARY KEY,
+  profile_id INTEGER NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  name TEXT,
+  template TEXT NOT NULL,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  group_name TEXT DEFAULT 'default',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS trigger_rules (
+  id INTEGER PRIMARY KEY,
+  profile_id INTEGER NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  name TEXT,
+  pattern TEXT NOT NULL,
+  command TEXT NOT NULL,
+  is_button INTEGER NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  stop_after_match INTEGER NOT NULL DEFAULT 0,
+  group_name TEXT DEFAULT 'default',
+  target_buffer TEXT,
+  buffer_action TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS highlight_rules (
+  id INTEGER PRIMARY KEY,
+  profile_id INTEGER NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  pattern TEXT NOT NULL,
+  fg TEXT,
+  bg TEXT,
+  bold INTEGER NOT NULL DEFAULT 0,
+  faint INTEGER NOT NULL DEFAULT 0,
+  italic INTEGER NOT NULL DEFAULT 0,
+  underline INTEGER NOT NULL DEFAULT 0,
+  strikethrough INTEGER NOT NULL DEFAULT 0,
+  blink INTEGER NOT NULL DEFAULT 0,
+  reverse INTEGER NOT NULL DEFAULT 0,
+  enabled INTEGER NOT NULL DEFAULT 1,
+  group_name TEXT DEFAULT 'default',
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS hotkey_rules (
+  id INTEGER PRIMARY KEY,
+  profile_id INTEGER NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  shortcut TEXT NOT NULL,
+  command TEXT NOT NULL,
+  FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS profile_variables (
+  id INTEGER PRIMARY KEY,
+  profile_id INTEGER NOT NULL,
+  position INTEGER NOT NULL DEFAULT 0,
+  name TEXT NOT NULL,
+  default_value TEXT,
+  description TEXT,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(profile_id, name),
+  FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE
+);

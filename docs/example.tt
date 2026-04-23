@@ -112,7 +112,7 @@
 #nop rubymud:rule {"is_button":true}
 #action {R.I.P.$} {взя моне *.тру}
 #nop rubymud:rule {"is_button":true}
-#action {^Угрюмый человек идет по проходу.} {у клад}
+#action {^Угрюмый человек идет по проходу.} {уу клад}
 #nop rubymud:rule {"is_button":true}
 #action {^Дверь закрыта} {откр две}
 #nop rubymud:rule {"is_button":true}

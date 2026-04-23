@@ -27,15 +27,12 @@ func TestRecentLogsLoadsButtonOverlays(t *testing.T) {
 	}
 	defer sqlDB.Close()
 
-	store := NewTestStore(db)
-	for _, stmt := range []string{
-		`CREATE TABLE log_entries (id INTEGER PRIMARY KEY, session_id INTEGER NOT NULL, buffer TEXT NOT NULL DEFAULT 'main', stream TEXT NOT NULL, window_name TEXT, raw_text TEXT NOT NULL, plain_text TEXT NOT NULL, source_type TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
-		`CREATE TABLE log_overlays (id INTEGER PRIMARY KEY, log_entry_id INTEGER NOT NULL, overlay_type TEXT NOT NULL, payload_json TEXT NOT NULL, source_type TEXT NOT NULL, created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`,
-	} {
-		if err := db.Exec(stmt).Error; err != nil {
-			t.Fatalf("Exec(%q): %v", stmt, err)
-		}
+	// Apply canonical migrations
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("runMigrations: %v", err)
 	}
+
+	store := NewTestStore(db)
 
 	logEntryID, err := store.AppendLogEntry(1, "main", "R.I.P.", "R.I.P.")
 	if err != nil {

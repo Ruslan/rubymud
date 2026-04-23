@@ -5,6 +5,134 @@ import (
 	"testing"
 )
 
+func TestProfileScript_LegacyCompatibility(t *testing.T) {
+	script := `
+#nop Profile: Legacy
+#alias 'quoted' 'say hello'
+#alias "double" "say world"
+#highlight {red} {danger} {legacy_group}
+#action {legacy act} {say hi} {survival}
+`
+	ps, err := ParseProfileScript(script)
+	if err != nil {
+		t.Fatalf("ParseProfileScript: %v", err)
+	}
+
+	// Verify Aliases (quoted)
+	if len(ps.Aliases) != 2 {
+		t.Fatalf("Expected 2 aliases, got %d", len(ps.Aliases))
+	}
+	if ps.Aliases[0].Name != "quoted" || ps.Aliases[0].Template != "say hello" {
+		t.Errorf("Quoted alias 1 mismatch: %+v", ps.Aliases[0])
+	}
+	if ps.Aliases[1].Name != "double" || ps.Aliases[1].Template != "say world" {
+		t.Errorf("Quoted alias 2 mismatch: %+v", ps.Aliases[1])
+	}
+
+	// Verify Highlight (legacy group)
+	if len(ps.Highlights) != 1 {
+		t.Fatalf("Expected 1 highlight, got %d", len(ps.Highlights))
+	}
+	if ps.Highlights[0].GroupName != "legacy_group" {
+		t.Errorf("Legacy highlight group mismatch: %q", ps.Highlights[0].GroupName)
+	}
+
+	// Verify Action (legacy group)
+	if len(ps.Triggers) != 1 {
+		t.Fatalf("Expected 1 trigger, got %d", len(ps.Triggers))
+	}
+	if ps.Triggers[0].GroupName != "survival" {
+		t.Errorf("Legacy trigger group mismatch: %q", ps.Triggers[0].GroupName)
+	}
+}
+
+func TestImportProfileScript_DeepIntegration(t *testing.T) {
+	s := newProfileTestStore(t)
+
+	// 1. Prepare a script with all complex features
+	script := `
+#nop Profile: DeepIntegration
+#nop Description: Testing all fields against real SQL schema
+
+#nop rubymud:rule {"group_name":"Combat group"}
+#alias {test_template} {#showme {Template content with $variables}}
+
+#nop rubymud:rule {"bold":true,"italic":true,"underline":true}
+#highlight {256:196} {bold_red}
+
+#nop rubymud:rule {"bg":"#0000ff","blink":true,"faint":true,"strikethrough":true,"reverse":true}
+#highlight {default} {blink_faint}
+
+#nop rubymud:rule {"is_button":true,"stop_after_match":true,"target_buffer":"chat","buffer_action":"copy"}
+#action {^You see (.*)$} {#woutput {chat} {%1}}
+`
+
+	// 2. Parse it
+	ps, err := ParseProfileScript(script)
+	if err != nil {
+		t.Fatalf("ParseProfileScript: %v", err)
+	}
+
+	// 3. Import into DB
+	p, err := s.ImportProfileScript(ps)
+	if err != nil {
+		t.Fatalf("ImportProfileScript: %v", err)
+	}
+
+	// 4. Verify DB content via Store methods (reading back from SQL)
+
+	// Check Alias Template
+	aliases, _ := s.ListAliases(p.ID)
+	if len(aliases) != 1 || aliases[0].Template != "#showme {Template content with $variables}" {
+		t.Errorf("Alias template not preserved in DB: %q", aliases[0].Template)
+	}
+	if aliases[0].GroupName != "Combat group" {
+		t.Errorf("Alias group not preserved: %q", aliases[0].GroupName)
+	}
+
+	// Check Highlight Styles
+	highlights, _ := s.ListHighlights(p.ID)
+	if len(highlights) != 2 {
+		t.Fatalf("Expected 2 highlights in DB, got %d", len(highlights))
+	}
+
+	h1 := highlights[0] // bold_red
+	if h1.Pattern != "bold_red" || h1.FG != "256:196" || !h1.Bold || !h1.Italic || !h1.Underline {
+		t.Errorf("Highlight 1 (bold_red) mismatch: pattern=%q, fg=%q, bold:%v", h1.Pattern, h1.FG, h1.Bold)
+	}
+
+	h2 := highlights[1] // blink_faint
+	if h2.Pattern != "blink_faint" || h2.FG != "" || h2.BG != "#0000ff" || !h2.Blink || !h2.Faint || !h2.Strikethrough || !h2.Reverse {
+		t.Errorf("Highlight 2 (blink_faint) mismatch: pattern=%q, bg=%q, blink:%v", h2.Pattern, h2.BG, h2.Blink)
+	}
+
+	// Check Trigger Flags
+	triggers, _ := s.ListTriggers(p.ID)
+	if len(triggers) != 1 {
+		t.Fatalf("Expected 1 trigger in DB, got %d", len(triggers))
+	}
+	t1 := triggers[0]
+	if !t1.IsButton || !t1.StopAfterMatch || t1.TargetBuffer != "chat" || t1.BufferAction != "copy" {
+		t.Errorf("Trigger flags mismatch: %+v", t1)
+	}
+
+	// 5. Export back and verify round-trip
+	exported, err := s.ExportProfileScript(p.ID)
+	if err != nil {
+		t.Fatalf("ExportProfileScript: %v", err)
+	}
+
+	if !strings.Contains(exported, "test_template") || !strings.Contains(exported, "bold_red") {
+		t.Errorf("Exported script missing data: %s", exported)
+	}
+
+	// Final parse of exported script
+	ps2, _ := ParseProfileScript(exported)
+	if len(ps2.Highlights) != 2 || ps2.Highlights[0].Bold != true {
+		t.Errorf("Exported highlight styles mismatch")
+	}
+}
+
 func TestProfileScript_ExportAndParse(t *testing.T) {
 	s := newProfileTestStore(t)
 

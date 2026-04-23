@@ -21,7 +21,6 @@ type ProfileScript struct {
 	DeclaredVariables []ProfileVariable
 }
 
-
 func splitBraceArg(s string) (string, string) {
 	s = strings.TrimSpace(s)
 	if s == "" {
@@ -30,29 +29,33 @@ func splitBraceArg(s string) (string, string) {
 
 	delim := s[0]
 	closer := byte('}')
+	isQuoted := false
 	switch delim {
 	case '{':
 		closer = '}'
 	case '\'':
 		closer = '\''
+		isQuoted = true
 	case '"':
 		closer = '"'
+		isQuoted = true
 	default:
 		parts := strings.SplitN(s, " ", 2)
 		if len(parts) == 1 {
 			return parts[0], ""
 		}
-		return parts[0], parts[1]
+		return parts[0], strings.TrimSpace(parts[1])
 	}
 
 	depth := 0
 	for i := 0; i < len(s); i++ {
-		if s[i] == byte(delim) && i == 0 {
-			depth = 1
+		if s[i] == delim && !isQuoted {
+			depth++
 			continue
 		}
-		if s[i] == delim && delim != closer {
-			depth++
+		if s[i] == delim && isQuoted && i == 0 {
+			depth = 1
+			continue
 		}
 		if s[i] == closer {
 			depth--
@@ -62,7 +65,8 @@ func splitBraceArg(s string) (string, string) {
 		}
 	}
 
-	return strings.Trim(s, string(delim)), ""
+	// Unclosed, return as is (fallback)
+	return strings.Trim(s, string(delim)+string(closer)), ""
 }
 
 func (s *Store) ExportProfileScript(profileID int64) (string, error) {
@@ -97,6 +101,11 @@ func (s *Store) ExportProfileScript(profileID int64) (string, error) {
 	aliases, _ := s.ListAliases(profileID)
 	if len(aliases) > 0 {
 		for _, a := range aliases {
+			if a.GroupName != "default" && a.GroupName != "" {
+				meta := map[string]string{"group_name": a.GroupName}
+				mj, _ := json.Marshal(meta)
+				sb.WriteString(fmt.Sprintf("#nop rubymud:rule %s\n", string(mj)))
+			}
 			sb.WriteString(fmt.Sprintf("#alias {%s} {%s}\n", a.Name, a.Template))
 		}
 		sb.WriteString("\n")
@@ -115,20 +124,20 @@ func (s *Store) ExportProfileScript(profileID int64) (string, error) {
 			if t.Name != "" && t.Name != t.Pattern {
 				meta["name"] = t.Name
 			}
+			if t.GroupName != "default" && t.GroupName != "" {
+				meta["group_name"] = t.GroupName
+			}
+			if t.TargetBuffer != "" {
+				meta["target_buffer"] = t.TargetBuffer
+			}
+			if t.BufferAction != "" {
+				meta["buffer_action"] = t.BufferAction
+			}
 			if len(meta) > 0 {
 				mj, _ := json.Marshal(meta)
 				sb.WriteString(fmt.Sprintf("#nop rubymud:rule %s\n", string(mj)))
 			}
-			sb.WriteString(fmt.Sprintf("#action {%s} {%s}", t.Pattern, t.Command))
-			if t.GroupName != "default" && t.GroupName != "" {
-				sb.WriteString(fmt.Sprintf(" {%s}", t.GroupName))
-			} else if t.IsButton {
-				sb.WriteString(" {}") // Empty group to allow button parsing
-			}
-			if t.IsButton {
-				sb.WriteString(" {button}")
-			}
-			sb.WriteString("\n")
+			sb.WriteString(fmt.Sprintf("#action {%s} {%s}\n", t.Pattern, t.Command))
 		}
 		sb.WriteString("\n")
 	}
@@ -141,6 +150,9 @@ func (s *Store) ExportProfileScript(profileID int64) (string, error) {
 				"underline": h.Underline, "strikethrough": h.Strikethrough,
 				"blink": h.Blink, "reverse": h.Reverse, "bg": h.BG,
 			}
+			if h.GroupName != "default" && h.GroupName != "" {
+				meta["group_name"] = h.GroupName
+			}
 			mj, _ := json.Marshal(meta)
 			sb.WriteString(fmt.Sprintf("#nop rubymud:rule %s\n", string(mj)))
 
@@ -148,11 +160,7 @@ func (s *Store) ExportProfileScript(profileID int64) (string, error) {
 			if fg == "" {
 				fg = "default"
 			}
-			sb.WriteString(fmt.Sprintf("#highlight {%s} {%s}", fg, h.Pattern))
-			if h.GroupName != "default" && h.GroupName != "" {
-				sb.WriteString(fmt.Sprintf(" {%s}", h.GroupName))
-			}
-			sb.WriteString("\n")
+			sb.WriteString(fmt.Sprintf("#highlight {%s} {%s}\n", fg, h.Pattern))
 		}
 		sb.WriteString("\n")
 	}
@@ -227,22 +235,13 @@ func ParseProfileScript(text string) (*ProfileScript, error) {
 			pattern, rest := splitBraceArg(rest)
 			command, rest := splitBraceArg(rest)
 			
-			// Compatibility with old exports: check if there are leftover brace arguments
-			oldGroup, rest := splitBraceArg(rest)
-			remaining := strings.TrimSpace(rest)
-
 			isButton := false
-			group := "default"
-
-			if oldGroup != "" {
-				group = oldGroup
-			}
-			if remaining == "button" || remaining == "{button}" {
-				isButton = true
-			}
-
 			stopAfterMatch := false
+			group := "default"
+			targetBuffer := ""
+			bufferAction := ""
 			name := pattern
+
 			if pendingMeta != nil {
 				if pendingMeta["is_button"] == true {
 					isButton = true
@@ -256,12 +255,29 @@ func ParseProfileScript(text string) (*ProfileScript, error) {
 				if g, ok := pendingMeta["group_name"].(string); ok && g != "" {
 					group = g
 				}
+				if b, ok := pendingMeta["target_buffer"].(string); ok {
+					targetBuffer = b
+				}
+				if a, ok := pendingMeta["buffer_action"].(string); ok {
+					bufferAction = a
+				}
+			}
+
+			// Support for legacy positional button/group args if meta is missing
+			oldGroup, rest := splitBraceArg(rest)
+			remaining := strings.TrimSpace(rest)
+			if oldGroup != "" && (pendingMeta == nil || pendingMeta["group_name"] == nil) {
+				group = oldGroup
+			}
+			if (remaining == "button" || remaining == "{button}") && (pendingMeta == nil || pendingMeta["is_button"] == nil) {
+				isButton = true
 			}
 
 			if pattern != "" && command != "" {
 				ps.Triggers = append(ps.Triggers, TriggerRule{
 					Position: triggerPos, Name: name, Pattern: pattern, Command: command,
 					IsButton: isButton, Enabled: true, StopAfterMatch: stopAfterMatch, GroupName: group,
+					TargetBuffer: targetBuffer, BufferAction: bufferAction,
 				})
 				triggerPos++
 			}
@@ -271,27 +287,24 @@ func ParseProfileScript(text string) (*ProfileScript, error) {
 			fg, rest := splitBraceArg(rest)
 			pattern, rest := splitBraceArg(rest)
 			
-			// Compatibility with old exports
-			oldGroup, _ := splitBraceArg(rest)
 			group := "default"
-			if oldGroup != "" {
-				group = oldGroup
-			}
-
 			if fg == "default" {
 				fg = ""
 			}
 
-			if pendingMeta != nil {
-				if g, ok := pendingMeta["group_name"].(string); ok && g != "" {
-					group = g
-				}
+			// Legacy positional group
+			oldGroup, _ := splitBraceArg(rest)
+			if oldGroup != "" {
+				group = oldGroup
 			}
 
 			h := HighlightRule{
 				Position: hlPos, Pattern: pattern, FG: fg, Enabled: true, GroupName: group,
 			}
 			if pendingMeta != nil {
+				if g, ok := pendingMeta["group_name"].(string); ok && g != "" {
+					h.GroupName = g
+				}
 				if b, ok := pendingMeta["bg"].(string); ok {
 					h.BG = b
 				}

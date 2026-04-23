@@ -36,11 +36,15 @@ type HistoryEntry struct {
 type LogRecord struct {
 	ID         int64      `gorm:"primaryKey"`
 	SessionID  int64      `gorm:"index" json:"session_id"`
-	Buffer     string     `gorm:"index" json:"buffer"`
 	Stream     string     `json:"stream"`
+	WindowName string     `gorm:"index" json:"window_name"`
 	RawText    string     `json:"raw_text"`
 	PlainText  string     `json:"plain_text"`
+	RawBytes   []byte     `json:"raw_bytes"`
+	Encoding   string     `json:"encoding"`
 	SourceType string     `json:"source_type"`
+	SourceID   string     `json:"source_id"`
+	ReceivedAt SQLiteTime `json:"received_at"`
 	CreatedAt  SQLiteTime `gorm:"index" json:"created_at"`
 }
 

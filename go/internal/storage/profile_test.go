@@ -22,12 +22,8 @@ func newProfileTestStore(t *testing.T) *Store {
 		t.Fatalf("gorm.Open: %v", err)
 	}
 
-	if err := db.AutoMigrate(
-		&AppSetting{}, &SessionRecord{}, &Variable{},
-		&AliasRule{}, &TriggerRule{}, &HighlightRule{},
-		&Profile{}, &SessionProfile{}, &HotkeyRule{}, &ProfileVariable{},
-	); err != nil {
-		t.Fatalf("AutoMigrate: %v", err)
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("runMigrations: %v", err)
 	}
 
 	sqlDB, _ := db.DB()

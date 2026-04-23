@@ -22,12 +22,13 @@ func (s *Store) AppendLogEntry(sessionID int64, buffer, rawText, plainText strin
 	}
 	entry := LogRecord{
 		SessionID:  sessionID,
-		Buffer:     buffer,
+		WindowName: buffer,
 		Stream:     "mud",
 		RawText:    rawText,
 		PlainText:  plainText,
 		SourceType: "mud",
 		CreatedAt:  nowSQLiteTime(),
+		ReceivedAt: nowSQLiteTime(),
 	}
 	err := s.db.Create(&entry).Error
 	return entry.ID, err
@@ -38,7 +39,7 @@ func (s *Store) LogEntriesForBuffer(sessionID int64, buffer string, limit int) (
 		buffer = "main"
 	}
 	var records []LogRecord
-	err := s.db.Where("session_id = ? AND buffer = ?", sessionID, buffer).
+	err := s.db.Where("session_id = ? AND window_name = ?", sessionID, buffer).
 		Order("created_at DESC, id DESC").
 		Limit(limit).
 		Find(&records).Error
@@ -50,7 +51,7 @@ func (s *Store) LogEntriesForBuffer(sessionID int64, buffer string, limit int) (
 	for _, r := range records {
 		entries = append(entries, LogEntry{
 			ID:        r.ID,
-			Buffer:    r.Buffer,
+			Buffer:    r.WindowName,
 			RawText:   r.RawText,
 			PlainText: r.PlainText,
 		})
@@ -73,7 +74,7 @@ func (s *Store) RecentLogs(sessionID int64, limit int) ([]LogEntry, error) {
 
 func (s *Store) RecentLogsPerBuffer(sessionID int64, limit int) (map[string][]LogEntry, error) {
 	var distinctBuffers []string
-	if err := s.db.Model(&LogRecord{}).Where("session_id = ?", sessionID).Distinct("buffer").Pluck("buffer", &distinctBuffers).Error; err != nil {
+	if err := s.db.Model(&LogRecord{}).Where("session_id = ?", sessionID).Distinct("window_name").Pluck("window_name", &distinctBuffers).Error; err != nil {
 		return nil, err
 	}
 
@@ -109,7 +110,7 @@ func (s *Store) LogsSinceID(sessionID, afterID int64, limit int) ([]LogEntry, er
 	for _, r := range records {
 		entries = append(entries, LogEntry{
 			ID:        r.ID,
-			Buffer:    r.Buffer,
+			Buffer:    r.WindowName,
 			RawText:   r.RawText,
 			PlainText: r.PlainText,
 			CreatedAt: r.CreatedAt,
@@ -135,7 +136,7 @@ func (s *Store) LogRangeDetailed(sessionID, beforeID int64, limit int) ([]LogEnt
 	for _, r := range records {
 		entries = append(entries, LogEntry{
 			ID:        r.ID,
-			Buffer:    r.Buffer,
+			Buffer:    r.WindowName,
 			RawText:   r.RawText,
 			PlainText: r.PlainText,
 			CreatedAt: r.CreatedAt,
@@ -315,7 +316,7 @@ func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines i
 	for _, r := range records {
 		allEntries = append(allEntries, LogEntry{
 			ID:        r.ID,
-			Buffer:    r.Buffer,
+			Buffer:    r.WindowName,
 			RawText:   r.RawText,
 			PlainText: r.PlainText,
 			CreatedAt: r.CreatedAt,
