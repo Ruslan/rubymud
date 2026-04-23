@@ -624,6 +624,8 @@ body {
 /* Dropdown Menu */
 .dropdown-menu {
   position: absolute;
+  top: 100%;
+  right: 0;
   background: #161b22;
   border: 1px solid #30363d;
   border-radius: 6px;
