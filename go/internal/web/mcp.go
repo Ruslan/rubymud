@@ -140,12 +140,13 @@ func (s *Server) mcpListTools() any {
 			},
 			map[string]any{
 				"name":        "mud_send_command",
-				"description": "Send a command to a MUD session. Aliases are expanded ($var substitution and %1 %2 positional args apply). Commands go through the same pipeline as user input.",
+				"description": "Send a command to a MUD session and return the MUD's response. Aliases are expanded ($var substitution and %1 %2 positional args apply). Commands go through the same pipeline as user input. By default waits 0.5 seconds and returns all output lines received during that window — set sync=0 for fire-and-forget.",
 				"inputSchema": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
 						"session_id": sessionIDProp,
 						"command":    map[string]any{"type": "string", "description": "The command to send. Aliases are expanded: use alias name to trigger expansion (e.g. 'gre corpse'). Variables are substituted via $varname. Positional args via %1, %2, etc."},
+						"sync":       map[string]any{"type": "number", "description": "Seconds to wait for MUD response after sending (default 0.5, max 10). Set to 0 for fire-and-forget without waiting for output."},
 					},
 					"required": []string{"command"},
 				},
@@ -311,11 +312,19 @@ func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 
 	case "mud_send_command":
 		var args struct {
-			SessionID int64  `json:"session_id"`
-			Command   string `json:"command"`
+			SessionID int64    `json:"session_id"`
+			Command   string   `json:"command"`
+			Sync      *float64 `json:"sync"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
 			return nil, err
+		}
+		syncSecs := 0.5
+		if args.Sync != nil {
+			syncSecs = *args.Sync
+			if syncSecs > 10 {
+				syncSecs = 10
+			}
 		}
 		sid, err := s.mcpResolveSessionID(args.SessionID)
 		if err != nil {
@@ -327,13 +336,32 @@ func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 		if !ok {
 			content = fmt.Sprintf("Session %d not found or not connected", sid)
 			isError = true
+			break
+		}
+		// Record the latest log ID before sending so we can return new output.
+		lastID, err := s.store.LatestLogID(sid)
+		if err != nil {
+			return nil, err
+		}
+		if err := sess.SendCommand(args.Command, "mcp"); err != nil {
+			content = fmt.Sprintf("Error sending command: %v", err)
+			isError = true
+			break
+		}
+		if syncSecs <= 0 {
+			content = fmt.Sprintf("Command '%s' sent to session %d", args.Command, sid)
+			break
+		}
+		time.Sleep(time.Duration(syncSecs * float64(time.Second)))
+		entries, err := s.store.LogsSinceID(sid, lastID, 200)
+		if err != nil {
+			return nil, err
+		}
+		if len(entries) == 0 {
+			content = fmt.Sprintf("Command '%s' sent. No output received in %.1fs.", args.Command, syncSecs)
 		} else {
-			if err := sess.SendCommand(args.Command, "mcp"); err != nil {
-				content = fmt.Sprintf("Error sending command: %v", err)
-				isError = true
-			} else {
-				content = fmt.Sprintf("Command '%s' sent to session %d", args.Command, sid)
-			}
+			content = fmt.Sprintf("Command '%s' sent. Response (%.1fs window):\n\n", args.Command, syncSecs) +
+				formatMcpGroup(entries, "")
 		}
 
 	case "mud_get_variables":

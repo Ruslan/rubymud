@@ -33,6 +33,38 @@ func (s *Store) RecentLogs(sessionID int64, limit int) ([]LogEntry, error) {
 	return s.LogRangeDetailed(sessionID, 9223372036854775807, limit)
 }
 
+// LatestLogID returns the highest log entry ID for the session, or 0 if none.
+func (s *Store) LatestLogID(sessionID int64) (int64, error) {
+	var id int64
+	err := s.db.Model(&LogRecord{}).Where("session_id = ?", sessionID).Order("id DESC").Limit(1).Pluck("id", &id).Error
+	return id, err
+}
+
+// LogsSinceID returns log entries with id > afterID in chronological order, up to limit.
+func (s *Store) LogsSinceID(sessionID, afterID int64, limit int) ([]LogEntry, error) {
+	var records []LogRecord
+	err := s.db.Where("session_id = ? AND id > ?", sessionID, afterID).
+		Order("id ASC").
+		Limit(limit).
+		Find(&records).Error
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]LogEntry, 0, len(records))
+	for _, r := range records {
+		entries = append(entries, LogEntry{
+			ID:        r.ID,
+			RawText:   r.RawText,
+			PlainText: r.PlainText,
+			CreatedAt: r.CreatedAt,
+		})
+	}
+	if err := s.loadOverlays(entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
 func (s *Store) LogRangeDetailed(sessionID, beforeID int64, limit int) ([]LogEntry, error) {
 	var records []LogRecord
 	err := s.db.Where("session_id = ? AND id < ?", sessionID, beforeID).
