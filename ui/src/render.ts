@@ -21,7 +21,7 @@ interface RendererDeps {
 const maxRenderedLines = 2000;
 const pruneRenderedLines = 500;
 
-export function createRenderer({ elements, ansiUp, sendCommand, requestVariables, state }: RendererDeps) {
+export function createRenderer({ elements, ansiUp, sendCommand, requestVariables, onButtonRendered, state }: RendererDeps) {
   function setActivePanel(panel: 'keyboard' | 'variables') {
     state.activePanel = state.activePanel === panel ? null : panel;
 

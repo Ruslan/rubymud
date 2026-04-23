@@ -178,9 +178,11 @@ window.addEventListener('keydown', (event) => {
     return;
   }
 
-  // Handle Alt+0..9 for auto-buttons
-  if (event.altKey && event.key >= '0' && event.key <= '9') {
-    const index = parseInt(event.key, 10);
+  // Handle Alt+0..9 for auto-buttons.
+  // Use event.code (layout-independent) because on macOS event.key for Alt+digit
+  // produces special characters (¡, ™, …) instead of the digit character.
+  if (event.altKey && event.code >= 'Digit0' && event.code <= 'Digit9') {
+    const index = parseInt(event.code.slice(5), 10); // 'Digit3' → 3
     if (autoButtons[index]) {
       event.preventDefault();
       autoButtons[index]!();

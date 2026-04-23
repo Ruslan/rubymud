@@ -159,17 +159,41 @@ func (s *Store) loadOverlays(entries []LogEntry) error {
 }
 
 func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines int, beforeID int64) ([][]LogEntry, error) {
-	var matchingIDs []int64
-	db := s.db.Model(&LogRecord{}).
-		Where("session_id = ? AND plain_text LIKE ?", sessionID, "%"+query+"%")
+	like := "%" + query + "%"
+
+	// Match log entries by MUD output text.
+	var textMatchIDs []int64
+	db := s.db.Model(&LogRecord{}).Where("session_id = ? AND plain_text LIKE ?", sessionID, like)
 	if beforeID > 0 {
 		db = db.Where("id < ?", beforeID)
 	}
-	// Limit candidates to avoid building context for hundreds of matches.
-	// Ordered DESC so we process the newest matches first.
-	err := db.Order("id DESC").Limit(200).Pluck("id", &matchingIDs).Error
-	if err != nil || len(matchingIDs) == 0 {
+	if err := db.Order("id DESC").Limit(200).Pluck("id", &textMatchIDs).Error; err != nil {
 		return nil, err
+	}
+
+	// Also match log entries where a sent command (command_hint overlay) contains the query.
+	var cmdMatchIDs []int64
+	cmdDB := s.db.Model(&LogOverlay{}).
+		Where("overlay_type = 'command_hint' AND payload_json LIKE ?", like).
+		Where("log_entry_id IN (SELECT id FROM log_entries WHERE session_id = ?)", sessionID)
+	if beforeID > 0 {
+		cmdDB = cmdDB.Where("log_entry_id < ?", beforeID)
+	}
+	if err := cmdDB.Order("log_entry_id DESC").Limit(200).Pluck("log_entry_id", &cmdMatchIDs).Error; err != nil {
+		return nil, err
+	}
+
+	// Merge and deduplicate match IDs.
+	seenMatch := make(map[int64]bool)
+	var matchingIDs []int64
+	for _, id := range append(textMatchIDs, cmdMatchIDs...) {
+		if !seenMatch[id] {
+			seenMatch[id] = true
+			matchingIDs = append(matchingIDs, id)
+		}
+	}
+	if len(matchingIDs) == 0 {
+		return nil, nil
 	}
 
 	allIDsMap := make(map[int64]bool)

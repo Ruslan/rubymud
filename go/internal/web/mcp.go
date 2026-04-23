@@ -106,7 +106,7 @@ func (s *Server) mcpListTools() any {
 					"type": "object",
 					"properties": map[string]any{
 						"session_id": sessionIDProp,
-						"limit":      map[string]any{"type": "integer", "description": "Number of lines to return (default 100)."},
+						"limit":      map[string]any{"type": "integer", "description": "Number of lines to return (default 200)."},
 					},
 				},
 			},
@@ -125,7 +125,7 @@ func (s *Server) mcpListTools() any {
 			},
 			map[string]any{
 				"name":        "mud_search",
-				"description": "Search log history for a query string. Returns up to max_groups match groups with surrounding context. Use before_id to paginate deeper into history (pass the earliest ID from the previous result).",
+				"description": "Search log history for a query string — matches both MUD output lines and sent commands (shown as '> command' hints). Returns up to max_groups match groups with surrounding context. Use before_id to paginate deeper into history.",
 				"inputSchema": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -232,7 +232,7 @@ func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 			return nil, err
 		}
 		if args.Limit <= 0 {
-			args.Limit = 100
+			args.Limit = 200
 		}
 		sid, err := s.mcpResolveSessionID(args.SessionID)
 		if err != nil {
@@ -282,7 +282,7 @@ func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 			return nil, err
 		}
 		if args.Context <= 0 {
-			args.Context = 5
+			args.Context = 15
 		}
 		if args.MaxGroups <= 0 {
 			args.MaxGroups = 10
