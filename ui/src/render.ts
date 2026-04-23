@@ -21,19 +21,41 @@ interface RendererDeps {
 const maxRenderedLines = 2000;
 const pruneRenderedLines = 500;
 
-interface Pane {
+interface PaneNode {
   id: string;
   buffer: string;
+}
+
+interface ColumnNode {
+  id: string;
+  panes: PaneNode[];
+  rowSizes: number[];
+}
+
+interface Layout {
+  columns: ColumnNode[];
+  colSizes: number[];
+}
+
+interface RenderedPane {
+  node: PaneNode;
   el: HTMLElement;
   outputEl: HTMLElement;
   selectEl: HTMLSelectElement;
 }
 
 export function createRenderer({ elements, ansiUp, sendCommand, requestVariables, onButtonRendered, state }: RendererDeps) {
-  let paneCounter = 0;
-  let panes: Pane[] = [];
+  let nextId = 0;
+  const generateId = (prefix: string) => `${prefix}-${++nextId}`;
+
+  let layout: Layout = {
+    columns: [{ id: generateId('col'), panes: [{ id: generateId('pane'), buffer: 'main' }], rowSizes: [100] }],
+    colSizes: [100]
+  };
+
   const knownBuffers = new Set<string>(['main']);
   const bufferData = new Map<string, LogEntry[]>();
+  const renderedPanes = new Map<string, RenderedPane>();
 
   function getBufferData(name: string): LogEntry[] {
     if (!bufferData.has(name)) {
@@ -49,84 +71,281 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     }
   }
 
-  function createPane(initialBuffer = 'main'): Pane {
-    const id = `pane-${++paneCounter}`;
+  function saveLayout() {
+    localStorage.setItem('pane-layout', JSON.stringify(layout));
+  }
+
+  function loadLayout() {
+    try {
+      const stored = localStorage.getItem('pane-layout');
+      if (stored) {
+        layout = JSON.parse(stored);
+      }
+    } catch (err) {
+      console.warn('Failed to load layout', err);
+    }
+    rebuildDOM();
+  }
+
+  function rebuildDOM() {
+    elements.panesContainer.innerHTML = '';
+    renderedPanes.clear();
+
+    layout.columns.forEach((col, colIdx) => {
+      const colEl = document.createElement('div');
+      colEl.className = 'column';
+      colEl.style.flexBasis = `${layout.colSizes[colIdx]}%`;
+
+      col.panes.forEach((pane, rowIdx) => {
+        const paneEl = createPaneDOM(pane);
+        paneEl.style.flexBasis = `${col.rowSizes[rowIdx]}%`;
+        colEl.appendChild(paneEl);
+
+        if (rowIdx < col.panes.length - 1) {
+          colEl.appendChild(makeDragHandle('row', col, rowIdx));
+        }
+      });
+
+      elements.panesContainer.appendChild(colEl);
+
+      if (colIdx < layout.columns.length - 1) {
+        elements.panesContainer.appendChild(makeDragHandle('col', layout, colIdx));
+      }
+    });
+
+    updateAllSelects();
+  }
+
+  function createPaneDOM(node: PaneNode): HTMLElement {
     const el = document.createElement('div');
     el.className = 'pane';
-    el.id = id;
-
+    
     const headerEl = document.createElement('div');
     headerEl.className = 'pane-header';
 
     const selectEl = document.createElement('select');
     selectEl.className = 'pane-select';
-    updateSelectOptions(selectEl, initialBuffer);
-    
-    const pane: Pane = { id, buffer: initialBuffer, el, outputEl: document.createElement('div'), selectEl };
-
     selectEl.addEventListener('change', () => {
-      pane.buffer = selectEl.value;
-      renderPaneBuffer(pane);
+      node.buffer = selectEl.value;
+      saveLayout();
+      renderPaneBuffer(node.id);
     });
-
     headerEl.appendChild(selectEl);
 
-    if (panes.length > 0) {
-      const closeBtn = document.createElement('button');
-      closeBtn.className = 'pane-close';
-      closeBtn.innerHTML = '×';
-      closeBtn.title = 'Close Pane';
-      closeBtn.addEventListener('click', () => {
-        destroyPane(pane);
-      });
-      headerEl.appendChild(closeBtn);
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'pane-actions';
+
+    // Dropdown for split/close
+    const menuBtn = document.createElement('button');
+    menuBtn.className = 'pane-btn';
+    menuBtn.innerHTML = '⋮';
+    
+    const menuEl = document.createElement('div');
+    menuEl.className = 'dropdown-menu';
+    menuEl.style.display = 'none';
+
+    const splitDownBtn = document.createElement('button');
+    splitDownBtn.className = 'dropdown-item';
+    splitDownBtn.textContent = 'Split Down';
+    splitDownBtn.addEventListener('click', () => {
+      menuEl.style.display = 'none';
+      addPaneBelow(node.id);
+    });
+
+    const splitRightBtn = document.createElement('button');
+    splitRightBtn.className = 'dropdown-item';
+    splitRightBtn.textContent = 'Split Right';
+    splitRightBtn.addEventListener('click', () => {
+      menuEl.style.display = 'none';
+      addColumnRight(node.id);
+    });
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'dropdown-item danger';
+    closeBtn.textContent = 'Close';
+    closeBtn.addEventListener('click', () => {
+      menuEl.style.display = 'none';
+      removePane(node.id);
+    });
+
+    menuEl.appendChild(splitDownBtn);
+    menuEl.appendChild(splitRightBtn);
+    menuEl.appendChild(closeBtn);
+
+    menuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isVisible = menuEl.style.display === 'block';
+      document.querySelectorAll('.dropdown-menu').forEach((el: any) => el.style.display = 'none');
+      menuEl.style.display = isVisible ? 'none' : 'block';
+    });
+
+    // Close menu on outside click
+    document.addEventListener('click', () => {
+      menuEl.style.display = 'none';
+    });
+
+    // We only show Close if it's not the absolutely last pane
+    const totalPanes = layout.columns.reduce((sum, col) => sum + col.panes.length, 0);
+    if (totalPanes <= 1) {
+      closeBtn.style.display = 'none';
     }
+
+    const menuWrapper = document.createElement('div');
+    menuWrapper.style.position = 'relative';
+    menuWrapper.appendChild(menuBtn);
+    menuWrapper.appendChild(menuEl);
+    actionsEl.appendChild(menuWrapper);
+    headerEl.appendChild(actionsEl);
 
     const outputEl = document.createElement('div');
     outputEl.className = 'pane-output';
-    outputEl.id = `output-${id}`;
-    
-    // Live scrolling logic per pane
-    outputEl.addEventListener('scroll', () => {
-      // We could track manual scroll state here if needed
-    });
-
-    pane.outputEl = outputEl;
+    outputEl.id = `output-${node.id}`;
 
     el.appendChild(headerEl);
     el.appendChild(outputEl);
 
-    panes.push(pane);
-    elements.panesContainer.appendChild(el);
+    renderedPanes.set(node.id, { node, el, outputEl, selectEl });
 
-    renderPaneBuffer(pane);
-    updatePaneHeaders();
+    // Initial render
+    // Defer slight to ensure it's in DOM
+    setTimeout(() => renderPaneBuffer(node.id), 0);
 
-    return pane;
+    return el;
   }
 
-  function destroyPane(pane: Pane) {
-    if (panes.length <= 1) return;
-    panes = panes.filter(p => p.id !== pane.id);
-    pane.el.remove();
-    updatePaneHeaders();
+  function addColumnRight(sourcePaneId?: string) {
+    let colIdx = layout.columns.length - 1;
+    if (sourcePaneId) {
+      colIdx = layout.columns.findIndex(c => c.panes.some(p => p.id === sourcePaneId));
+      if (colIdx === -1) colIdx = layout.columns.length - 1;
+    }
+
+    const oldColSize = layout.colSizes[colIdx]!;
+    layout.colSizes[colIdx] = oldColSize / 2;
+
+    const newCol: ColumnNode = {
+      id: generateId('col'),
+      panes: [{ id: generateId('pane'), buffer: 'main' }],
+      rowSizes: [100]
+    };
+
+    layout.columns.splice(colIdx + 1, 0, newCol);
+    layout.colSizes.splice(colIdx + 1, 0, oldColSize / 2);
+
+    saveLayout();
+    rebuildDOM();
   }
 
-  function updatePaneHeaders() {
-    panes.forEach(pane => {
-      const closeBtn = pane.el.querySelector('.pane-close');
-      if (panes.length === 1) {
-        closeBtn?.remove();
-      } else if (!closeBtn) {
-        const headerEl = pane.el.querySelector('.pane-header');
-        const btn = document.createElement('button');
-        btn.className = 'pane-close';
-        btn.innerHTML = '×';
-        btn.title = 'Close Pane';
-        btn.addEventListener('click', () => destroyPane(pane));
-        headerEl?.appendChild(btn);
+  function addPaneBelow(sourcePaneId: string) {
+    const col = layout.columns.find(c => c.panes.some(p => p.id === sourcePaneId));
+    if (!col) return;
+
+    const paneIdx = col.panes.findIndex(p => p.id === sourcePaneId);
+    const oldSize = col.rowSizes[paneIdx]!;
+    col.rowSizes[paneIdx] = oldSize / 2;
+
+    const newPane: PaneNode = { id: generateId('pane'), buffer: 'main' };
+    col.panes.splice(paneIdx + 1, 0, newPane);
+    col.rowSizes.splice(paneIdx + 1, 0, oldSize / 2);
+
+    saveLayout();
+    rebuildDOM();
+  }
+
+  function removePane(paneId: string) {
+    const colIdx = layout.columns.findIndex(c => c.panes.some(p => p.id === paneId));
+    if (colIdx === -1) return;
+    const col = layout.columns[colIdx]!;
+
+    const paneIdx = col.panes.findIndex(p => p.id === paneId);
+
+    // Distribute size to the previous pane (or next if first)
+    const sizeToDistribute = col.rowSizes[paneIdx]!;
+    col.panes.splice(paneIdx, 1);
+    col.rowSizes.splice(paneIdx, 1);
+
+    if (col.panes.length > 0) {
+      const targetIdx = Math.max(0, paneIdx - 1);
+      col.rowSizes[targetIdx]! += sizeToDistribute;
+    } else {
+      // Column is empty, remove column
+      const colSizeToDistribute = layout.colSizes[colIdx]!;
+      layout.columns.splice(colIdx, 1);
+      layout.colSizes.splice(colIdx, 1);
+      const targetColIdx = Math.max(0, colIdx - 1);
+      if (layout.columns.length > 0) {
+        layout.colSizes[targetColIdx]! += colSizeToDistribute;
+      } else {
+        // Fallback if we accidentally removed the last column
+        layout = {
+          columns: [{ id: generateId('col'), panes: [{ id: generateId('pane'), buffer: 'main' }], rowSizes: [100] }],
+          colSizes: [100]
+        };
       }
+    }
+
+    saveLayout();
+    rebuildDOM();
+  }
+
+  function makeDragHandle(kind: 'col' | 'row', parent: Layout | ColumnNode, index: number): HTMLElement {
+    const handle = document.createElement('div');
+    handle.className = kind === 'col' ? 'col-resize-handle' : 'row-resize-handle';
+    
+    handle.addEventListener('pointerdown', (e) => {
+      handle.setPointerCapture(e.pointerId);
+      const sizes = kind === 'col' ? (parent as Layout).colSizes : (parent as ColumnNode).rowSizes;
+      
+      const startSizeA = sizes[index]!;
+      const startSizeB = sizes[index + 1]!;
+      const totalPixels = kind === 'col' ? elements.panesContainer.clientWidth : (handle.parentElement!.clientHeight);
+      const startPos = kind === 'col' ? e.clientX : e.clientY;
+
+      const onMove = (moveEvent: PointerEvent) => {
+        const currentPos = kind === 'col' ? moveEvent.clientX : moveEvent.clientY;
+        const deltaPixels = currentPos - startPos;
+        const deltaPercent = (deltaPixels / totalPixels) * 100;
+
+        let newA = startSizeA + deltaPercent;
+        let newB = startSizeB - deltaPercent;
+
+        if (newA < 10) {
+          const diff = 10 - newA;
+          newA = 10;
+          newB -= diff;
+        } else if (newB < 10) {
+          const diff = 10 - newB;
+          newB = 10;
+          newA -= diff;
+        }
+
+        sizes[index] = newA;
+        sizes[index + 1] = newB;
+
+        // Apply immediately
+        if (kind === 'col') {
+          const l = parent as Layout;
+          (elements.panesContainer.children[index * 2] as HTMLElement).style.flexBasis = `${newA}%`;
+          (elements.panesContainer.children[(index + 1) * 2] as HTMLElement).style.flexBasis = `${newB}%`;
+        } else {
+          const c = parent as ColumnNode;
+          (handle.parentElement!.children[index * 2] as HTMLElement).style.flexBasis = `${newA}%`;
+          (handle.parentElement!.children[(index + 1) * 2] as HTMLElement).style.flexBasis = `${newB}%`;
+        }
+      };
+
+      const onUp = () => {
+        handle.releasePointerCapture(e.pointerId);
+        handle.removeEventListener('pointermove', onMove);
+        handle.removeEventListener('pointerup', onUp);
+        saveLayout();
+      };
+
+      handle.addEventListener('pointermove', onMove);
+      handle.addEventListener('pointerup', onUp);
     });
+
+    return handle;
   }
 
   function updateSelectOptions(select: HTMLSelectElement, selectedValue: string) {
@@ -144,8 +363,8 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
   }
 
   function updateAllSelects() {
-    panes.forEach(pane => {
-      updateSelectOptions(pane.selectEl, pane.buffer);
+    renderedPanes.forEach(pane => {
+      updateSelectOptions(pane.selectEl, pane.node.buffer);
     });
   }
 
@@ -192,14 +411,16 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     return line;
   }
 
-  function renderPaneBuffer(pane: Pane) {
+  function renderPaneBuffer(paneId: string) {
+    const pane = renderedPanes.get(paneId);
+    if (!pane) return;
     pane.outputEl.innerHTML = '';
-    const data = getBufferData(pane.buffer);
+    const data = getBufferData(pane.node.buffer);
     
     const fragment = document.createDocumentFragment();
     const startIdx = Math.max(0, data.length - maxRenderedLines);
     for (let i = startIdx; i < data.length; i++) {
-      fragment.appendChild(createEntryDOM(data[i]));
+      fragment.appendChild(createEntryDOM(data[i]!));
     }
     pane.outputEl.appendChild(fragment);
     
@@ -219,8 +440,8 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
       data.splice(0, pruneRenderedLines);
     }
 
-    panes.forEach(pane => {
-      if (pane.buffer === bufferName) {
+    renderedPanes.forEach(pane => {
+      if (pane.node.buffer === bufferName) {
         const shouldScroll = shouldStickToBottom(pane);
         pane.outputEl.appendChild(createEntryDOM(entry));
 
@@ -241,13 +462,13 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     // Append to the last entry of 'main' buffer
     const data = getBufferData('main');
     if (data.length > 0) {
-      const lastEntry = data[data.length - 1];
+      const lastEntry = data[data.length - 1]!;
       lastEntry.commands = lastEntry.commands || [];
       lastEntry.commands.push(command);
     }
     
-    panes.forEach(pane => {
-      if (pane.buffer === 'main') {
+    renderedPanes.forEach(pane => {
+      if (pane.node.buffer === 'main') {
         const line = pane.outputEl.lastElementChild;
         if (line) {
           const hint = document.createElement('span');
@@ -263,23 +484,22 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     bufferData.clear();
     knownBuffers.clear();
     knownBuffers.add('main');
-    // Preserve pane.buffer bindings — they will be re-populated as entries arrive in restore_begin.
-    // Non-main buffers will re-appear in selects once registerBuffer() is called for them.
-    panes.forEach(pane => {
+    // Preserve bindings — they will be re-populated as entries arrive in restore_begin.
+    renderedPanes.forEach(pane => {
       pane.outputEl.innerHTML = '';
     });
     updateAllSelects();
   }
 
   function scrollOutputToBottom() {
-    panes.forEach(pane => {
-      if (pane.buffer === 'main') {
+    renderedPanes.forEach(pane => {
+      if (pane.node.buffer === 'main') {
         pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
       }
     });
   }
 
-  function shouldStickToBottom(pane: Pane): boolean {
+  function shouldStickToBottom(pane: RenderedPane): boolean {
     return Math.abs(pane.outputEl.scrollTop - (pane.outputEl.scrollHeight - pane.outputEl.clientHeight)) < pane.outputEl.clientHeight / 2;
   }
 
@@ -472,8 +692,7 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     scrollOutputToBottom,
     setActivePanel,
     updateConnectionStatus,
-    createPane,
-    registerBuffer,
-    getBufferData,
+    loadLayout,
+    addColumnRight,
   };
 }

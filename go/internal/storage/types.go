@@ -35,19 +35,19 @@ type HistoryEntry struct {
 
 type LogRecord struct {
 	ID         int64      `gorm:"primaryKey"`
-	SessionID  int64      `json:"session_id"`
-	Buffer     string     `json:"buffer"`
+	SessionID  int64      `gorm:"index" json:"session_id"`
+	Buffer     string     `gorm:"index" json:"buffer"`
 	Stream     string     `json:"stream"`
 	RawText    string     `json:"raw_text"`
 	PlainText  string     `json:"plain_text"`
 	SourceType string     `json:"source_type"`
-	CreatedAt  SQLiteTime `json:"created_at"`
+	CreatedAt  SQLiteTime `gorm:"index" json:"created_at"`
 }
 
 type LogOverlay struct {
 	ID          int64      `gorm:"primaryKey"`
-	LogEntryID  int64      `json:"log_entry_id"`
-	OverlayType string     `json:"overlay_type"`
+	LogEntryID  int64      `gorm:"index" json:"log_entry_id"`
+	OverlayType string     `gorm:"index" json:"overlay_type"`
 	PayloadJSON string     `json:"payload_json"`
 	SourceType  string     `json:"source_type"`
 	CreatedAt   SQLiteTime `json:"created_at"`

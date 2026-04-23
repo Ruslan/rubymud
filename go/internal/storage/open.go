@@ -10,7 +10,8 @@ import (
 
 func Open(path string) (*Store, error) {
 	db, err := gorm.Open(sqlite.Open(filepath.Clean(path)), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Silent),
+		DisableForeignKeyConstraintWhenMigrating: true,
+		Logger:                                   logger.Default.LogMode(logger.Silent),
 	})
 	if err != nil {
 		return nil, err

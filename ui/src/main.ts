@@ -171,7 +171,7 @@ const renderer = createRenderer({
   onButtonRendered,
   state,
 });
-renderer.createPane('main');
+renderer.loadLayout();
 logBoot('renderer initialized');
 
 window.addEventListener('keydown', (event) => {
@@ -204,7 +204,7 @@ window.addEventListener('keydown', (event) => {
 elements.keyboardToggle.addEventListener('click', () => renderer.setActivePanel('keyboard'));
 elements.variablesToggle.addEventListener('click', () => renderer.setActivePanel('variables'));
 elements.settingsToggle.addEventListener('click', () => window.open('/settings', 'settings'));
-elements.splitPaneToggle.addEventListener('click', () => renderer.createPane('main'));
+elements.splitPaneToggle.addEventListener('click', () => renderer.addColumnRight());
 
 elements.panesContainer.addEventListener('click', (event) => {
   const selection = window.getSelection();

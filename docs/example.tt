@@ -3,38 +3,43 @@
 #nop rubymud:profile {"version":"1","exported":"2026-04-22T23:50:00Z"}
 
 #nop This file intentionally shows the features that survive Ruby config -> .tt export/import.
-#nop Ruby-only block aliases, transform lambdas, say/wecho/window routing are not represented here.
+#nop Ruby-only block aliases, transform lambdas, say/wecho/window routing, and alias-to-local-command tricks are not represented here.
 
 #nop --- Declared variables ---
-#var {сумка} {}
-#var {двуруч} {}
-#var {вруке} {}
-#var {щит} {}
-#var {прайм} {}
-#var {оффхенд} {}
-#var {t1} {}
-#var {t2} {}
-#var {t3} {}
-#var {t4} {}
-#var {t5} {}
-#var {r1} {}
-#var {r2} {}
-#var {r3} {}
-#var {r4} {}
+#var {сумка} {сумк}
+#var {двуруч} {фламберг}
+#var {вруке} {сгусток}
+#var {щит} {панц.чере}
+#var {прайм} {коп.молн}
+#var {оффхенд} {лютн}
+#var {t1} {notraget}
+#var {t2} {notraget}
+#var {t3} {notraget}
+#var {t4} {notraget}
+#var {t5} {notraget}
+#var {r1} {пум}
+#var {r2} {2.пум}
+#var {r3} {Гусиш}
+#var {r4} {Тильс}
 
 #nop --- Aliases ---
 #alias {уу} {у %1;пари}
 #alias {сняя} {сня %1;пол %1 $сумка}
 #alias {надее} {взя %1 $сумка;наде %1}
-#alias {ц1} {вар t1 %1}
-#alias {ц2} {вар t2 %1}
-#alias {ц3} {вар t3 %1}
-#alias {ц4} {вар t4 %1}
-#alias {ц5} {вар t5 %1}
+#nop TODO(0.0.7.2): uncomment after alias->local-#command support lands.
+#nop #alias {вар} {#var %0}
+#nop #alias {ц1} {#var {t1} {%1}}
+#nop #alias {ц2} {#var {t2} {%1}}
+#nop #alias {ц3} {#var {t3} {%1}}
+#nop #alias {ц4} {#var {t4} {%1}}
+#nop #alias {ц5} {#var {t5} {%1}}
+#nop #alias {вращщ} {#showme {ВРАЩАЮ!};вращ}
+#alias {вращщ} {вращ}
 #alias {мод0} {сня $двуруч;пол $двуруч $сумка;сня $вруке;пол $вруке $сумка;сня $щит;пол $щит $сумка;сня $прайм;пол $прайм $сумка;сня $оффхенд;пол $оффхенд $сумка}
 #alias {моддву} {взя $двуруч $сумка;дву $двуруч}
 #alias {модбаш} {взя $прайм $сумка;воор $прайм;взя $щит $сумка;наде $щит;взя $вруке $сумка;д $вруке}
 #alias {модтанк} {взя $прайм $сумка;воор $прайм;взя $оффхенд $сумка;д $оффхенд}
+#nop Ruby block aliases intentionally not migrated, even for 0.0.7.2: флуд, путь, путьназад, статус_переменных.
 
 #nop --- Group-gated automation migrated from if <var> == '1' ---
 #nop rubymud:rule {"group_name":"лид"}
@@ -60,6 +65,7 @@
 
 #nop --- Always-on combat and utility triggers ---
 #action {отказывается передвигаться в этом направлении.$} {соск}
+#action {Белый аист пришел} {привет аист}
 #action {^Вам следует встать на ноги!} {вста}
 #action {^Вы полетели на землю} {вста}
 #action {^Вы не удержали равновесия и упали!} {вста}
@@ -68,6 +74,37 @@
 #action {^Вы попытались преодолеть парализующую магию усилием воли.} {преодолеть}
 #action {группе: "вст"} {прос;вст}
 #action {группе: "рест"} {отд}
+#nop TODO(0.0.7.2): uncomment after alias->local-#command / buffer-routing-.tt support lands.
+#nop Example group-chat routing target: said-to-group lines should be copied or echoed into buffer `chat` via #woutput / trigger buffer routing.
+#nop #action {^(\p{L}+) сказал.? группе: "(.+)"$} {#woutput {chat} {%1: %2}}
+
+#nop --- Buff and status notifications migrated as plain triggers ---
+#action {^Волшебная поддержка закончилась.} {гг <<< -Эйд >>>}
+#action {^Вы почувствовали себя неуклюжим, как обычно.} {гг <<< -Кошка >>>}
+#action {^Вы почувствовали себя слабее.} {гг <<< -Сила >>>}
+#action {^Закончив полет, Вы плавно опустились на землю.} {гг <<< -Флай >>>}
+#action {^Яркий свет вокруг Вас погас.} {гг <<< -Санк >>>}
+#action {^Вы почувствовали, как магия, удерживающая Вас, рассеялась!} {гг <<< -Холд >>>}
+#action {^Восстанавливающая силы энергия иссякла.} {гг <<< -Аксель >>>}
+#action {^Незримые доспехи вокруг Вас растаяли.} {гг <<< -Доспех >>>}
+#action {Ваше тело уменьшилось до своего обычного размера.} {гг <<< -Лажа >>>}
+#action {^Вы почувствовали, что менее защищены от холодных атак.} {гг <<< -Протект фром колд >>>}
+#action {^Вы почувствовали, что менее защищены от огненных атак.} {гг <<< -Протект фром файр >>>}
+#action {^Ваши глаза перестали видеть!} {гг <<< Ослеп >>>}
+#action {^Ваше зрение вернулось!} {гг <<< Прозрел >>>}
+#action {^Вы вдруг обнаружили, как сложна жизнь, и как много полезного вы о ней знаете!} {гг <<< -Тупость >>>}
+#action {^Ваши жабры высохли и отвалились.} {гг <<< -Жабры >>>}
+#action {^Ощущение необыкновенной свободы и легкости движений исчезло.} {гг <<< -Фри экшн >>>}
+#action {^Приятный легкий зуд во всем теле прекратился.} {гг <<< -Порог Смерти >>>}
+#action {^Ощущение праведности прошло.} {гг <<< -Блес>>>}
+#action {^Вы почувствовали, что менее защищены от сил зла.} {гг <<< -ЗОЗ>>>}
+#nop --- Возложение notifications ---
+#action {^Ваши руки вновь наполнила исцеляющая сила.} {гг ++ Готов Возлагать ++}
+#action {^Вы произнесли короткую молитву и прикоснулись} {гг -- Возложение --}
+#nop TODO(0.0.7.2): uncomment for local speech / pane notifications.
+#nop #action {^Ваши руки вновь наполнила исцеляющая сила.} {#tts {ready};#woutput {chat} {Возложение+}}
+#nop #action {^Вы произнесли короткую молитву и прикоснулись} {#woutput {chat} {Возложение-}}
+#action {(.+) рассыпал\p{L}+ в пыль в Ваших руках.} {гг %1 распался}
 
 #nop --- Button triggers ---
 #nop rubymud:rule {"is_button":true}
@@ -78,6 +115,8 @@
 #action {^Угрюмый человек идет по проходу.} {у клад}
 #nop rubymud:rule {"is_button":true}
 #action {^Дверь закрыта} {откр две}
+#nop rubymud:rule {"is_button":true}
+#action {^<.{6,15}>\s+([^(]+)} {сняя %1}
 
 #nop --- Notification highlights (representative .tt syntax example) ---
 #nop rubymud:rule {"bold":true,"faint":false,"italic":false,"underline":false,"strikethrough":false,"blink":false,"reverse":false,"bg":""}
@@ -109,7 +148,6 @@
 #hotkey {f10} {сбить $t4}
 #hotkey {f11} {сбить $t5}
 #hotkey {f12} {зачит возвра}
-#hotkey {ctrl+1} {статус_переменных}
 #hotkey {ctrl+q} {пну}
 #hotkey {ctrl+w} {пари}
 #hotkey {ctrl+e} {сби}
