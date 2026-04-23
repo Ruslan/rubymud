@@ -6,12 +6,12 @@
 #nop Ruby-only block aliases, transform lambdas, say/wecho/window routing, and alias-to-local-command tricks are not represented here.
 
 #nop --- Declared variables ---
-#var {сумка} {сумк}
+#var {сумка} {короб}
 #var {двуруч} {фламберг}
 #var {вруке} {сгусток}
-#var {щит} {панц.чере}
-#var {прайм} {коп.молн}
-#var {оффхенд} {лютн}
+#var {щит} {щит}
+#var {прайм} {адаман.топ}
+#var {оффхенд} {сурут}
 #var {t1} {notraget}
 #var {t2} {notraget}
 #var {t3} {notraget}
@@ -19,8 +19,8 @@
 #var {t5} {notraget}
 #var {r1} {пум}
 #var {r2} {2.пум}
-#var {r3} {Гусиш}
-#var {r4} {Тильс}
+#var {r3} {3.пум}
+#var {r4} {4.пум}
 
 #nop --- Aliases ---
 #alias {уу} {у %1;пари}
@@ -78,7 +78,7 @@
 #action {^Вы произнесли: "([^"\r\n]*)"$} {#woutput {chat} {[$TIME] Вы произнесли: %1}}
 
 #nop Kill feed routed into buffer `kills` via local #woutput.
-#action {^(.+?) мертв! R\.I\.P\.$} {#woutput {kills} {[$TIME] %0}}
+#action {^(.+?) мертв(?:а|о|ы)?! R\.I\.P\.$} {#woutput {kills} {[$TIME] %0}}
 #action {^Вы получили \d+ очк(?:о|а|ов) опыта\.$} {#woutput {kills} {[$TIME] %0}}
 
 #nop --- Buff and status notifications migrated as plain triggers ---

@@ -1,4 +1,4 @@
-import type { AnsiUp } from 'ansi_up';
+import { AnsiUp } from 'ansi_up';
 
 import type { AppElements } from './dom';
 import type { Hotkey, LogEntry, ResolvedVariable, Variable, ButtonOverlay } from './types';
@@ -378,7 +378,7 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     }
 
     const span = document.createElement('span');
-    span.innerHTML = entry.text ? ansiUp.ansi_to_html(entry.text) : '&nbsp;';
+    span.innerHTML = entry.text ? renderANSI(entry.text) : '&nbsp;';
     line.appendChild(span);
 
     (entry.commands || []).forEach((command) => {
@@ -521,9 +521,7 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
 
   function scrollOutputToBottom() {
     renderedPanes.forEach(pane => {
-      if (pane.node.buffer === 'main') {
-        pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
-      }
+      pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
     });
   }
 
@@ -783,3 +781,10 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     addColumnRight,
   };
 }
+  function renderANSI(text: string): string {
+    // ansi_up keeps color state between calls, so use a fresh parser per line
+    // to prevent color bleed across unrelated entries and buffers.
+    const parser = new AnsiUp();
+    parser.use_classes = true;
+    return parser.ansi_to_html(text);
+  }
