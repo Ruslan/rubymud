@@ -15,7 +15,7 @@ interface RendererDeps {
   sendCommand: (value: string, source: string) => boolean;
   requestVariables: () => void;
   requestGroups: () => void;
-  toggleGroup: (domain: string, name: string, enabled: boolean) => void;
+  toggleGroup: (name: string, enabled: boolean) => void;
   onButtonRendered?: (btn: ButtonOverlay, el: HTMLButtonElement) => void;
   state: RendererState;
 }
@@ -577,6 +577,9 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
       return;
     }
 
+    const chipsContainer = document.createElement('div');
+    chipsContainer.className = 'group-chips-container';
+
     // Sort by name for stability
     items.sort((a, b) => a.group_name.localeCompare(b.group_name));
 
@@ -587,17 +590,17 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.className = 'group-checkbox';
-      checkbox.checked = g.enabled_count > 0;
+      const allEnabled = g.enabled_count === g.total_count;
+      const noneEnabled = g.enabled_count === 0;
+      checkbox.checked = allEnabled;
+      checkbox.indeterminate = !allEnabled && !noneEnabled;
       checkbox.addEventListener('change', () => {
-        toggleGroup(g.domain, g.group_name, checkbox.checked);
+        toggleGroup(g.group_name, checkbox.checked);
       });
 
       const label = document.createElement('span');
       label.className = 'group-label';
       label.textContent = g.group_name;
-      if (g.domain !== 'triggers') {
-        label.title = `Domain: ${g.domain}`;
-      }
 
       const count = document.createElement('span');
       count.className = 'group-badge';
@@ -606,8 +609,10 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
       chip.appendChild(checkbox);
       chip.appendChild(label);
       chip.appendChild(count);
-      elements.groupsList.appendChild(chip);
+      chipsContainer.appendChild(chip);
     });
+
+    elements.groupsList.appendChild(chipsContainer);
   }
 
   function renderVariables(items: (Variable | ResolvedVariable)[]) {

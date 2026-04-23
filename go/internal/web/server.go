@@ -5,7 +5,6 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -126,7 +125,7 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 
 				r.Route("/groups", func(r chi.Router) {
 					r.Get("/", s.listSessionGroups)
-					r.Post("/{domain}/{name}/toggle", s.toggleSessionGroup)
+					r.Post("/{name}/toggle", s.toggleSessionGroup)
 				})
 			})
 		})
@@ -430,8 +429,6 @@ func (s *Server) listSessionGroups(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Fallback: if no profiles attached to session, use ALL profiles 
-	// so the user can at least see and toggle global/base groups.
 	if len(profileIDs) == 0 {
 		profiles, _ := s.store.ListProfiles()
 		for _, p := range profiles {
@@ -439,29 +436,22 @@ func (s *Server) listSessionGroups(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	var allGroups []storage.RuleGroupSummary
-	seen := make(map[string]bool)
+	var allGroups []storage.UnifiedGroupSummary
+	seen := make(map[string]int) // name -> index in allGroups
 
 	for _, pid := range profileIDs {
-		groups, err := s.store.ListRuleGroups(pid)
+		groups, err := s.store.ListUnifiedGroups(pid)
 		if err != nil {
 			continue
 		}
 		for _, g := range groups {
-			key := fmt.Sprintf("%s:%s", g.Domain, g.GroupName)
-			if !seen[key] {
+			if idx, ok := seen[g.GroupName]; !ok {
+				seen[g.GroupName] = len(allGroups)
 				allGroups = append(allGroups, g)
-				seen[key] = true
 			} else {
-				// Merge counts for the same group in different profiles
-				for i := range allGroups {
-					if allGroups[i].Domain == g.Domain && allGroups[i].GroupName == g.GroupName {
-						allGroups[i].TotalCount += g.TotalCount
-						allGroups[i].EnabledCount += g.EnabledCount
-						allGroups[i].DisabledCount += g.DisabledCount
-						break
-					}
-				}
+				allGroups[idx].TotalCount += g.TotalCount
+				allGroups[idx].EnabledCount += g.EnabledCount
+				allGroups[idx].DisabledCount += g.DisabledCount
 			}
 		}
 	}
@@ -476,7 +466,6 @@ func (s *Server) toggleSessionGroup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	domain := chi.URLParam(r, "domain")
 	name := chi.URLParam(r, "name")
 
 	var req struct {
@@ -493,12 +482,23 @@ func (s *Server) toggleSessionGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Same fallback as listSessionGroups: fresh session with no profiles
+	// should be able to toggle groups from all available profiles.
+	if len(profileIDs) == 0 {
+		profiles, _ := s.store.ListProfiles()
+		for _, p := range profiles {
+			profileIDs = append(profileIDs, p.ID)
+		}
+	}
+
 	for _, pid := range profileIDs {
-		_ = s.store.SetGroupEnabled(pid, domain, name, req.Enabled)
+		_ = s.store.SetUnifiedGroupEnabled(pid, name, req.Enabled)
 	}
 
 	if sess != nil {
-		sess.NotifySettingsChanged(domain)
+		sess.NotifySettingsChanged("aliases")
+		sess.NotifySettingsChanged("triggers")
+		sess.NotifySettingsChanged("highlights")
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -951,7 +951,7 @@ func (s *Server) listProfileGroups(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	groups, err := s.store.ListRuleGroups(pid)
+	groups, err := s.store.ListUnifiedGroups(pid)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -967,7 +967,6 @@ func (s *Server) toggleProfileGroup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var payload struct {
-		Domain    string `json:"domain"`
 		GroupName string `json:"group_name"`
 		Enabled   bool   `json:"enabled"`
 	}
@@ -975,15 +974,13 @@ func (s *Server) toggleProfileGroup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if strings.TrimSpace(payload.Domain) == "" {
-		http.Error(w, "missing domain", http.StatusBadRequest)
-		return
-	}
-	if err := s.store.SetGroupEnabled(pid, strings.TrimSpace(payload.Domain), strings.TrimSpace(payload.GroupName), payload.Enabled); err != nil {
+	if err := s.store.SetUnifiedGroupEnabled(pid, strings.TrimSpace(payload.GroupName), payload.Enabled); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.notifyProfileChanged(pid, strings.TrimSpace(payload.Domain))
+	s.notifyProfileChanged(pid, "aliases")
+	s.notifyProfileChanged(pid, "triggers")
+	s.notifyProfileChanged(pid, "highlights")
 	w.WriteHeader(http.StatusNoContent)
 }
 

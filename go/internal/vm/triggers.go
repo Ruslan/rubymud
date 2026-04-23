@@ -31,8 +31,9 @@ func (v *VM) MatchTriggers(plainText string) ([]Effect, RoutingInfo) {
 		cmd := expandTriggerCommand(t.Command, matches)
 		if t.IsButton {
 			label := cmd
-			if len(label) > 40 {
-				label = label[:37] + "..."
+			runes := []rune(label)
+			if len(runes) > 40 {
+				label = string(runes[:37]) + "..."
 			}
 			effects = append(effects, Effect{Type: "button", Label: label, Command: cmd})
 		} else {

@@ -10,6 +10,11 @@ func NewTestStore(db *gorm.DB) *Store {
 	return &Store{db: db}
 }
 
+// DB returns the underlying gorm.DB, intended for use in tests only.
+func (s *Store) DB() *gorm.DB {
+	return s.db
+}
+
 type AppSetting struct {
 	Key   string `gorm:"primaryKey" json:"key"`
 	Value string `json:"value"`

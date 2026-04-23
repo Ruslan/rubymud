@@ -157,9 +157,9 @@ function requestGroups() {
     .catch(err => console.error('Failed to sync groups:', err));
 }
 
-function toggleGroup(domain: string, groupName: string, enabled: boolean) {
+function toggleGroup(groupName: string, enabled: boolean) {
   if (!sessionID) return;
-  fetchWithToken(`/api/sessions/${sessionID}/groups/${domain}/${encodeURIComponent(groupName)}/toggle`, {
+  fetchWithToken(`/api/sessions/${sessionID}/groups/${encodeURIComponent(groupName)}/toggle`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled })

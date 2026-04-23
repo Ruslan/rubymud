@@ -1,5 +1,4 @@
 export interface RuleGroup {
-  domain: string;
   group_name: string;
   total_count: number;
   enabled_count: number;

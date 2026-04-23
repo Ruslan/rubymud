@@ -320,3 +320,128 @@ func TestProfileFileEndpoints(t *testing.T) {
 		t.Fatalf("POST import/all status = %d, want 204", resp.StatusCode)
 	}
 }
+
+func TestGroupsAPI(t *testing.T) {
+	t.Run("fresh session fallback", func(t *testing.T) {
+		s, sess := setupTestServer(t)
+		ts := httptest.NewServer(s.httpServer.Handler)
+		defer ts.Close()
+
+		sessionID := sess.SessionID()
+		tok := s.apiToken
+
+		// Remove all auto-attached profiles to simulate a fresh session
+		// where the user hasn't selected any profiles yet.
+		_ = s.store.DB().Where("session_id = ?", sessionID).Delete(&storage.SessionProfile{}).Error
+
+		// A profile with rules exists in the system but is NOT attached to the session.
+		p, _ := s.store.CreateProfile("Fallback Profile", "")
+		_ = s.store.DB().Create(&storage.TriggerRule{ProfileID: p.ID, Pattern: "test", GroupName: "fallback_group", Enabled: true}).Error
+
+		// GET groups: should see fallback_group via ListProfiles fallback.
+		url := fmt.Sprintf("%s/api/sessions/%d/groups", ts.URL, sessionID)
+		req, _ := newAuthenticatedRequest(http.MethodGet, url, nil, tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET groups: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET groups status = %d, want 200", resp.StatusCode)
+		}
+		var groups []storage.UnifiedGroupSummary
+		json.NewDecoder(resp.Body).Decode(&groups)
+		found := false
+		for _, g := range groups {
+			if g.GroupName == "fallback_group" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("fallback_group not visible for fresh session: %+v", groups)
+		}
+
+		// POST toggle: should work even with no attached profiles.
+		toggleURL := fmt.Sprintf("%s/api/sessions/%d/groups/fallback_group/toggle", ts.URL, sessionID)
+		payload, _ := json.Marshal(map[string]bool{"enabled": false})
+		req, _ = newAuthenticatedRequest(http.MethodPost, toggleURL, bytes.NewBuffer(payload), tok)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err = http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST toggle: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("POST toggle status = %d, want 200", resp.StatusCode)
+		}
+
+		// Verify the rule was actually disabled.
+		req, _ = newAuthenticatedRequest(http.MethodGet, url, nil, tok)
+		resp, _ = http.DefaultClient.Do(req)
+		var groups2 []storage.UnifiedGroupSummary
+		json.NewDecoder(resp.Body).Decode(&groups2)
+		for _, g := range groups2 {
+			if g.GroupName == "fallback_group" && g.EnabledCount != 0 {
+				t.Errorf("expected 0 enabled after toggle, got %d", g.EnabledCount)
+			}
+		}
+	})
+
+	t.Run("session with attached profile", func(t *testing.T) {
+		s, sess := setupTestServer(t)
+		ts := httptest.NewServer(s.httpServer.Handler)
+		defer ts.Close()
+
+		sessionID := sess.SessionID()
+		tok := s.apiToken
+
+		p, _ := s.store.CreateProfile("API Groups", "")
+		_ = s.store.AddProfileToSession(sessionID, p.ID, 0)
+		_ = s.store.DB().Create(&storage.TriggerRule{ProfileID: p.ID, Pattern: "a", GroupName: "api_test", Enabled: true}).Error
+
+		url := fmt.Sprintf("%s/api/sessions/%d/groups", ts.URL, sessionID)
+		req, _ := newAuthenticatedRequest(http.MethodGet, url, nil, tok)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET groups: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET groups status = %d, want 200", resp.StatusCode)
+		}
+		var groups []storage.UnifiedGroupSummary
+		json.NewDecoder(resp.Body).Decode(&groups)
+		found := false
+		for _, g := range groups {
+			if g.GroupName == "api_test" {
+				found = true
+				if g.EnabledCount != 1 {
+					t.Errorf("expected 1 enabled rule, got %d", g.EnabledCount)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("api_test group not found: %+v", groups)
+		}
+
+		toggleURL := fmt.Sprintf("%s/api/sessions/%d/groups/api_test/toggle", ts.URL, sessionID)
+		payload, _ := json.Marshal(map[string]bool{"enabled": false})
+		req, _ = newAuthenticatedRequest(http.MethodPost, toggleURL, bytes.NewBuffer(payload), tok)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err = http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("POST toggle: %v", err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("POST toggle status = %d, want 200", resp.StatusCode)
+		}
+
+		req, _ = newAuthenticatedRequest(http.MethodGet, url, nil, tok)
+		resp, _ = http.DefaultClient.Do(req)
+		var groups2 []storage.UnifiedGroupSummary
+		json.NewDecoder(resp.Body).Decode(&groups2)
+		for _, g := range groups2 {
+			if g.GroupName == "api_test" && g.EnabledCount != 0 {
+				t.Errorf("expected 0 enabled after toggle, got %d", g.EnabledCount)
+			}
+		}
+	})
+}
+
