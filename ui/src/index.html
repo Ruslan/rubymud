@@ -14,9 +14,9 @@
     <div id="bottom-dock" class="bottom-dock">
       <div class="bottom-toolbar">
         <div class="bottom-toolbar__tabs">
-          <button id="btn-split-pane" class="panel-tab" type="button" title="Split pane">
-            <span class="panel-tab__icon">⊞</span>
-            <span class="panel-tab__label">Split</span>
+          <button id="panel-toggle-groups" class="panel-tab" type="button" title="Groups panel">
+            <span class="panel-tab__icon">☰</span>
+            <span class="panel-tab__label">Groups</span>
           </button>
           <button id="panel-toggle-keyboard" class="panel-tab" type="button" title="Keyboard panel">
             <span class="panel-tab__icon">⌨</span>
@@ -37,6 +37,11 @@
         </div>
       </div>
       <div id="bottom-panels" class="bottom-panels">
+        <div id="panel-groups" class="bottom-panel">
+          <div class="panel-section">
+            <div id="groups-list" class="groups-list"></div>
+          </div>
+        </div>
         <div id="panel-keyboard" class="bottom-panel">
           <div class="panel-section">
             <div id="hotkeys"></div>

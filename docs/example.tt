@@ -60,9 +60,6 @@
 #nop rubymud:rule {"group_name":"вращ"}
 #action {^Вы подняли свое оружие над головой и начали быстро его вращать} {вста;вращ}
 
-#nop rubymud:rule {"group_name":"loot"}
-#action {R\.I\.P\.} {взя все *.тру}
-
 #nop --- Always-on combat and utility triggers ---
 #action {отказывается передвигаться в этом направлении.$} {соск}
 #action {Белый аист пришел} {привет аист}

@@ -6,9 +6,9 @@
   <link rel="icon" type="image/svg+xml" href="./assets/favicon-BcJnCTjk.svg">
   <!-- %TOKEN% -->
   <title>mudhost</title>
-  <script type="module" crossorigin src="./assets/main-OMUzYV_Y.js"></script>
+  <script type="module" crossorigin src="./assets/main-gsAoSTyC.js"></script>
   <link rel="modulepreload" crossorigin href="./assets/modulepreload-polyfill-wMinxHhO.js">
-  <link rel="stylesheet" crossorigin href="./assets/main-DYuz7nNc.css">
+  <link rel="stylesheet" crossorigin href="./assets/main-DLHbQ1Nk.css">
 </head>
 <body>
   <div class="app">
@@ -17,9 +17,9 @@
     <div id="bottom-dock" class="bottom-dock">
       <div class="bottom-toolbar">
         <div class="bottom-toolbar__tabs">
-          <button id="btn-split-pane" class="panel-tab" type="button" title="Split pane">
-            <span class="panel-tab__icon">⊞</span>
-            <span class="panel-tab__label">Split</span>
+          <button id="panel-toggle-groups" class="panel-tab" type="button" title="Groups panel">
+            <span class="panel-tab__icon">☰</span>
+            <span class="panel-tab__label">Groups</span>
           </button>
           <button id="panel-toggle-keyboard" class="panel-tab" type="button" title="Keyboard panel">
             <span class="panel-tab__icon">⌨</span>
@@ -40,6 +40,11 @@
         </div>
       </div>
       <div id="bottom-panels" class="bottom-panels">
+        <div id="panel-groups" class="bottom-panel">
+          <div class="panel-section">
+            <div id="groups-list" class="groups-list"></div>
+          </div>
+        </div>
         <div id="panel-keyboard" class="bottom-panel">
           <div class="panel-section">
             <div id="hotkeys"></div>

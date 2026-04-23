@@ -9,11 +9,13 @@ function requireElement<T extends HTMLElement>(id: string): T {
 export function getAppElements() {
   return {
     panesContainer: requireElement<HTMLDivElement>('panes-container'),
-    splitPaneToggle: requireElement<HTMLButtonElement>('btn-split-pane'),
+    groupsToggle: requireElement<HTMLButtonElement>('panel-toggle-groups'),
     bottomPanels: requireElement<HTMLDivElement>('bottom-panels'),
     bottomToolbarHint: requireElement<HTMLSpanElement>('bottom-toolbar-hint'),
     hotkeysBox: requireElement<HTMLDivElement>('hotkeys'),
     variablesList: requireElement<HTMLDivElement>('variables-list'),
+    groupsList: requireElement<HTMLDivElement>('groups-list'),
+    groupsPanel: requireElement<HTMLDivElement>('panel-groups'),
     keyboardPanel: requireElement<HTMLDivElement>('panel-keyboard'),
     variablesPanel: requireElement<HTMLDivElement>('panel-variables'),
     keyboardToggle: requireElement<HTMLButtonElement>('panel-toggle-keyboard'),

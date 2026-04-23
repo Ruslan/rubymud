@@ -74,7 +74,7 @@ ansiUp.use_classes = true;
 logBoot('ansi initialized');
 
 const state = {
-  activePanel: null as 'keyboard' | 'variables' | null,
+  activePanel: null as 'keyboard' | 'variables' | 'groups' | null,
   restoreInProgress: false,
 };
 
@@ -146,6 +146,26 @@ function requestVariables() {
     .catch(err => console.error('Failed to sync variables:', err));
 }
 
+function requestGroups() {
+  if (!sessionID) {
+    renderer.renderGroups([]);
+    return;
+  }
+  fetchWithToken(`/api/sessions/${sessionID}/groups`)
+    .then(res => res.json())
+    .then(data => renderer.renderGroups(data))
+    .catch(err => console.error('Failed to sync groups:', err));
+}
+
+function toggleGroup(domain: string, groupName: string, enabled: boolean) {
+  if (!sessionID) return;
+  fetchWithToken(`/api/sessions/${sessionID}/groups/${domain}/${encodeURIComponent(groupName)}/toggle`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled })
+  }).then(() => requestGroups());
+}
+
 function sendCommand(value: string, source = 'input'): boolean {
   if (!sessionID) {
     renderer.appendEntry({ text: '[no session selected]' });
@@ -167,6 +187,8 @@ const renderer = createRenderer({
   elements,
   ansiUp,
   requestVariables,
+  requestGroups,
+  toggleGroup,
   sendCommand,
   onButtonRendered,
   state,
@@ -202,8 +224,8 @@ window.addEventListener('keydown', (event) => {
 
 elements.keyboardToggle.addEventListener('click', () => renderer.setActivePanel('keyboard'));
 elements.variablesToggle.addEventListener('click', () => renderer.setActivePanel('variables'));
+elements.groupsToggle.addEventListener('click', () => renderer.setActivePanel('groups'));
 elements.settingsToggle.addEventListener('click', () => window.open('/settings', 'settings'));
-elements.splitPaneToggle.addEventListener('click', () => renderer.addColumnRight());
 
 elements.panesContainer.addEventListener('click', (event) => {
   const selection = window.getSelection();

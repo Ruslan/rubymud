@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -121,6 +122,11 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 					r.Post("/", s.addProfileToSession)
 					r.Put("/reorder", s.reorderSessionProfiles)
 					r.Delete("/{profileID}", s.removeProfileFromSession)
+				})
+
+				r.Route("/groups", func(r chi.Router) {
+					r.Get("/", s.listSessionGroups)
+					r.Post("/{domain}/{name}/toggle", s.toggleSessionGroup)
 				})
 			})
 		})
@@ -410,6 +416,92 @@ func (s *Server) listSessionProfiles(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(profiles)
+}
+
+func (s *Server) listSessionGroups(w http.ResponseWriter, r *http.Request) {
+	_, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	profileIDs, err := s.store.GetOrderedProfileIDs(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	// Fallback: if no profiles attached to session, use ALL profiles 
+	// so the user can at least see and toggle global/base groups.
+	if len(profileIDs) == 0 {
+		profiles, _ := s.store.ListProfiles()
+		for _, p := range profiles {
+			profileIDs = append(profileIDs, p.ID)
+		}
+	}
+
+	var allGroups []storage.RuleGroupSummary
+	seen := make(map[string]bool)
+
+	for _, pid := range profileIDs {
+		groups, err := s.store.ListRuleGroups(pid)
+		if err != nil {
+			continue
+		}
+		for _, g := range groups {
+			key := fmt.Sprintf("%s:%s", g.Domain, g.GroupName)
+			if !seen[key] {
+				allGroups = append(allGroups, g)
+				seen[key] = true
+			} else {
+				// Merge counts for the same group in different profiles
+				for i := range allGroups {
+					if allGroups[i].Domain == g.Domain && allGroups[i].GroupName == g.GroupName {
+						allGroups[i].TotalCount += g.TotalCount
+						allGroups[i].EnabledCount += g.EnabledCount
+						allGroups[i].DisabledCount += g.DisabledCount
+						break
+					}
+				}
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(allGroups)
+}
+
+func (s *Server) toggleSessionGroup(w http.ResponseWriter, r *http.Request) {
+	sess, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	domain := chi.URLParam(r, "domain")
+	name := chi.URLParam(r, "name")
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	profileIDs, err := s.store.GetOrderedProfileIDs(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	for _, pid := range profileIDs {
+		_ = s.store.SetGroupEnabled(pid, domain, name, req.Enabled)
+	}
+
+	if sess != nil {
+		sess.NotifySettingsChanged(domain)
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 func (s *Server) addProfileToSession(w http.ResponseWriter, r *http.Request) {

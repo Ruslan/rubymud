@@ -1,3 +1,11 @@
+export interface RuleGroup {
+  domain: string;
+  group_name: string;
+  total_count: number;
+  enabled_count: number;
+  disabled_count: number;
+}
+
 export interface Hotkey {
   shortcut: string;
   command: string;

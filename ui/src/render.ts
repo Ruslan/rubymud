@@ -5,7 +5,7 @@ import type { Hotkey, LogEntry, ResolvedVariable, Variable, ButtonOverlay } from
 import { fetchWithToken } from './dom';
 
 interface RendererState {
-  activePanel: 'keyboard' | 'variables' | null;
+  activePanel: 'keyboard' | 'variables' | 'groups' | null;
   restoreInProgress: boolean;
 }
 
@@ -14,6 +14,8 @@ interface RendererDeps {
   ansiUp: AnsiUp;
   sendCommand: (value: string, source: string) => boolean;
   requestVariables: () => void;
+  requestGroups: () => void;
+  toggleGroup: (domain: string, name: string, enabled: boolean) => void;
   onButtonRendered?: (btn: ButtonOverlay, el: HTMLButtonElement) => void;
   state: RendererState;
 }
@@ -44,7 +46,7 @@ interface RenderedPane {
   selectEl: HTMLSelectElement;
 }
 
-export function createRenderer({ elements, ansiUp, sendCommand, requestVariables, onButtonRendered, state }: RendererDeps) {
+export function createRenderer({ elements, ansiUp, sendCommand, requestVariables, requestGroups, toggleGroup, onButtonRendered, state }: RendererDeps) {
   let nextId = 0;
   const generateId = (prefix: string) => `${prefix}-${++nextId}`;
 
@@ -505,18 +507,25 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     return distanceToBottom <= threshold;
   }
 
-  function setActivePanel(panel: 'keyboard' | 'variables') {
+  function setActivePanel(panel: 'keyboard' | 'variables' | 'groups' | null) {
     state.activePanel = state.activePanel === panel ? null : panel;
 
     elements.keyboardToggle.classList.toggle('panel-tab_active', state.activePanel === 'keyboard');
     elements.variablesToggle.classList.toggle('panel-tab_active', state.activePanel === 'variables');
+    elements.groupsToggle.classList.toggle('panel-tab_active', state.activePanel === 'groups');
+    
     elements.keyboardPanel.classList.toggle('bottom-panel_active', state.activePanel === 'keyboard');
     elements.variablesPanel.classList.toggle('bottom-panel_active', state.activePanel === 'variables');
+    elements.groupsPanel.classList.toggle('bottom-panel_active', state.activePanel === 'groups');
+    
     elements.bottomPanels.classList.toggle('bottom-panels_visible', Boolean(state.activePanel));
     elements.bottomToolbarHint.textContent = state.activePanel ? `${state.activePanel} open` : 'Panels';
 
     if (state.activePanel === 'variables') {
       requestVariables();
+    }
+    if (state.activePanel === 'groups') {
+      requestGroups();
     }
   }
 
@@ -556,6 +565,49 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     if ((!items || !items.length) && state.activePanel === 'keyboard') {
       setActivePanel('keyboard');
     }
+  }
+
+  function renderGroups(items: RuleGroup[]) {
+    elements.groupsList.innerHTML = '';
+    if (!items || !items.length) {
+      const empty = document.createElement('div');
+      empty.className = 'variables-empty';
+      empty.textContent = 'No groups defined in active profiles.';
+      elements.groupsList.appendChild(empty);
+      return;
+    }
+
+    // Sort by name for stability
+    items.sort((a, b) => a.group_name.localeCompare(b.group_name));
+
+    items.forEach(g => {
+      const chip = document.createElement('label');
+      chip.className = 'group-chip';
+      
+      const checkbox = document.createElement('input');
+      checkbox.type = 'checkbox';
+      checkbox.className = 'group-checkbox';
+      checkbox.checked = g.enabled_count > 0;
+      checkbox.addEventListener('change', () => {
+        toggleGroup(g.domain, g.group_name, checkbox.checked);
+      });
+
+      const label = document.createElement('span');
+      label.className = 'group-label';
+      label.textContent = g.group_name;
+      if (g.domain !== 'triggers') {
+        label.title = `Domain: ${g.domain}`;
+      }
+
+      const count = document.createElement('span');
+      count.className = 'group-badge';
+      count.textContent = String(g.total_count);
+
+      chip.appendChild(checkbox);
+      chip.appendChild(label);
+      chip.appendChild(count);
+      elements.groupsList.appendChild(chip);
+    });
   }
 
   function renderVariables(items: (Variable | ResolvedVariable)[]) {
@@ -691,6 +743,7 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     clearOutput,
     renderHotkeys,
     renderVariables,
+    renderGroups,
     scrollOutputToBottom,
     setActivePanel,
     updateConnectionStatus,

@@ -6,6 +6,38 @@ import (
 	"rubymud/go/internal/storage"
 )
 
+func TestMatchTriggers_BufferRouting(t *testing.T) {
+	v := New(nil, 1)
+	v.triggers = []storage.TriggerRule{
+		{
+			Pattern:      ` мертв! R\.I\.P\.$`,
+			Command:      "",
+			TargetBuffer: "kills",
+			BufferAction: "copy",
+			Enabled:      true,
+		},
+		{
+			Pattern:      `^Вы получили (\d+) очков опыта\.`,
+			Command:      "",
+			TargetBuffer: "kills",
+			BufferAction: "copy",
+			Enabled:      true,
+		},
+	}
+
+	// 1. Check death message
+	_, routing1 := v.MatchTriggers("Советник мертв! R.I.P.")
+	if len(routing1.CopyBuffers) != 1 || routing1.CopyBuffers[0] != "kills" {
+		t.Errorf("expected routing to 'kills' buffer via copy, got %+v", routing1)
+	}
+
+	// 2. Check exp message
+	_, routing2 := v.MatchTriggers("Вы получили 3639 очков опыта.")
+	if len(routing2.CopyBuffers) != 1 || routing2.CopyBuffers[0] != "kills" {
+		t.Errorf("expected routing exp to 'kills' buffer, got %+v", routing2)
+	}
+}
+
 func TestArcticTriggerAnchoredCaret(t *testing.T) {
 	v := New(nil, 1)
 	v.triggers = []storage.TriggerRule{
