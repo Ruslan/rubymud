@@ -50,3 +50,32 @@ func TestApplyHighlightsRestoresOuterANSIContext(t *testing.T) {
 		t.Fatalf("plain text after restored highlight = %q", stripANSIFromVM(got))
 	}
 }
+
+func TestApplyHighlightsMultipleMatches(t *testing.T) {
+	v := New(nil, 1)
+	v.highlights = []storage.HighlightRule{{Pattern: `yellow`, FG: "yellow", Enabled: true}}
+
+	got := v.ApplyHighlights("yellow one and yellow two")
+
+	if count := strings.Count(got, "\x1b[33myellow\x1b[0m"); count != 2 {
+		t.Fatalf("expected 2 highlighted matches, got %d: %q", count, got)
+	}
+	if stripANSIFromVM(got) != "yellow one and yellow two" {
+		t.Fatalf("plain text after multiple-match highlight = %q", stripANSIFromVM(got))
+	}
+}
+
+func TestApplyHighlightsMultipleMatchesWithExistingANSI(t *testing.T) {
+	v := New(nil, 1)
+	v.highlights = []storage.HighlightRule{{Pattern: `yellow`, FG: "yellow", Enabled: true}}
+
+	input := "\x1b[31myellow one yellow two\x1b[0m"
+	got := v.ApplyHighlights(input)
+
+	if count := strings.Count(got, "\x1b[33myellow\x1b[0m\x1b[31m"); count != 2 {
+		t.Fatalf("expected 2 highlighted matches with restored outer ANSI, got %d: %q", count, got)
+	}
+	if stripANSIFromVM(got) != "yellow one yellow two" {
+		t.Fatalf("plain text after ANSI-aware multiple-match highlight = %q", stripANSIFromVM(got))
+	}
+}

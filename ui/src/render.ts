@@ -44,6 +44,7 @@ interface RenderedPane {
   el: HTMLElement;
   outputEl: HTMLElement;
   selectEl: HTMLSelectElement;
+  ansiUp: AnsiUp;
 }
 
 export function createRenderer({ elements, ansiUp, sendCommand, requestVariables, requestGroups, toggleGroup, onButtonRendered, state }: RendererDeps) {
@@ -206,7 +207,10 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     el.appendChild(headerEl);
     el.appendChild(outputEl);
 
-    renderedPanes.set(node.id, { node, el, outputEl, selectEl });
+    const paneAnsiUp = new AnsiUp();
+    paneAnsiUp.use_classes = true;
+
+    renderedPanes.set(node.id, { node, el, outputEl, selectEl, ansiUp: paneAnsiUp });
 
     // Initial render
     // Defer slight to ensure it's in DOM
@@ -370,7 +374,7 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     });
   }
 
-  function createEntryDOM(entry: LogEntry): HTMLElement {
+  function createEntryDOM(entry: LogEntry, pane: RenderedPane): HTMLElement {
     const line = document.createElement('div');
     line.className = 'output-line';
     if (entry.id) {
@@ -378,7 +382,7 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     }
 
     const span = document.createElement('span');
-    span.innerHTML = entry.text ? renderANSI(entry.text) : '&nbsp;';
+    span.innerHTML = entry.text ? renderANSI(pane, entry.text) : '&nbsp;';
     line.appendChild(span);
 
     (entry.commands || []).forEach((command) => {
@@ -420,12 +424,14 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     const pane = renderedPanes.get(paneId);
     if (!pane) return;
     pane.outputEl.innerHTML = '';
+    pane.ansiUp = new AnsiUp();
+    pane.ansiUp.use_classes = true;
     const data = getBufferData(pane.node.buffer);
     
     const fragment = document.createDocumentFragment();
     const startIdx = Math.max(0, data.length - maxRenderedLines);
     for (let i = startIdx; i < data.length; i++) {
-      fragment.appendChild(createEntryDOM(data[i]!));
+      fragment.appendChild(createEntryDOM(data[i]!, pane));
     }
     pane.outputEl.appendChild(fragment);
     
@@ -448,7 +454,7 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     renderedPanes.forEach(pane => {
       if (pane.node.buffer === bufferName) {
         const shouldScroll = shouldStickToBottom(pane);
-        pane.outputEl.appendChild(createEntryDOM(entry));
+        pane.outputEl.appendChild(createEntryDOM(entry, pane));
 
         if (pane.outputEl.children.length > maxRenderedLines) {
           for (let i = 0; i < pruneRenderedLines && pane.outputEl.firstChild; i++) {
@@ -781,10 +787,6 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     addColumnRight,
   };
 }
-  function renderANSI(text: string): string {
-    // ansi_up keeps color state between calls, so use a fresh parser per line
-    // to prevent color bleed across unrelated entries and buffers.
-    const parser = new AnsiUp();
-    parser.use_classes = true;
-    return parser.ansi_to_html(text);
+  function renderANSI(pane: RenderedPane, text: string): string {
+    return pane.ansiUp.ansi_to_html(text);
   }

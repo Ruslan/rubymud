@@ -20,18 +20,25 @@ func (v *VM) ApplyHighlights(text string) string {
 		if err != nil {
 			continue
 		}
-		loc := re.FindStringIndex(plainText)
-		if loc == nil {
+		
+		allLocs := re.FindAllStringIndex(plainText, -1)
+		if len(allLocs) == 0 {
 			continue
 		}
-		rawStart, rawEnd, ok := plainRangeToRawRange(text, loc[0], loc[1])
-		if !ok || rawStart < 0 || rawEnd > len(text) || rawStart >= rawEnd {
-			continue
-		}
-		matched := text[rawStart:rawEnd]
+
+		// Apply highlights backwards so that indices in allLocs remain valid
+		// even as we inject ANSI codes that change the string length.
 		ansi := highlightToANSI(h)
-		restore := activeANSIAt(text, rawEnd)
-		text = text[:rawStart] + ansi + matched + resetANSI() + restore + text[rawEnd:]
+		for j := len(allLocs) - 1; j >= 0; j-- {
+			loc := allLocs[j]
+			rawStart, rawEnd, ok := plainRangeToRawRange(text, loc[0], loc[1])
+			if !ok || rawStart < 0 || rawEnd > len(text) || rawStart >= rawEnd {
+				continue
+			}
+			matched := text[rawStart:rawEnd]
+			restore := activeANSIAt(text, rawEnd)
+			text = text[:rawStart] + ansi + matched + resetANSI() + restore + text[rawEnd:]
+		}
 	}
 	return text
 }
