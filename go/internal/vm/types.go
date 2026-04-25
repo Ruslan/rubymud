@@ -62,5 +62,6 @@ type VM struct {
 	variables  map[string]string
 	varPattern *regexp.Regexp
 	ttsFn      func(string)
+	ttsCustom  bool
 	timerCtrl  TimerControl
 }

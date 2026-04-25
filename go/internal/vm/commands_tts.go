@@ -15,7 +15,7 @@ func (v *VM) cmdTTS(rest string) []Result {
 		return echoResults([]string{"#tts: usage: #tts {text}"})
 	}
 
-	if runtime.GOOS != "darwin" {
+	if runtime.GOOS != "darwin" && !v.ttsCustom {
 		return echoResults([]string{fmt.Sprintf("#tts: speech not supported on %s", runtime.GOOS)})
 	}
 

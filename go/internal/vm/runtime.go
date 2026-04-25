@@ -34,6 +34,7 @@ func (v *VM) SetTimerControl(tc TimerControl) {
 
 func (v *VM) SetTTS(fn func(string)) {
 	v.ttsFn = fn
+	v.ttsCustom = true
 }
 
 func (v *VM) primaryProfileID() int64 {
