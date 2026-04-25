@@ -31,3 +31,5 @@ go/internal/web/static/favicon.svg
 
 analytic
 .opencode
+.claude/
+go/mudhost

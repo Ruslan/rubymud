@@ -69,9 +69,21 @@ func main() {
 
 	server := web.New(*listenAddr, manager, store, *configDirPath)
 	log.Printf("mudhost listening on %s using db %s", *listenAddr, *dbPath)
+	log.Printf("open in browser: http://%s", listenURL(*listenAddr))
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("web server failed: %v", err)
 	}
+}
+
+func listenURL(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	if host == "" || host == "0.0.0.0" {
+		host = "localhost"
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func splitMudAddr(mudAddr string) (string, int, error) {
