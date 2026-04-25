@@ -1,17 +1,19 @@
 package session
 
 import (
+	"math"
 	"sync"
 	"time"
 )
 
 type Timer struct {
-	Name       string        `json:"name"`
-	Enabled    bool          `json:"enabled"`
-	Cycle      time.Duration `json:"-"`
-	CycleMS    int           `json:"cycle_ms"`
-	NextTickAt time.Time     `json:"next_tick_at"`
-	mu         sync.Mutex
+	Name          string           `json:"name"`
+	Enabled       bool             `json:"enabled"`
+	Cycle         time.Duration    `json:"-"`
+	CycleMS       int              `json:"cycle_ms"`
+	NextTickAt    time.Time        `json:"next_tick_at"`
+	Subscriptions map[int][]string `json:"-"`
+	mu            sync.Mutex
 }
 
 type TimerSnapshot struct {
@@ -23,10 +25,48 @@ type TimerSnapshot struct {
 
 func NewTimer(name string, cycle time.Duration) *Timer {
 	return &Timer{
-		Name:    name,
-		Cycle:   cycle,
-		CycleMS: int(cycle.Milliseconds()),
+		Name:          name,
+		Cycle:         cycle,
+		CycleMS:       int(cycle.Milliseconds()),
+		Subscriptions: make(map[int][]string),
 	}
+}
+
+func (t *Timer) RemainingSeconds() int {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.Enabled || t.Cycle <= 0 {
+		return -1
+	}
+	rem := time.Until(t.NextTickAt)
+	if rem < 0 {
+		return 0
+	}
+	return int(math.Ceil(rem.Seconds()))
+}
+
+func (t *Timer) CheckSubscriptions() (int, []string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if !t.Enabled || t.Cycle <= 0 {
+		return -1, nil
+	}
+
+	rem := time.Until(t.NextTickAt)
+	remSec := 0
+	if rem > 0 {
+		remSec = int(math.Ceil(rem.Seconds()))
+	}
+
+	if cmds, ok := t.Subscriptions[remSec]; ok {
+		// Return a copy to avoid race on slice modification later
+		copied := make([]string, len(cmds))
+		copy(copied, cmds)
+		return remSec, copied
+	}
+
+	return remSec, nil
 }
 
 func (t *Timer) Snapshot() TimerSnapshot {

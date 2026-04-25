@@ -32,6 +32,10 @@ func (v *VM) SetTimerControl(tc TimerControl) {
 	v.timerCtrl = tc
 }
 
+func (v *VM) SetTTS(fn func(string)) {
+	v.ttsFn = fn
+}
+
 func (v *VM) primaryProfileID() int64 {
 	if v.store == nil {
 		return 0

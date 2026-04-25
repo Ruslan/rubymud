@@ -600,6 +600,11 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
 
     elements.ticker.textContent = `tick ${remaining}`;
     elements.ticker.classList.add('ticker_active');
+    if (remaining > 0 && remaining < 5) {
+      elements.ticker.classList.add('ticker_low');
+    } else {
+      elements.ticker.classList.remove('ticker_low');
+    }
   }
 
   function renderHotkeys(items: Hotkey[]) {

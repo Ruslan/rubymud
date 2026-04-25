@@ -227,6 +227,17 @@ body {
   color: #9ece6a;
 }
 
+.ticker_low {
+  background: #5a2630;
+  color: #ff899d;
+  animation: ticker-pulse 1s infinite alternate;
+}
+
+@keyframes ticker-pulse {
+  from { opacity: 1; }
+  to { opacity: 0.8; }
+}
+
 #hotkeys {
   display: flex;
   gap: 6px;

@@ -46,6 +46,11 @@ type TimerControl interface {
 	TickReset(name string)
 	TickSet(name string, seconds float64)
 	TickSize(name string, seconds float64)
+	SubscribeTimer(name string, second int, command string)
+	UnsubscribeTimer(name string, second int)
+	ScheduleDelay(id string, seconds float64, command string) error
+	CancelDelay(id string)
+	GetTimerCycleSeconds(name string) int
 }
 
 type VM struct {

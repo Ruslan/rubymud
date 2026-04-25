@@ -116,6 +116,14 @@ func (v *VM) dispatchCommand(input string, depth int) []Result {
 		return v.cmdTickSet(rest)
 	case "ticksize":
 		return v.cmdTickSize(rest)
+	case "tickat":
+		return v.cmdTickAt(rest)
+	case "untickat":
+		return v.cmdUntickat(rest)
+	case "delay":
+		return v.cmdDelay(rest)
+	case "undelay":
+		return v.cmdUndelay(rest)
 	case "tts", "ts":
 		return v.cmdTTS(rest)
 	case "showme", "show":

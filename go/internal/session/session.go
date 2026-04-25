@@ -1,6 +1,7 @@
 package session
 
 import (
+	"fmt"
 	"log"
 	"net"
 	"sync"
@@ -18,6 +19,12 @@ type clientSink struct {
 	send func(msg ServerMsg) error
 }
 
+type delayTask struct {
+	id      string
+	due     time.Time
+	command string
+}
+
 type Session struct {
 	sessionID    int64
 	mudAddr      string
@@ -30,6 +37,10 @@ type Session struct {
 	closed       bool
 	timers       map[string]*Timer
 	timersMu     sync.Mutex
+	delays       map[string]*delayTask
+	delaysMu     sync.Mutex
+	cmdQueue     chan string
+	done         chan struct{}
 }
 
 func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM) (*Session, error) {
@@ -46,6 +57,9 @@ func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM) (*Sess
 		vm:        v,
 		clients:   make(map[int]clientSink),
 		timers:    make(map[string]*Timer),
+		delays:    make(map[string]*delayTask),
+		cmdQueue:  make(chan string, 100),
+		done:      make(chan struct{}),
 	}
 
 	// Initialize default ticker
@@ -54,32 +68,84 @@ func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM) (*Sess
 	v.SetTimerControl(s)
 
 	go s.runTimerLoop()
+	go s.runCommandDispatcher()
 
 	return s, nil
 }
+
+func (s *Session) runCommandDispatcher() {
+	for {
+		select {
+		case cmd := <-s.cmdQueue:
+			if err := s.SendCommand(cmd, "scheduler"); err != nil {
+				log.Printf("scheduler send command error: %v", err)
+			}
+			// Pacing: wait 50ms between commands
+			time.Sleep(50 * time.Millisecond)
+		case <-s.done:
+			return
+		}
+	}
+}
+
 
 func (s *Session) runTimerLoop() {
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		if s.IsClosed() {
+	lastRemSecs := make(map[string]int)
+
+	for {
+		select {
+		case <-ticker.C:
+			s.timersMu.Lock()
+			changed := false
+			var commandsToRun []string
+
+			for name, t := range s.timers {
+				rem, cmds := t.CheckSubscriptions()
+				if last, ok := lastRemSecs[name]; ok && last != rem && rem >= 0 {
+					// Second boundary crossed
+					if len(cmds) > 0 {
+						commandsToRun = append(commandsToRun, cmds...)
+					}
+				}
+				lastRemSecs[name] = rem
+
+				if t.Check() {
+					changed = true
+				}
+			}
+			if changed {
+				s.BroadcastTick()
+			}
+			s.timersMu.Unlock()
+
+			// Handle delays
+			now := time.Now()
+			s.delaysMu.Lock()
+			for id, task := range s.delays {
+				if now.After(task.due) {
+					commandsToRun = append(commandsToRun, task.command)
+					delete(s.delays, id)
+				}
+			}
+			s.delaysMu.Unlock()
+
+			// Queue commands
+			for _, cmd := range commandsToRun {
+				select {
+				case s.cmdQueue <- cmd:
+				default:
+					log.Printf("command queue full, dropping scheduled command: %s", cmd)
+				}
+			}
+		case <-s.done:
 			return
 		}
-
-		s.timersMu.Lock()
-		changed := false
-		for _, t := range s.timers {
-			if t.Check() {
-				changed = true
-			}
-		}
-		if changed {
-			s.BroadcastTick()
-		}
-		s.timersMu.Unlock()
 	}
 }
+
 
 func (s *Session) BroadcastTick() {
 	// Caller must hold s.timersMu
@@ -159,6 +225,77 @@ func (s *Session) TickSize(name string, seconds float64) {
 	if t.Size(time.Duration(seconds * float64(time.Second))) {
 		s.BroadcastTick()
 	}
+}
+
+func (s *Session) SubscribeTimer(name string, second int, command string) {
+	s.timersMu.Lock()
+	defer s.timersMu.Unlock()
+	if t, ok := s.timers[name]; ok {
+		t.mu.Lock()
+		t.Subscriptions[second] = append(t.Subscriptions[second], command)
+		t.mu.Unlock()
+	}
+}
+
+func (s *Session) UnsubscribeTimer(name string, second int) {
+	s.timersMu.Lock()
+	defer s.timersMu.Unlock()
+	if t, ok := s.timers[name]; ok {
+		t.mu.Lock()
+		delete(t.Subscriptions, second)
+		t.mu.Unlock()
+	}
+}
+
+func (s *Session) ScheduleDelay(id string, seconds float64, command string) error {
+	s.delaysMu.Lock()
+	defer s.delaysMu.Unlock()
+
+	if len(s.delays) >= 50 {
+		return fmt.Errorf("too many pending delays (max 50)")
+	}
+
+	// If id is empty, use a generated one
+	if id == "" {
+		id = "auto_" + time.Now().Format("150405.000000")
+	}
+
+	// Guardrail: minimum 100ms effective delay
+	delay := time.Duration(seconds * float64(time.Second))
+	if delay < 100*time.Millisecond {
+		delay = 100 * time.Millisecond
+	}
+
+	s.delays[id] = &delayTask{
+		id:      id,
+		due:     time.Now().Add(delay),
+		command: command,
+	}
+	return nil
+}
+
+func (s *Session) CancelDelay(id string) {
+	s.delaysMu.Lock()
+	defer s.delaysMu.Unlock()
+	delete(s.delays, id)
+}
+
+func (s *Session) GetTimerCycleSeconds(name string) int {
+	s.timersMu.Lock()
+	defer s.timersMu.Unlock()
+	if t, ok := s.timers[name]; ok {
+		t.mu.Lock()
+		defer t.mu.Unlock()
+		cycle := int(t.Cycle.Seconds())
+		if cycle == 0 && name == "ticker" {
+			return 60 // Default cycle for default ticker
+		}
+		return cycle
+	}
+	if name == "ticker" {
+		return 60
+	}
+	return 0
 }
 
 func (s *Session) SessionID() int64 {
@@ -252,6 +389,7 @@ func (s *Session) Close() error {
 		return nil
 	}
 	s.closed = true
+	close(s.done)
 	s.clients = map[int]clientSink{}
 	s.mu.Unlock()
 
