@@ -17,6 +17,68 @@ import (
 	"rubymud/go/internal/vm"
 )
 
+func TestSendCommandEmptyInputSendsNewline(t *testing.T) {
+	store := newTestStore(t)
+	conn := &recordingConn{}
+
+	sess := &Session{
+		sessionID: 1,
+		conn:      conn,
+		store:     store,
+		vm:        vm.New(store, 1),
+		clients:   map[int]clientSink{},
+	}
+
+	if err := sess.SendCommand("", "input"); err != nil {
+		t.Fatalf("SendCommand('', 'input'): %v", err)
+	}
+
+	if got := conn.String(); got != "\n" {
+		t.Fatalf("empty input command write = %q, want %q", got, "\n")
+	}
+
+	// Verify no side effects in history
+	hist, err := store.RecentInputHistory(1, 10)
+	if err != nil {
+		t.Fatalf("RecentInputHistory failed: %v", err)
+	}
+	if len(hist) > 0 {
+		t.Errorf("expected empty history, got %v", hist)
+	}
+
+	// Verify no side effects in logs (no command hint)
+	logs, err := store.RecentLogs(1, 10)
+	if err != nil {
+		t.Fatalf("RecentLogs failed: %v", err)
+	}
+	for _, entry := range logs {
+		if len(entry.Commands) > 0 {
+			t.Errorf("expected no command hints in logs, but found in entry %d", entry.ID)
+		}
+	}
+}
+
+func TestSendCommandEmptyOtherSourceDoesNothing(t *testing.T) {
+	store := newTestStore(t)
+	conn := &recordingConn{}
+
+	sess := &Session{
+		sessionID: 1,
+		conn:      conn,
+		store:     store,
+		vm:        vm.New(store, 1),
+		clients:   map[int]clientSink{},
+	}
+
+	if err := sess.SendCommand("", "key"); err != nil {
+		t.Fatalf("SendCommand('', 'key'): %v", err)
+	}
+
+	if got := conn.String(); got != "" {
+		t.Fatalf("empty key command write = %q, want %q", got, "")
+	}
+}
+
 func TestSendCommandUnknownHashCommandPassesThrough(t *testing.T) {
 	store := newTestStore(t)
 	conn := &recordingConn{}

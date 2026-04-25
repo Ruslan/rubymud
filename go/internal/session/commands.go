@@ -25,10 +25,17 @@ func (s *Session) sendTriggerCommand(cmd string, entryID int64, buffer string) e
 }
 
 func (s *Session) SendCommand(command string, source string) error {
-	shouldBroadcastVariables := isVariableCommand(command)
 	if source == "" {
 		source = "input"
 	}
+
+	// Special case: empty enter from user input sends just a newline
+	if command == "" && source == "input" {
+		_, err := s.conn.Write([]byte("\n"))
+		return err
+	}
+
+	shouldBroadcastVariables := isVariableCommand(command)
 
 	results := s.vm.ProcessInputDetailed(command)
 	type echoMsg struct {

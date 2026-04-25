@@ -359,11 +359,13 @@ elements.input.addEventListener('keydown', (event) => {
   if (event.key !== 'Enter') return;
 
   const value = elements.input.value.trim();
-  if (!value) return;
-
   logBoot('input enter', { value, readyState: socket.readyState });
-  history.push(value);
-  renderer.appendCommandHint(value);
+
+  if (value) {
+    history.push(value);
+    renderer.appendCommandHint(value);
+  }
+
   if (sendCommand(value, 'input')) {
     elements.input.value = '';
   }

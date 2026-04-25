@@ -1179,12 +1179,20 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if currentSess == nil {
 				continue
 			}
-			command := strings.TrimSpace(message.Value)
-			if command == "" {
+			
+			command := message.Value
+			source := strings.TrimSpace(message.Source)
+			
+			// Only trim if it's not a direct empty input intent
+			if command != "" || source != "input" {
+				command = strings.TrimSpace(command)
+			}
+			
+			if command == "" && source != "input" {
 				continue
 			}
 
-			if err := currentSess.SendCommand(command, strings.TrimSpace(message.Source)); err != nil {
+			if err := currentSess.SendCommand(command, source); err != nil {
 				log.Printf("send command failed: %v", err)
 				return
 			}
