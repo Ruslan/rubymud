@@ -2,6 +2,21 @@ package vm
 
 import "strings"
 
+func parseArgs(input string) []string {
+	var args []string
+	rest := strings.TrimSpace(input)
+	for rest != "" {
+		arg, nextRest := splitBraceArg(rest)
+		// If splitBraceArg failed to make progress, break to avoid infinite loop
+		if arg == "" && nextRest == rest {
+			break
+		}
+		args = append(args, arg)
+		rest = strings.TrimSpace(nextRest)
+	}
+	return args
+}
+
 func splitFirstWord(input string) (string, []string) {
 	fields := strings.Fields(input)
 	if len(fields) == 0 {

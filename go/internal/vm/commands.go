@@ -44,11 +44,15 @@ func (v *VM) evalStatement(stmt string, depth int) []Result {
 	}
 
 	// 3. Alias expansion
-	cmd, args := splitFirstWord(stmt)
-	for _, a := range v.aliases {
-		if a.Name == cmd {
-			expanded := substituteTemplate(a.Template, args)
-			return v.evalLine(expanded, depth+1)
+	parsed := parseArgs(stmt)
+	if len(parsed) > 0 {
+		cmd := parsed[0]
+		args := parsed[1:]
+		for _, a := range v.aliases {
+			if a.Name == cmd {
+				expanded := substituteTemplate(a.Template, args)
+				return v.evalLine(expanded, depth+1)
+			}
 		}
 	}
 
