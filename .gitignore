@@ -28,3 +28,6 @@ go/internal/web/static/*.js.map
 go/internal/web/static/*.css
 go/internal/web/static/favicon.svg
 # Note: go/internal/web/static/index.html is tracked but updated by Vite
+
+analytic
+.opencode
