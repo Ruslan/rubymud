@@ -76,6 +76,7 @@
 #action {^([^":\r\n]+?) сказа(л|ла) группе: "([^"\r\n]*)"$} {#woutput {chat} {[$TIME] %1 сказа%2 группе: %3}}
 #action {^([^":\r\n]+?) сказа(л|ла) Вам: "([^"\r\n]*)"$} {#woutput {chat} {[$TIME] %1 сказа%2 Вам: %3}}
 #action {^Вы произнесли: "([^"\r\n]*)"$} {#woutput {chat} {[$TIME] Вы произнесли: %1}}
+#action {^([^":\r\n]+?) произнес(ла|ло|): "([^"\r\n]*)"$} {#woutput {chat} {[$TIME] %1 произнес%2: %3}}
 
 #nop Kill feed routed into buffer `kills` via local #woutput.
 #action {^(.+?) мертв(?:а|о|ы)?! R\.I\.P\.$} {#woutput {kills} {[$TIME] %0}}

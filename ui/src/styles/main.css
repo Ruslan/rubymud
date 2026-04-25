@@ -110,31 +110,81 @@ body {
 
 .variables-list {
   display: flex;
-  flex-direction: column;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 4px 0;
 }
 
 .variable-row {
-  display: grid;
-  grid-template-columns: minmax(120px, 220px) 1fr;
-  gap: 12px;
-  align-items: start;
-  padding: 7px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1 1 180px;
+  max-width: 300px;
+  padding: 8px 10px;
   border: 1px solid #232d39;
   border-radius: 8px;
   background: #161c23;
   font-size: 13px;
+  transition: border-color 0.15s;
+}
+
+.variable-row:focus-within {
+  border-color: #3b4959;
 }
 
 .variable-key {
   color: #7dcfff;
-  word-break: break-word;
+  font-size: 11px;
+  font-family: monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.variable-value {
-  color: #dce5ee;
-  word-break: break-word;
-  white-space: pre-wrap;
+.variable-value-container {
+  display: flex;
+  align-items: center;
+  position: relative;
+}
+
+.variable-input {
+  width: 100%;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  color: #e6edf3;
+  padding: 2px 24px 2px 6px; /* Extra right padding for the X button */
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.btn-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  background: transparent;
+  border: none;
+  color: #6e7681;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.1s;
+}
+
+.btn-clear:hover {
+  color: #f85149;
+  background: rgba(248, 81, 73, 0.1);
+}
+
+.variable-input:focus {
+  outline: none;
+  border-color: #58a6ff;
 }
 
 .variables-empty {
@@ -445,21 +495,9 @@ body {
 
 /* Variable Panel Enhancements */
 
-.variable-input {
-  background: #0d1117;
-  border: 1px solid #30363d;
-  color: #e8edf2;
-  padding: 4px 8px;
-  border-radius: 6px;
-  font-family: inherit;
-  font-size: 13px;
-  width: 100%;
-}
 
-.variable-input:focus {
-  outline: none;
-  border-color: #58a6ff;
-  background: #161b22;
+.variable-input {
+  font-family: inherit;
 }
 
 .variable-input::placeholder {
@@ -488,26 +526,6 @@ body {
 
 .btn-small:hover {
   background: #2ea043;
-}
-
-.btn-clear {
-  background: transparent;
-  color: #f85149;
-  border: 1px solid #30363d;
-  border-radius: 4px;
-  width: 24px;
-  height: 24px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  font-size: 16px;
-}
-
-.btn-clear:hover {
-  background: #b62324;
-  color: white;
-  border-color: #b62324;
 }
 
 /* Auto-button Hotkey Hints */

@@ -663,32 +663,6 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     const params = new URLSearchParams(window.location.search);
     const sessionID = params.get('session_id');
 
-    if (sessionID) {
-      const header = document.createElement('div');
-      header.className = 'variables-header';
-      header.style.display = 'flex';
-      header.style.justifyContent = 'flex-end';
-      header.style.marginBottom = '10px';
-
-      const fillBtn = document.createElement('button');
-      fillBtn.className = 'btn-small';
-      fillBtn.textContent = 'Fill Defaults';
-      fillBtn.addEventListener('click', async () => {
-        for (const item of (items as ResolvedVariable[])) {
-          if (item.declared && item.default_value && !item.has_value) {
-            await fetchWithToken(`/api/sessions/${sessionID}/variables`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ key: item.name, value: item.default_value })
-            });
-          }
-        }
-        requestVariables();
-      });
-      header.appendChild(fillBtn);
-      elements.variablesList.appendChild(header);
-    }
-
     items.forEach((item) => {
       const isResolved = 'name' in item;
       const keyStr = isResolved ? (item as ResolvedVariable).name : (item as Variable).key;
@@ -708,9 +682,6 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
 
       const valueContainer = document.createElement('div');
       valueContainer.className = 'variable-value-container';
-      valueContainer.style.flex = '1';
-      valueContainer.style.display = 'flex';
-      valueContainer.style.gap = '8px';
 
       const input = document.createElement('input');
       input.type = 'text';
