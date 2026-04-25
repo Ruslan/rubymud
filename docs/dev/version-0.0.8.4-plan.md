@@ -4,6 +4,13 @@
 
 Add manual drift-correction and final polish so the timer system feels better than classic JMC in day-to-day play.
 
+Timing representation rules remain unchanged:
+
+1. delta adjustments operate on millisecond-based runtime values
+2. scheduler precision target in early `0.0.8.x` remains within 100ms
+3. tighter precision can be considered later only if there is a concrete feature request
+4. if decimal-second command syntax is enabled by this phase or later, values should be rounded to the nearest millisecond during parsing
+
 ---
 
 ## User Value

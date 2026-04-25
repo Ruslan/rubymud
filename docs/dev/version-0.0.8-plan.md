@@ -20,6 +20,17 @@ This document is now the umbrella roadmap. Detailed scope lives in:
 3. `docs/dev/version-0.0.8.3-plan.md`
 4. `docs/dev/version-0.0.8.4-plan.md`
 
+Timing representation rules for all `0.0.8.x` work:
+
+1. Go runtime should use `time.Duration` and `time.Time`
+2. API and storage should represent timer durations as integer milliseconds such as `cycle_ms`, `delay_ms`, and `remaining_ms` when needed
+3. do not use floating-point timer storage or wire fields
+4. early scheduler/sync precision target is within 100ms
+5. if future product demand requires significantly tighter precision, backend scheduling can be refactored later as a separate task
+6. command syntax in early `0.0.8.x` may still show examples with integer seconds, but the internal model must remain ready for future decimal-second inputs
+7. when decimal-second command input is enabled later, parsed values should be converted to integer milliseconds using one fixed rounding rule
+8. preferred rounding rule: round to nearest millisecond
+
 ---
 
 ## Delivery Strategy
@@ -119,6 +130,7 @@ Add these commands:
 #tickset {name} {seconds}
 #tickset {name} {+seconds}
 #tickset {name} {-seconds}
+#tickicon {name} {icon}
 #tickat {second} {command}
 #tickat {name} {second} {command}
 #untickat {second}
@@ -132,8 +144,8 @@ Argument model:
 
 1. timer-oriented commands use positional arguments with `name` first when present
 2. forms without `name` target the default timer `ticker`
-3. `seconds` means an absolute cycle value such as `60`
-4. `delta` means a signed adjustment such as `+2` or `-2`
+3. `seconds` means a user-facing duration input in seconds, such as `60`, later potentially `2.5` or `59.999`
+4. `delta` means a signed adjustment such as `+2` or `-2`, later potentially with decimal-second precision
 5. timer names are plain runtime identifiers and must not be parsed as numbers or signed deltas
 
 Parsing rules:
@@ -162,16 +174,18 @@ Parsing rules:
 8. `#tickset {name} {value}` means:
    - set named timer cycle and reset if `{value}` is absolute seconds
    - delta-adjust named timer if `{value}` is a signed delta
-9. `#tickat`
+9. `#tickicon`
+   - `#tickicon {name} {icon}`
+10. `#tickat`
    - `#tickat {second} {command}`
    - `#tickat {name} {second} {command}`
-10. `#untickat`
+11. `#untickat`
    - `#untickat {second}`
    - `#untickat {name} {second}`
-11. `#delay`
+12. `#delay`
    - `#delay {seconds} {command}`
    - `#delay {id} {seconds} {command}`
-12. `#undelay`
+13. `#undelay`
    - `#undelay {id}`
 
 Disambiguation examples:
@@ -190,6 +204,7 @@ Reserved-name guidance:
 1. timer names should not be purely numeric
 2. timer names should not begin with `+` or `-`
 3. if a user tries to create or target a timer name that collides with numeric/delta syntax, return a clear diagnostic instead of guessing
+4. `icon` should be a short UTF-8 glyph, typically one emoji; long labels do not belong in the icon field
 
 Behavior:
 
@@ -208,15 +223,17 @@ Behavior:
    sets cycle length and resets countdown in one step
 9. `#tickset {+seconds}` / `#tickset {-seconds}` and named variants
    adjust the current countdown by a small delta without changing the configured cycle length
-10. `#tickat {second} {command}` / `#tickat {name} {second} {command}`
+10. `#tickicon {name} {icon}`
+   stores optional visual metadata for timer pills
+11. `#tickat {second} {command}` / `#tickat {name} {second} {command}`
    subscribes a command to fire once per cycle when remaining time reaches that exact second
-11. `#untickat {second}` / `#untickat {name} {second}`
+12. `#untickat {second}` / `#untickat {name} {second}`
    removes subscriptions for that exact timer-second slot
-12. `#delay {seconds} {command}`
+13. `#delay {seconds} {command}`
    schedules a one-shot delayed command in the current session runtime
-13. `#delay {id} {seconds} {command}`
+14. `#delay {id} {seconds} {command}`
    schedules a one-shot delayed command with a cancelable runtime identifier
-14. `#undelay {id}`
+15. `#undelay {id}`
    cancels a pending delayed command by id
 
 Recommended defaults:
@@ -224,10 +241,10 @@ Recommended defaults:
 1. default timer name: `ticker`
 2. default cycle length: `60`
 3. if `#tickon` runs before explicit size is set, use default `60`
-4. timers are cyclic when `cycle_seconds > 0`
+4. timers are cyclic when `cycle_ms > 0`
 5. when a timer reaches `0`, it fires any `0`-second subscriptions, then resets to the full cycle length
 6. timers never go negative
-7. if `cycle_seconds == 0`, the timer becomes inactive and stops ticking until reconfigured
+7. if `cycle_ms == 0`, the timer becomes inactive and stops ticking until reconfigured
 8. subscriptions are re-armed on every new cycle
 9. delayed commands are one-shot and do not repeat automatically
 10. delta sync should clamp within the valid countdown range and never produce a negative remaining time
@@ -236,15 +253,22 @@ Recommended defaults:
 Validation:
 
 1. timer names are case-sensitive runtime identifiers
-2. `seconds` for `#ticksize`, `#tickset`, and `#delay` must be integer seconds
+2. `seconds` for `#ticksize`, `#tickset`, and `#delay` are user-facing duration inputs; internal runtime and storage representation is milliseconds
 3. negative values are invalid for absolute duration commands; `+N`/`-N` deltas are valid only for `#tickset`
-4. subscription `second` must be an integer in the inclusive range `0..cycle_seconds`
+4. subscription `second` must be an integer in the inclusive range `0..floor(cycle_ms/1000)`
 5. `0` is allowed only for timer cycle commands and means stop/inactive
 6. delay ids and timer names are case-sensitive runtime identifiers
 7. delay ids and timer names live in separate runtime namespaces
 8. very small or recursive delays must not be able to cause unbounded immediate rescheduling or queue explosion
 9. invalid usage returns a clear local diagnostic and sends nothing to MUD
 10. timer names that are purely numeric or look like signed deltas are invalid and must be rejected explicitly
+
+Future decimal-input guidance:
+
+1. examples in early docs may continue using integer seconds such as `60`
+2. later syntax may allow decimal second inputs such as `2.5`, `1.8`, or `59.999`
+3. these values should be parsed as seconds and converted once to integer milliseconds
+4. example: `59.999` seconds becomes `59999` ms
 
 ### 2. Trigger-driven sync
 
@@ -299,8 +323,10 @@ UI requirements:
 
 1. the default `ticker` remains the primary visible timer
 2. secondary timers may be visually smaller than `ticker`
-3. the status area should remain stable and not overlap output or jump awkwardly on resize
-4. low-time styling should be noticeable but not noisy; color change is required, pulse is optional
+3. pill labels should prefer `icon + name + remaining`, for example `🪴 herb 12`
+4. if `icon` is missing, fall back to `name + remaining`
+5. the status area should remain stable and not overlap output or jump awkwardly on resize
+6. low-time styling should be noticeable but not noisy; color change is required, pulse is optional
 
 ### 4. Session runtime state
 
@@ -311,8 +337,9 @@ Store in Go session runtime something equivalent to:
 ```go
 type TickState struct {
     Name          string
+    Icon          string
     Enabled       bool
-    CycleSeconds  int
+    Cycle         time.Duration
     NextTickAt    time.Time
     Subscriptions map[int][]string
 }
@@ -324,7 +351,7 @@ type DelayState struct {
 }
 ```
 
-Derived values such as remaining seconds should be computed from wall clock, not decremented by mutating state every second.
+Derived values such as remaining milliseconds should be computed from wall clock, not decremented by mutating state every second.
 
 Session runtime should own:
 
@@ -347,8 +374,9 @@ Recommended shape:
   "timers": [
     {
       "name": "ticker",
+      "icon": "🕒",
       "enabled": true,
-      "cycle_seconds": 60,
+      "cycle_ms": 60000,
       "next_tick_at": "2026-04-25T12:34:56Z"
     }
   ]
@@ -358,7 +386,7 @@ Recommended shape:
 Two acceptable implementation directions:
 
 1. server pushes periodic tick updates while enabled
-2. server pushes canonical state (`name`, `enabled`, `cycle_seconds`, `next_tick_at`) and browser renders local countdown
+2. server pushes canonical state (`name`, `icon`, `enabled`, `cycle_ms`, `next_tick_at`) and browser renders local countdown
 
 Preferred direction:
 
@@ -450,7 +478,7 @@ Timer execution semantics:
 2. fire subscriptions on exact remaining-second transitions
 3. when remaining time reaches `0`, execute `0` subscriptions, then either reset to the next cycle or stop if cycle is `0`
 4. prevent duplicate fires within the same cycle-second slot
-5. do not spawn one `time.Sleep` goroutine per timer; the central loop should poll at a modest cadence such as 100-200ms
+5. do not spawn one `time.Sleep` goroutine per timer; the central loop should poll at a modest cadence such as 100ms
 6. when many commands become due at once, dispatch them through a short ordered queue with tiny spacing/jitter to avoid burst-spam to the MUD server
 7. enforce sane delay scheduling guardrails, for example a minimum effective delay and/or bounded due-command queue growth, so recursive `#delay` patterns cannot explode the scheduler
 

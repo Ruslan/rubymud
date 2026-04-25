@@ -6,6 +6,13 @@ Add practical tick automation around the default ticker: per-second subscription
 
 This turns the visible ticker from passive information into a useful automation primitive.
 
+Timing representation rules remain unchanged:
+
+1. runtime uses `time.Duration`
+2. API and storage durations use integer milliseconds
+3. scheduler precision target remains within 100ms
+4. command examples in this phase may still use integer seconds, but implementation should stay ready for future decimal-second parsing into milliseconds
+
 ---
 
 ## User Value
@@ -61,6 +68,7 @@ Behavior:
 3. subscriptions must fire once per cycle-second boundary, not repeatedly while UI redraws
 4. recursive or too-small delays must not cause unbounded queue growth
 5. simultaneous due commands should go through a short paced queue to reduce burst-spam risk
+6. scheduler precision target in this phase is within 100ms, not sub-millisecond
 
 ### UI
 

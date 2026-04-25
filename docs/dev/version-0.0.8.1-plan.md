@@ -6,6 +6,14 @@ Ship one practical, always-visible, session-shared default ticker that users can
 
 This is the smallest release that already solves a real MUD play problem end-to-end.
 
+Timing representation rules:
+
+1. Go runtime uses `time.Duration` and `time.Time`
+2. API and storage use integer millisecond fields such as `cycle_ms`
+3. early scheduler/sync precision target is within 100ms
+4. UI may still display rounded seconds in early versions
+5. command examples in this phase use integer seconds, but implementation should stay ready for future decimal-second parsing into milliseconds
+
 ---
 
 ## User Value
@@ -48,7 +56,7 @@ Behavior:
 4. `#tickoff` stops the ticker
 5. `#tickset` resets countdown to the current cycle length
 6. `#tickset {seconds}` sets cycle length and resets immediately
-7. ticker is cyclic when `cycle_seconds > 0`
+7. ticker is cyclic when `cycle_ms > 0`
 8. when it reaches `0`, it returns to the full cycle length
 9. ticker never goes negative
 10. if cycle length is `0`, ticker becomes inactive/stopped
@@ -68,7 +76,7 @@ Minimal behavior:
 
 1. session owns canonical ticker state
 2. restore payload includes current ticker state
-3. browser renders countdown from canonical `next_tick_at`
+3. browser renders countdown from canonical `next_tick_at` and `cycle_ms`
 4. websocket updates are sent only on state changes and restore
 
 ---
