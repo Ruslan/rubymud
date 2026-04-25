@@ -88,6 +88,12 @@ Suggested defaults:
 3. websocket timer state includes optional `icon` metadata per timer
 4. all attached clients observe the same named timer state
 
+### Documentation
+
+1. user-facing command documentation must be updated together with the feature release
+2. documentation must cover named timer command forms, timer icons, and examples for multi-timer workflows
+3. release is not complete until docs reflect the shipped command syntax and behavior
+
 ---
 
 ## Not Yet In Scope
@@ -107,3 +113,4 @@ Suggested defaults:
 5. `#tickat {herb} {0} {use herb}` fires on the `herb` timer boundary only.
 6. when multiple timers are active, secondary timers are visible in a compact non-overlapping status-area stack.
 7. reconnecting/restoring the page shows all active timer state immediately, including icon metadata.
+8. user-facing command docs are updated for all shipped `0.0.8.3` timer features.

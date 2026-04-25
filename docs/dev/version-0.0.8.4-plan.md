@@ -52,6 +52,12 @@ Behavior:
 2. tighten diagnostics and edge-case messages
 3. verify restore/resync behavior after delta adjustments
 
+### Documentation
+
+1. user-facing command documentation must be updated together with the feature release
+2. documentation must cover delta `#tickset` forms, limits, and examples for manual drift correction
+3. release is not complete until docs reflect the shipped command syntax and behavior
+
 ---
 
 ## Acceptance Criteria
@@ -61,3 +67,4 @@ Behavior:
 3. `#tickset {+10}` at 55 seconds remaining on a 60-second cycle clamps to 60 remaining instead of wrapping.
 4. delta-adjusted timers continue to restore correctly after reconnect.
 5. invalid delta usage returns a clear local diagnostic.
+6. user-facing command docs are updated for all shipped `0.0.8.4` delta-sync behavior.
