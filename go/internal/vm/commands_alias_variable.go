@@ -109,11 +109,13 @@ func (v *VM) cmdUnvariable(rest string) []Result {
 	if name == "" {
 		return echoResults([]string{"#unvariable: usage: #unvariable {name}"})
 	}
-	if err := v.store.DeleteVariable(v.sessionID, name); err != nil {
-		return echoResults([]string{fmt.Sprintf("#unvariable: error: %v", err)})
+	if v.store != nil {
+		if err := v.store.DeleteVariable(v.sessionID, name); err != nil {
+			return echoResults([]string{fmt.Sprintf("#unvariable: error: %v", err)})
+		}
+		v.ensureFresh()
 	}
 	delete(v.variables, name)
-	v.ensureFresh()
 	return echoResults([]string{fmt.Sprintf("#unvariable: %s removed", name)})
 }
 

@@ -49,7 +49,7 @@ func (v *VM) evalStatement(stmt string, depth int) []Result {
 		cmd := parsed[0]
 		args := parsed[1:]
 		for _, a := range v.aliases {
-			if a.Name == cmd {
+			if a.Name == cmd && a.Enabled {
 				expanded := substituteTemplate(a.Template, args)
 				return v.evalLine(expanded, depth+1)
 			}

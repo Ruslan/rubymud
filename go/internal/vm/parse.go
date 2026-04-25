@@ -1,6 +1,9 @@
 package vm
 
-import "strings"
+import (
+	"log"
+	"strings"
+)
 
 func parseArgs(input string) []string {
 	var args []string
@@ -86,29 +89,33 @@ func splitBraceArg(s string) (string, string) {
 
 	delim := s[0]
 	closer := byte('}')
+	isQuoted := false
 	switch delim {
 	case '{':
 		closer = '}'
 	case '\'':
 		closer = '\''
+		isQuoted = true
 	case '"':
 		closer = '"'
+		isQuoted = true
 	default:
 		parts := strings.SplitN(s, " ", 2)
 		if len(parts) == 1 {
 			return parts[0], ""
 		}
-		return parts[0], parts[1]
+		return parts[0], strings.TrimSpace(parts[1])
 	}
 
 	depth := 0
 	for i := 0; i < len(s); i++ {
-		if s[i] == byte(delim) && i == 0 {
-			depth = 1
+		if s[i] == delim && !isQuoted {
+			depth++
 			continue
 		}
-		if s[i] == delim && delim != closer {
-			depth++
+		if s[i] == delim && isQuoted && i == 0 {
+			depth = 1
+			continue
 		}
 		if s[i] == closer {
 			depth--
@@ -118,7 +125,10 @@ func splitBraceArg(s string) (string, string) {
 		}
 	}
 
-	return strings.Trim(s, string(delim)), ""
+	// Fallback for unterminated arg: remove only the first delimiter character
+	// and return the rest as the argument. Log a warning.
+	log.Printf("Warning: unterminated argument starting with %q in %q", delim, s)
+	return s[1:], ""
 }
 
 func numRepeat(cmd string) int {

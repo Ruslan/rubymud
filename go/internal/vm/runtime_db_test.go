@@ -72,6 +72,46 @@ func TestApplyHighlightsLoadsLatestStateFromDB(t *testing.T) {
 	}
 }
 
+func TestProfileAliasPriorityWithDisabled(t *testing.T) {
+	store := newRuntimeTestStore(t)
+	db := store.DB()
+	sessionID := int64(1)
+
+	// Create two profiles: Senior (index 10) and Junior (index 0)
+	db.Create(&storage.Profile{ID: 10, Name: "Senior"})
+	db.Create(&storage.SessionProfile{SessionID: sessionID, ProfileID: 10, OrderIndex: 10})
+
+	db.Create(&storage.Profile{ID: 20, Name: "Junior"})
+	db.Create(&storage.SessionProfile{SessionID: sessionID, ProfileID: 20, OrderIndex: 0})
+
+	// Senior profile has 'attack' disabled
+	if err := store.SaveAlias(10, "attack", "kill %1", false, "combat"); err != nil {
+		t.Fatalf("SaveAlias senior: %v", err)
+	}
+
+	// Junior profile has 'attack' enabled with different template
+	if err := store.SaveAlias(20, "attack", "bash %1", true, "combat"); err != nil {
+		t.Fatalf("SaveAlias junior: %v", err)
+	}
+
+	v := New(store, sessionID)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+
+	// Should skip disabled senior alias and use junior enabled alias
+	results := v.ProcessInputDetailed("attack orc")
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %v", results)
+	}
+	if results[0].Text != "bash orc" {
+		t.Errorf("expected expansion 'bash orc' from Junior profile, got %q", results[0].Text)
+	}
+	if results[0].Kind != ResultCommand {
+		t.Errorf("expected Kind ResultCommand, got %v", results[0].Kind)
+	}
+}
+
 func newRuntimeTestStore(t *testing.T) *storage.Store {
 	t.Helper()
 
