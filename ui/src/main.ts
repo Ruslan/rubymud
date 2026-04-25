@@ -267,10 +267,17 @@ socket.onmessage = (event) => {
     history.merge(message.history || []);
     configuredHotkeys = message.hotkeys || [];
     renderer.renderHotkeys(configuredHotkeys);
+    if (message.timers) {
+      renderer.renderTimers(message.timers);
+    }
     requestVariables();
     for (const entries of Object.values(message.buffers || {})) {
       entries.forEach(renderer.appendEntry);
     }
+  }
+
+  if (message.type === 'tick' && message.timers) {
+    renderer.renderTimers(message.timers);
   }
 
   if (message.type === 'restore_chunk') {

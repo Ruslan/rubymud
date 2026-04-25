@@ -133,3 +133,23 @@ type dummyAddr string
 
 func (a dummyAddr) Network() string { return string(a) }
 func (a dummyAddr) String() string  { return string(a) }
+
+func TestSessionTimerSnapshot(t *testing.T) {
+	// We don't need a real connection for this
+	s := &Session{
+		timers:   make(map[string]*Timer),
+	}
+	s.timers["ticker"] = NewTimer("ticker", 60*time.Second)
+
+	snapshots := s.TimerSnapshots()
+	if len(snapshots) != 1 || snapshots[0].Name != "ticker" {
+		t.Errorf("expected 1 snapshot for ticker, got %v", snapshots)
+	}
+
+	// Modify internal state and ensure snapshot was a copy
+	s.timers["ticker"].On()
+	
+	if snapshots[0].Enabled {
+		t.Error("snapshot should not have been updated after internal state change")
+	}
+}

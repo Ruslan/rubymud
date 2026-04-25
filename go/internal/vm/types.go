@@ -40,6 +40,14 @@ type Result struct {
 	TargetBuffer string
 }
 
+type TimerControl interface {
+	TickOn(name string)
+	TickOff(name string)
+	TickReset(name string)
+	TickSet(name string, seconds float64)
+	TickSize(name string, seconds float64)
+}
+
 type VM struct {
 	store      *storage.Store
 	sessionID  int64
@@ -49,4 +57,5 @@ type VM struct {
 	variables  map[string]string
 	varPattern *regexp.Regexp
 	ttsFn      func(string)
+	timerCtrl  TimerControl
 }

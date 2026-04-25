@@ -28,6 +28,10 @@ func New(store *storage.Store, sessionID int64) *VM {
 	return v
 }
 
+func (v *VM) SetTimerControl(tc TimerControl) {
+	v.timerCtrl = tc
+}
+
 func (v *VM) primaryProfileID() int64 {
 	if v.store == nil {
 		return 0

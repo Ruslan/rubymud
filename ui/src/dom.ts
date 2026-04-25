@@ -22,6 +22,7 @@ export function getAppElements() {
     variablesToggle: requireElement<HTMLButtonElement>('panel-toggle-variables'),
     settingsToggle: requireElement<HTMLButtonElement>('btn-open-settings'),
     connectionStatus: requireElement<HTMLSpanElement>('connection-status'),
+    ticker: requireElement<HTMLSpanElement>('ticker'),
     input: requireElement<HTMLInputElement>('input'),
   };
 }

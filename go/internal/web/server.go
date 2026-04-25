@@ -1235,11 +1235,15 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 		return err
 	}
 
+	// Include current timers
+	timers := sess.TimerSnapshots()
+
 	begin := session.ServerMsg{
 		Type:      "restore_begin",
 		History:   history,
 		Variables: variables,
 		Buffers:   buffers,
+		Timers:    timers,
 	}
 
 	profileIDs, _ := s.store.GetOrderedProfileIDs(sess.SessionID())

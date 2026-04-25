@@ -211,6 +211,22 @@ body {
   color: #f7768e;
 }
 
+.ticker {
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #1f252c;
+  color: #97a4b3;
+  font-family: monospace;
+  min-width: 65px;
+  text-align: center;
+}
+
+.ticker_active {
+  background: #1c3325;
+  color: #9ece6a;
+}
+
 #hotkeys {
   display: flex;
   gap: 6px;

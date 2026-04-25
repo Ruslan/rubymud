@@ -4,6 +4,7 @@ import (
 	"log"
 	"net"
 	"sync"
+	"time"
 
 	"rubymud/go/internal/storage"
 	"rubymud/go/internal/vm"
@@ -27,6 +28,8 @@ type Session struct {
 	nextClientID int
 	mu           sync.Mutex
 	closed       bool
+	timers       map[string]*Timer
+	timersMu     sync.Mutex
 }
 
 func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM) (*Session, error) {
@@ -35,14 +38,127 @@ func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM) (*Sess
 		return nil, err
 	}
 
-	return &Session{
+	s := &Session{
 		sessionID: sessionID,
 		mudAddr:   mudAddr,
 		conn:      conn,
 		store:     store,
 		vm:        v,
 		clients:   make(map[int]clientSink),
-	}, nil
+		timers:    make(map[string]*Timer),
+	}
+
+	// Initialize default ticker
+	s.timers["ticker"] = NewTimer("ticker", 60*time.Second)
+
+	v.SetTimerControl(s)
+
+	go s.runTimerLoop()
+
+	return s, nil
+}
+
+func (s *Session) runTimerLoop() {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		if s.IsClosed() {
+			return
+		}
+
+		s.timersMu.Lock()
+		changed := false
+		for _, t := range s.timers {
+			if t.Check() {
+				changed = true
+			}
+		}
+		if changed {
+			s.BroadcastTick()
+		}
+		s.timersMu.Unlock()
+	}
+}
+
+func (s *Session) BroadcastTick() {
+	// Caller must hold s.timersMu
+	s.mu.Lock()
+	if len(s.clients) == 0 {
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+
+	var snapshots []TimerSnapshot
+	for _, t := range s.timers {
+		snapshots = append(snapshots, t.Snapshot())
+	}
+
+	s.broadcastMsg(ServerMsg{
+		Type:   "tick",
+		Timers: snapshots,
+	})
+}
+
+// TimerControl implementation
+func (s *Session) TickOn(name string) {
+	s.timersMu.Lock()
+	defer s.timersMu.Unlock()
+	t, ok := s.timers[name]
+	if !ok {
+		t = NewTimer(name, 60*time.Second)
+		s.timers[name] = t
+	}
+	if t.On() {
+		s.BroadcastTick()
+	}
+}
+
+func (s *Session) TickOff(name string) {
+	s.timersMu.Lock()
+	defer s.timersMu.Unlock()
+	if t, ok := s.timers[name]; ok {
+		if t.Off() {
+			s.BroadcastTick()
+		}
+	}
+}
+
+func (s *Session) TickReset(name string) {
+	s.timersMu.Lock()
+	defer s.timersMu.Unlock()
+	if t, ok := s.timers[name]; ok {
+		if t.Reset() {
+			s.BroadcastTick()
+		}
+	}
+}
+
+func (s *Session) TickSet(name string, seconds float64) {
+	s.timersMu.Lock()
+	defer s.timersMu.Unlock()
+	t, ok := s.timers[name]
+	if !ok {
+		t = NewTimer(name, time.Duration(seconds*float64(time.Second)))
+		s.timers[name] = t
+	}
+	if t.Set(time.Duration(seconds * float64(time.Second))) {
+		s.BroadcastTick()
+	}
+}
+
+func (s *Session) TickSize(name string, seconds float64) {
+	s.timersMu.Lock()
+	defer s.timersMu.Unlock()
+	t, ok := s.timers[name]
+	if !ok {
+		t = NewTimer(name, time.Duration(seconds*float64(time.Second)))
+		s.timers[name] = t
+	}
+	if t.Size(time.Duration(seconds * float64(time.Second))) {
+		s.BroadcastTick()
+	}
 }
 
 func (s *Session) SessionID() int64 {
@@ -51,6 +167,16 @@ func (s *Session) SessionID() int64 {
 
 func (s *Session) Variables() map[string]string {
 	return s.vm.Variables()
+}
+
+func (s *Session) TimerSnapshots() []TimerSnapshot {
+	s.timersMu.Lock()
+	defer s.timersMu.Unlock()
+	var snapshots []TimerSnapshot
+	for _, t := range s.timers {
+		snapshots = append(snapshots, t.Snapshot())
+	}
+	return snapshots
 }
 
 func (s *Session) CurrentVariables() ([]VariableJSON, error) {

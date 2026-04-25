@@ -5,6 +5,13 @@ export interface RuleGroup {
   disabled_count: number;
 }
 
+export interface TimerSnapshot {
+  name: string;
+  enabled: boolean;
+  cycle_ms: number;
+  next_tick_at: string;
+}
+
 export interface Hotkey {
   shortcut: string;
   command: string;
@@ -51,4 +58,5 @@ export interface ServerMessage {
   entry_id?: number;
   command?: string;
   buffer?: string;
+  timers?: TimerSnapshot[];
 }

@@ -104,6 +104,14 @@ func (v *VM) dispatchCommand(input string, depth int) []Result {
 		return v.cmdUnhighlight(rest)
 	case "hotkey", "hot":
 		return v.cmdHotkey(rest)
+	case "tickon":
+		return v.cmdTickOn(rest)
+	case "tickoff":
+		return v.cmdTickOff(rest)
+	case "tickset":
+		return v.cmdTickSet(rest)
+	case "ticksize":
+		return v.cmdTickSize(rest)
 	case "tts", "ts":
 		return v.cmdTTS(rest)
 	case "showme", "show":

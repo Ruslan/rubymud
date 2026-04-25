@@ -13,6 +13,7 @@ type ServerMsg struct {
 	EntryID   int64                         `json:"entry_id,omitempty"` // For targeted updates
 	Command   string                        `json:"command,omitempty"`  // For targeted updates
 	Buffer    string                        `json:"buffer,omitempty"`   // For targeted updates
+	Timers    []TimerSnapshot               `json:"timers,omitempty"`
 }
 
 type SettingsChangedJSON struct {

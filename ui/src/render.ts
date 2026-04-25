@@ -565,6 +565,43 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     elements.connectionStatus.classList.toggle('status-disconnected', status === 'disconnected');
   }
 
+  let activeTimers: TimerSnapshot[] = [];
+  let tickerInterval: any = null;
+
+  function renderTimers(timers: TimerSnapshot[]) {
+    activeTimers = timers || [];
+    updateTickerUI();
+
+    if (!tickerInterval && activeTimers.some(t => t.enabled)) {
+      tickerInterval = setInterval(updateTickerUI, 1000);
+    } else if (tickerInterval && activeTimers.every(t => !t.enabled)) {
+      clearInterval(tickerInterval);
+      tickerInterval = null;
+    }
+  }
+
+  function updateTickerUI() {
+    const ticker = activeTimers.find(t => t.name === 'ticker');
+    if (!ticker || !ticker.enabled) {
+      elements.ticker.textContent = 'tick off';
+      elements.ticker.classList.remove('ticker_active');
+      return;
+    }
+
+    const nextAt = new Date(ticker.next_tick_at).getTime();
+    const now = Date.now();
+    let remaining = Math.max(0, Math.ceil((nextAt - now) / 1000));
+    
+    // If we passed next_tick_at but didn't get a resync yet, 
+    // it's likely just completed or about to.
+    if (remaining === 0 && ticker.cycle_ms > 0) {
+        remaining = Math.ceil(ticker.cycle_ms / 1000);
+    }
+
+    elements.ticker.textContent = `tick ${remaining}`;
+    elements.ticker.classList.add('ticker_active');
+  }
+
   function renderHotkeys(items: Hotkey[]) {
     elements.hotkeysBox.innerHTML = '';
     (items || []).forEach((item) => {
@@ -751,6 +788,7 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     renderHotkeys,
     renderVariables,
     renderGroups,
+    renderTimers,
     scrollOutputToBottom,
     setActivePanel,
     updateConnectionStatus,
