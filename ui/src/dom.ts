@@ -23,6 +23,7 @@ export function getAppElements() {
     settingsToggle: requireElement<HTMLButtonElement>('btn-open-settings'),
     connectionStatus: requireElement<HTMLSpanElement>('connection-status'),
     ticker: requireElement<HTMLSpanElement>('ticker'),
+    secondaryTimers: requireElement<HTMLDivElement>('secondary-timers'),
     input: requireElement<HTMLInputElement>('input'),
   };
 }

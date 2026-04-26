@@ -238,6 +238,28 @@ body {
   to { opacity: 0.8; }
 }
 
+.secondary-timers {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.timer-pill {
+  font-size: 11px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: #232a31;
+  color: #b8c4d0;
+  font-family: monospace;
+  white-space: nowrap;
+}
+
+.timer-pill_low {
+  background: #5a2630;
+  color: #ff899d;
+  animation: ticker-pulse 1s infinite alternate;
+}
+
+
 #hotkeys {
   display: flex;
   gap: 6px;

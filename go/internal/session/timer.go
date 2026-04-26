@@ -13,6 +13,7 @@ type Timer struct {
 	CycleMS       int              `json:"cycle_ms"`
 	NextTickAt    time.Time        `json:"next_tick_at"`
 	Subscriptions map[int][]string `json:"-"`
+	Icon          string           `json:"icon"`
 	mu            sync.Mutex
 }
 
@@ -21,6 +22,7 @@ type TimerSnapshot struct {
 	Enabled    bool      `json:"enabled"`
 	CycleMS    int       `json:"cycle_ms"`
 	NextTickAt time.Time `json:"next_tick_at"`
+	Icon       string    `json:"icon"`
 }
 
 func NewTimer(name string, cycle time.Duration) *Timer {
@@ -77,7 +79,14 @@ func (t *Timer) Snapshot() TimerSnapshot {
 		Enabled:    t.Enabled,
 		CycleMS:    t.CycleMS,
 		NextTickAt: t.NextTickAt,
+		Icon:       t.Icon,
 	}
+}
+
+func (t *Timer) SetIcon(icon string) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.Icon = icon
 }
 
 func (t *Timer) On() bool {

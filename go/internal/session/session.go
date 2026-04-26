@@ -157,8 +157,10 @@ func (s *Session) BroadcastTick() {
 	s.mu.Unlock()
 
 	var snapshots []TimerSnapshot
-	for _, t := range s.timers {
-		snapshots = append(snapshots, t.Snapshot())
+	for name, t := range s.timers {
+		if name == "ticker" || t.Enabled {
+			snapshots = append(snapshots, t.Snapshot())
+		}
 	}
 
 	s.broadcastMsg(ServerMsg{
@@ -227,14 +229,30 @@ func (s *Session) TickSize(name string, seconds float64) {
 	}
 }
 
+func (s *Session) TickIcon(name string, icon string) {
+	s.timersMu.Lock()
+	defer s.timersMu.Unlock()
+	t, ok := s.timers[name]
+	if !ok {
+		t = NewTimer(name, 60*time.Second)
+		s.timers[name] = t
+	}
+	t.SetIcon(icon)
+	s.BroadcastTick()
+}
+
 func (s *Session) SubscribeTimer(name string, second int, command string) {
 	s.timersMu.Lock()
 	defer s.timersMu.Unlock()
-	if t, ok := s.timers[name]; ok {
-		t.mu.Lock()
-		t.Subscriptions[second] = append(t.Subscriptions[second], command)
-		t.mu.Unlock()
+	t, ok := s.timers[name]
+	if !ok {
+		t = NewTimer(name, 60*time.Second)
+		s.timers[name] = t
 	}
+
+	t.mu.Lock()
+	t.Subscriptions[second] = append(t.Subscriptions[second], command)
+	t.mu.Unlock()
 }
 
 func (s *Session) UnsubscribeTimer(name string, second int) {
@@ -292,10 +310,7 @@ func (s *Session) GetTimerCycleSeconds(name string) int {
 		}
 		return cycle
 	}
-	if name == "ticker" {
-		return 60
-	}
-	return 0
+	return 60 // Default cycle for any unknown named timer
 }
 
 func (s *Session) SessionID() int64 {
@@ -310,8 +325,10 @@ func (s *Session) TimerSnapshots() []TimerSnapshot {
 	s.timersMu.Lock()
 	defer s.timersMu.Unlock()
 	var snapshots []TimerSnapshot
-	for _, t := range s.timers {
-		snapshots = append(snapshots, t.Snapshot())
+	for name, t := range s.timers {
+		if name == "ticker" || t.Enabled {
+			snapshots = append(snapshots, t.Snapshot())
+		}
 	}
 	return snapshots
 }

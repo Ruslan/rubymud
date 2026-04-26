@@ -116,6 +116,10 @@ func (v *VM) dispatchCommand(input string, depth int) []Result {
 		return v.cmdTickSet(rest)
 	case "ticksize":
 		return v.cmdTickSize(rest)
+	case "tickicon":
+		return v.cmdTickIcon(rest)
+	case "ticker":
+		return v.cmdTicker(rest)
 	case "tickat":
 		return v.cmdTickAt(rest)
 	case "untickat":

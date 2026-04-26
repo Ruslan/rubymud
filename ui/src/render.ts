@@ -581,30 +581,51 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
   }
 
   function updateTickerUI() {
-    const ticker = activeTimers.find(t => t.name === 'ticker');
-    if (!ticker || !ticker.enabled) {
+    const primary = activeTimers.find(t => t.name === 'ticker');
+    const secondary = activeTimers.filter(t => t.name !== 'ticker' && t.enabled);
+
+    // Primary ticker
+    if (!primary || !primary.enabled) {
       elements.ticker.textContent = 'tick off';
-      elements.ticker.classList.remove('ticker_active');
-      return;
-    }
-
-    const nextAt = new Date(ticker.next_tick_at).getTime();
-    const now = Date.now();
-    let remaining = Math.max(0, Math.ceil((nextAt - now) / 1000));
-    
-    // If we passed next_tick_at but didn't get a resync yet, 
-    // it's likely just completed or about to.
-    if (remaining === 0 && ticker.cycle_ms > 0) {
-        remaining = Math.ceil(ticker.cycle_ms / 1000);
-    }
-
-    elements.ticker.textContent = `tick ${remaining}`;
-    elements.ticker.classList.add('ticker_active');
-    if (remaining > 0 && remaining < 5) {
-      elements.ticker.classList.add('ticker_low');
+      elements.ticker.classList.remove('ticker_active', 'ticker_low');
     } else {
-      elements.ticker.classList.remove('ticker_low');
+      const nextAt = new Date(primary.next_tick_at).getTime();
+      const now = Date.now();
+      let remaining = Math.max(0, Math.ceil((nextAt - now) / 1000));
+      if (remaining === 0 && primary.cycle_ms > 0) {
+          remaining = Math.ceil(primary.cycle_ms / 1000);
+      }
+
+      const icon = primary.icon || '🕒';
+      elements.ticker.textContent = `${icon} tick ${remaining}`;
+      elements.ticker.classList.add('ticker_active');
+      if (remaining > 0 && remaining < 5) {
+        elements.ticker.classList.add('ticker_low');
+      } else {
+        elements.ticker.classList.remove('ticker_low');
+      }
     }
+
+    // Secondary timers
+    elements.secondaryTimers.innerHTML = '';
+    secondary.forEach(t => {
+      const nextAt = new Date(t.next_tick_at).getTime();
+      const now = Date.now();
+      let remaining = Math.max(0, Math.ceil((nextAt - now) / 1000));
+      if (remaining === 0 && t.cycle_ms > 0) {
+          remaining = Math.ceil(t.cycle_ms / 1000);
+      }
+
+      const pill = document.createElement('span');
+      pill.className = 'timer-pill';
+      if (remaining > 0 && remaining < 5) {
+        pill.classList.add('timer-pill_low');
+      }
+
+      const icon = t.icon ? `${t.icon} ` : '';
+      pill.textContent = `${icon}${t.name} ${remaining}`;
+      elements.secondaryTimers.appendChild(pill);
+    });
   }
 
   function renderHotkeys(items: Hotkey[]) {
