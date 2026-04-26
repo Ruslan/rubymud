@@ -65,6 +65,8 @@ func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM) (*Sess
 	// Initialize default ticker
 	s.timers["ticker"] = NewTimer("ticker", 60*time.Second)
 
+	s.restoreTimers()
+
 	v.SetTimerControl(s)
 
 	go s.runTimerLoop()
@@ -180,6 +182,7 @@ func (s *Session) TickOn(name string) {
 	}
 	if t.On() {
 		s.BroadcastTick()
+		s.persistTimer(t)
 	}
 }
 
@@ -189,6 +192,7 @@ func (s *Session) TickOff(name string) {
 	if t, ok := s.timers[name]; ok {
 		if t.Off() {
 			s.BroadcastTick()
+			s.persistTimer(t)
 		}
 	}
 }
@@ -199,6 +203,7 @@ func (s *Session) TickReset(name string) {
 	if t, ok := s.timers[name]; ok {
 		if t.Reset() {
 			s.BroadcastTick()
+			s.persistTimer(t)
 		}
 	}
 }
@@ -213,6 +218,7 @@ func (s *Session) TickSet(name string, seconds float64) {
 	}
 	if t.Set(time.Duration(seconds * float64(time.Second))) {
 		s.BroadcastTick()
+		s.persistTimer(t)
 	}
 }
 
@@ -226,6 +232,7 @@ func (s *Session) TickSize(name string, seconds float64) {
 	}
 	if t.Size(time.Duration(seconds * float64(time.Second))) {
 		s.BroadcastTick()
+		s.persistTimer(t)
 	}
 }
 
@@ -239,6 +246,7 @@ func (s *Session) TickIcon(name string, icon string) {
 	}
 	t.SetIcon(icon)
 	s.BroadcastTick()
+	s.persistTimer(t)
 }
 
 func (s *Session) SubscribeTimer(name string, second int, command string) {
@@ -253,6 +261,9 @@ func (s *Session) SubscribeTimer(name string, second int, command string) {
 	t.mu.Lock()
 	t.Subscriptions[second] = append(t.Subscriptions[second], command)
 	t.mu.Unlock()
+
+	s.persistSubscriptions(t)
+	s.persistTimer(t)
 }
 
 func (s *Session) UnsubscribeTimer(name string, second int) {
@@ -262,6 +273,9 @@ func (s *Session) UnsubscribeTimer(name string, second int) {
 		t.mu.Lock()
 		delete(t.Subscriptions, second)
 		t.mu.Unlock()
+
+		s.persistSubscriptions(t)
+		s.persistTimer(t)
 	}
 }
 
@@ -311,6 +325,166 @@ func (s *Session) GetTimerCycleSeconds(name string) int {
 		return cycle
 	}
 	return 60 // Default cycle for any unknown named timer
+}
+
+func (s *Session) TickAdjust(name string, deltaSeconds float64) {
+	s.timersMu.Lock()
+	defer s.timersMu.Unlock()
+	t, ok := s.timers[name]
+	if !ok {
+		t = NewTimer(name, 60*time.Second)
+		s.timers[name] = t
+	}
+	if t.Adjust(deltaSeconds) {
+		s.BroadcastTick()
+		s.persistTimer(t)
+	}
+}
+
+func (s *Session) persistTimer(t *Timer) {
+	if s.store == nil {
+		return
+	}
+
+	snapshot := t.Snapshot()
+	record := storage.TimerRecord{
+		SessionID:   s.sessionID,
+		Name:        snapshot.Name,
+		CycleMS:     snapshot.CycleMS,
+		RemainingMS: snapshot.RemainingMS,
+		Enabled:     snapshot.Enabled,
+		Icon:        snapshot.Icon,
+	}
+
+	if snapshot.Enabled && snapshot.CycleMS > 0 {
+		at := storage.SQLiteTime{Time: snapshot.NextTickAt}
+		record.NextTickAt = &at
+	}
+
+	if err := s.store.SaveTimer(record); err != nil {
+		log.Printf("failed to persist timer %q: %v", t.Name, err)
+	}
+}
+
+func (s *Session) persistSubscriptions(t *Timer) {
+	if s.store == nil {
+		return
+	}
+
+	t.mu.Lock()
+	// Create a copy of subscriptions to avoid holding lock during DB operations
+	subsCopy := make(map[int][]string)
+	for k, v := range t.Subscriptions {
+		subsCopy[k] = append([]string{}, v...)
+	}
+	t.mu.Unlock()
+
+	err := s.store.Transaction(func(store *storage.Store) error {
+		if err := store.ClearAllSubscriptions(s.sessionID, t.Name); err != nil {
+			return err
+		}
+
+		for second, commands := range subsCopy {
+			for i, cmd := range commands {
+				subRecord := storage.TimerSubscriptionRecord{
+					SessionID: s.sessionID,
+					TimerName: t.Name,
+					Second:    second,
+					SortOrder: i,
+					Command:   cmd,
+				}
+				if err := store.SaveSubscription(subRecord); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		log.Printf("failed to persist subscriptions for timer %q: %v", t.Name, err)
+	}
+}
+
+func (s *Session) restoreTimers() {
+	if s.store == nil {
+		return
+	}
+
+	timers, err := s.store.GetTimers(s.sessionID)
+	if err != nil {
+		log.Printf("failed to load persisted timers: %v", err)
+		return
+	}
+
+	subs, err := s.store.GetSubscriptions(s.sessionID)
+	if err != nil {
+		log.Printf("failed to load timer subscriptions: %v", err)
+	}
+
+	s.timersMu.Lock()
+	defer s.timersMu.Unlock()
+
+	for _, rt := range timers {
+		cycleMS := rt.CycleMS
+		enabled := rt.Enabled
+
+		if cycleMS <= 0 {
+			if rt.Name == "ticker" {
+				cycleMS = 60000 // Fallback to 60s for default ticker
+			} else {
+				enabled = false // Disable broken named timers
+				cycleMS = 60000 // Keep a safe positive cycle even if disabled
+			}
+		}
+
+		if enabled && rt.NextTickAt == nil {
+			log.Printf("timer %q in session %d had enabled=true but next_tick_at=NULL, forcing disabled", rt.Name, s.sessionID)
+			enabled = false
+		}
+
+		t := NewTimer(rt.Name, time.Duration(cycleMS)*time.Millisecond)
+		t.Enabled = enabled
+		t.Icon = rt.Icon
+		t.RemainingMS = rt.RemainingMS
+
+		if enabled && rt.NextTickAt != nil {
+			nextAt := rt.NextTickAt.Time
+			now := time.Now()
+
+			if now.After(nextAt) {
+				// Timer was running while server was down
+				elapsed := now.Sub(nextAt)
+				cycle := time.Duration(cycleMS) * time.Millisecond
+				if cycle > 0 {
+					// Recalculate phase: remaining = cycle - (elapsed % cycle)
+					rem := cycle - (elapsed % cycle)
+					t.NextTickAt = now.Add(rem)
+					t.RemainingMS = int(rem.Milliseconds())
+				} else {
+					t.Enabled = false
+					t.RemainingMS = 0
+				}
+			} else {
+				t.NextTickAt = nextAt
+				t.RemainingMS = int(time.Until(nextAt).Milliseconds())
+			}
+		}
+
+		// Attach subscriptions
+		for _, rs := range subs {
+			if rs.TimerName == rt.Name {
+				t.Subscriptions[rs.Second] = append(t.Subscriptions[rs.Second], rs.Command)
+			}
+		}
+
+		s.timers[rt.Name] = t
+	}
+
+	// Ensure default ticker exists
+	if _, ok := s.timers["ticker"]; !ok {
+		s.timers["ticker"] = NewTimer("ticker", 60*time.Second)
+	}
 }
 
 func (s *Session) SessionID() int64 {

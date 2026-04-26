@@ -113,4 +113,30 @@ type ProfileVariable struct {
 	UpdatedAt    SQLiteTime `json:"updated_at"`
 }
 
+type TimerRecord struct {
+	SessionID   int64       `gorm:"primaryKey"`
+	Name        string      `gorm:"primaryKey"`
+	CycleMS     int         `gorm:"column:cycle_ms"`
+	NextTickAt  *SQLiteTime `gorm:"column:next_tick_at"`
+	RemainingMS int         `gorm:"column:remaining_ms"`
+	Enabled     bool        `gorm:"column:enabled"`
+	Icon        string      `gorm:"column:icon"`
+}
+
+func (TimerRecord) TableName() string {
+	return "timers"
+}
+
+type TimerSubscriptionRecord struct {
+	SessionID int64  `gorm:"primaryKey"`
+	TimerName string `gorm:"primaryKey"`
+	Second    int    `gorm:"primaryKey"`
+	SortOrder int    `gorm:"primaryKey"`
+	Command   string `gorm:"column:command"`
+}
+
+func (TimerSubscriptionRecord) TableName() string {
+	return "timer_subscriptions"
+}
+
 

@@ -19,6 +19,8 @@ type mockTimerControl struct {
 	subCmd string
 	icon string
 	iconName string
+	adjName string
+	adjVal float64
 }
 
 func (m *mockTimerControl) TickOn(name string)          { m.on = name }
@@ -27,6 +29,7 @@ func (m *mockTimerControl) TickReset(name string)       { m.reset = name }
 func (m *mockTimerControl) TickSet(name string, s float64) { m.set = name; m.setVal = s }
 func (m *mockTimerControl) TickSize(name string, s float64) { m.size = name; m.sizeVal = s }
 func (m *mockTimerControl) TickIcon(name string, icon string)              { m.iconName = name; m.icon = icon }
+func (m *mockTimerControl) TickAdjust(name string, delta float64)          { m.adjName = name; m.adjVal = delta }
 func (m *mockTimerControl) SubscribeTimer(name string, second int, command string) {
 	m.subName = name
 	m.subSec = second
@@ -49,10 +52,11 @@ func (m *mockTimerControl) clear() {
 	m.on = ""; m.off = ""; m.reset = ""; m.set = ""; m.setVal = 0; m.size = ""; m.sizeVal = 0
 	m.subName = ""; m.subSec = -1; m.subCmd = ""
 	m.iconName = ""; m.icon = ""
+	m.adjName = ""; m.adjVal = 0
 }
 
 func (m *mockTimerControl) hasAnyAction() bool {
-	return m.on != "" || m.off != "" || m.reset != "" || m.set != "" || m.size != "" || m.subCmd != "" || m.iconName != ""
+	return m.on != "" || m.off != "" || m.reset != "" || m.set != "" || m.size != "" || m.subCmd != "" || m.iconName != "" || m.adjName != ""
 }
 
 func TestTickerCommandDiagnostics(t *testing.T) {
@@ -87,6 +91,8 @@ func TestTickerCommandDiagnostics(t *testing.T) {
 		{"#tickicon {🕒}", "", "tickicon", "ticker", 0, 0, "🕒"},
 		{"#tickicon {herb} {🪴}", "", "tickicon", "herb", 0, 0, "🪴"},
 		{"#tickicon {herb} {}", "", "tickicon", "herb", 0, 0, ""},
+		{"#tickset {+5}", "", "adjust", "ticker", 5, 0, ""},
+		{"#tickset {herb} {-2.5}", "", "adjust", "herb", -2.5, 0, ""},
 	}
 
 	for _, tt := range tests {
@@ -132,6 +138,10 @@ func TestTickerCommandDiagnostics(t *testing.T) {
 			case "tickicon":
 				if m.iconName != tt.name || m.icon != tt.icon {
 					t.Errorf("input %q: expected TickIcon(%q, %q), got %q, %q", tt.input, tt.name, tt.icon, m.iconName, m.icon)
+				}
+			case "adjust":
+				if m.adjName != tt.name || m.adjVal != tt.val {
+					t.Errorf("input %q: expected TickAdjust(%q, %v), got %q, %v", tt.input, tt.name, tt.val, m.adjName, m.adjVal)
 				}
 			}
 		}

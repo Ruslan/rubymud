@@ -580,6 +580,15 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     }
   }
 
+  function formatRemaining(sec: number): string {
+    if (sec >= 60) {
+      const m = Math.floor(sec / 60);
+      const s = sec % 60;
+      return `${m}:${String(s).padStart(2, '0')}`;
+    }
+    return String(sec);
+  }
+
   function updateTickerUI() {
     const primary = activeTimers.find(t => t.name === 'ticker');
     const secondary = activeTimers.filter(t => t.name !== 'ticker' && t.enabled);
@@ -597,7 +606,7 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
       }
 
       const icon = primary.icon || '🕒';
-      elements.ticker.textContent = `${icon} tick ${remaining}`;
+      elements.ticker.textContent = `${icon} tick ${formatRemaining(remaining)}`;
       elements.ticker.classList.add('ticker_active');
       if (remaining > 0 && remaining < 5) {
         elements.ticker.classList.add('ticker_low');
@@ -622,8 +631,12 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
         pill.classList.add('timer-pill_low');
       }
 
-      const icon = t.icon ? `${t.icon} ` : '';
-      pill.textContent = `${icon}${t.name} ${remaining}`;
+      if (t.icon) {
+        pill.textContent = `${t.icon} ${formatRemaining(remaining)}`;
+      } else {
+        pill.textContent = `${t.name} ${formatRemaining(remaining)}`;
+      }
+      pill.title = t.name;
       elements.secondaryTimers.appendChild(pill);
     });
   }

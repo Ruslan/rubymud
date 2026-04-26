@@ -64,11 +64,12 @@ func (v *VM) cmdTickSet(rest string) []Result {
 	arg2, remaining := splitBraceArg(strings.TrimSpace(after1))
 
 	if strings.TrimSpace(remaining) != "" {
-		return echoResults([]string{"#tickset: too many arguments, usage: #tickset [{name}] [{seconds}]"})
+		return echoResults([]string{"#tickset: too many arguments, usage: #tickset [{name}] [{+/-seconds}]"})
 	}
 
 	var name string
 	var secondsStr string
+	var isDelta bool
 
 	if arg1 == "" {
 		// #tickset
@@ -78,20 +79,31 @@ func (v *VM) cmdTickSet(rest string) []Result {
 	}
 
 	// Determine if arg1 is name or seconds
-	if _, err := strconv.ParseFloat(arg1, 64); err == nil {
-		// arg1 is numeric, so it's #tickset {seconds} for default ticker
+	if strings.HasPrefix(arg1, "+") || strings.HasPrefix(arg1, "-") {
+		// Explicit delta form for default ticker
+		name = "ticker"
+		secondsStr = arg1
+		isDelta = true
+		if arg2 != "" {
+			return echoResults([]string{"#tickset: usage: #tickset [{name}] [{+/-seconds}]"})
+		}
+	} else if _, err := strconv.ParseFloat(arg1, 64); err == nil {
+		// arg1 is numeric (absolute), so it's #tickset {seconds} for default ticker
 		name = "ticker"
 		secondsStr = arg1
 		if arg2 != "" {
-			return echoResults([]string{"#tickset: usage: #tickset [{name}] [{seconds}]"})
+			return echoResults([]string{"#tickset: usage: #tickset [{name}] [{+/-seconds}]"})
 		}
 	} else {
-		// arg1 is not numeric, treat as name: #tickset {name} [{seconds}]
+		// arg1 is not numeric, treat as name: #tickset {name} [{+/-seconds}]
 		if !isValidTimerName(arg1) {
 			return echoResults([]string{fmt.Sprintf("#tickset: invalid timer name %q", arg1)})
 		}
 		name = arg1
 		secondsStr = arg2
+		if strings.HasPrefix(secondsStr, "+") || strings.HasPrefix(secondsStr, "-") {
+			isDelta = true
+		}
 	}
 
 	if secondsStr == "" {
@@ -100,11 +112,18 @@ func (v *VM) cmdTickSet(rest string) []Result {
 	}
 
 	seconds, err := strconv.ParseFloat(secondsStr, 64)
-	if err != nil || seconds < 0 {
-		return echoResults([]string{fmt.Sprintf("#tickset: invalid non-negative seconds %q", secondsStr)})
+	if err != nil {
+		return echoResults([]string{fmt.Sprintf("#tickset: invalid seconds %q", secondsStr)})
 	}
 
-	v.timerCtrl.TickSet(name, seconds)
+	if isDelta {
+		v.timerCtrl.TickAdjust(name, seconds)
+	} else {
+		if seconds < 0 {
+			return echoResults([]string{fmt.Sprintf("#tickset: invalid non-negative seconds %q", secondsStr)})
+		}
+		v.timerCtrl.TickSet(name, seconds)
+	}
 	return nil
 }
 
