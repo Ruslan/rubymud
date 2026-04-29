@@ -13,7 +13,14 @@
 <body>
   <div class="app">
     <div id="panes-container" class="panes-container"></div>
-    <input id="input" type="text" placeholder="Type a command and press Enter">
+    <div class="input-bar">
+      <div class="input-wrap">
+        <input id="input" type="text" placeholder="Type a command and press Enter">
+        <div id="history-suggestions" class="history-suggestions" hidden></div>
+      </div>
+      <button id="history-up" class="input-bar__button" type="button" title="Previous command">↑</button>
+      <button id="history-down" class="input-bar__button" type="button" title="Next command">↓</button>
+    </div>
     <div id="bottom-dock" class="bottom-dock">
       <div class="bottom-toolbar">
         <div class="bottom-toolbar__tabs">

@@ -265,6 +265,44 @@ function focusInputForTyping(event: KeyboardEvent): boolean {
   return true;
 }
 
+function applyHistoryValue(value: string) {
+  elements.input.value = value;
+  const length = value.length;
+  elements.input.focus();
+  elements.input.setSelectionRange(length, length);
+}
+
+function renderHistorySuggestions(query: string, hide = false) {
+  const container = elements.historySuggestions;
+  container.innerHTML = '';
+
+  if (hide) {
+    container.hidden = true;
+    return;
+  }
+
+  const matches = history.matches(query, 3);
+  if (!matches.length) {
+    container.hidden = true;
+    return;
+  }
+
+  matches.forEach((match) => {
+    const button = document.createElement('button');
+    button.className = 'history-suggestion';
+    button.type = 'button';
+    button.textContent = match;
+    button.title = match;
+    button.addEventListener('click', () => {
+      applyHistoryValue(match);
+      renderHistorySuggestions(match, true);
+    });
+    container.appendChild(button);
+  });
+
+  container.hidden = false;
+}
+
 function requestVariables() {
   if (!sessionID) {
     renderer.renderVariables([]);
@@ -498,6 +536,14 @@ elements.keyboardToggle.addEventListener('click', () => renderer.setActivePanel(
 elements.variablesToggle.addEventListener('click', () => renderer.setActivePanel('variables'));
 elements.groupsToggle.addEventListener('click', () => renderer.setActivePanel('groups'));
 elements.settingsToggle.addEventListener('click', () => window.open('/settings', 'settings'));
+elements.historyUp.addEventListener('click', () => {
+  applyHistoryValue(history.up(elements.input.value));
+  renderHistorySuggestions(elements.input.value, true);
+});
+elements.historyDown.addEventListener('click', () => {
+  applyHistoryValue(history.down(elements.input.value));
+  renderHistorySuggestions(elements.input.value, true);
+});
 fontSizeDecreaseButton.addEventListener('click', () => {
   applyFontSize(currentFontSize - 1);
   renderFontSizeControls();
@@ -552,6 +598,7 @@ elements.input.addEventListener('keydown', (event) => {
     elements.input.value = history.up(elements.input.value);
     const length = elements.input.value.length;
     elements.input.setSelectionRange(length, length);
+    renderHistorySuggestions(elements.input.value, true);
     return;
   }
 
@@ -560,6 +607,7 @@ elements.input.addEventListener('keydown', (event) => {
     elements.input.value = history.down(elements.input.value);
     const length = elements.input.value.length;
     elements.input.setSelectionRange(length, length);
+    renderHistorySuggestions(elements.input.value, true);
     return;
   }
 
@@ -575,7 +623,20 @@ elements.input.addEventListener('keydown', (event) => {
 
   if (sendCommand(value, 'input')) {
     elements.input.value = '';
+    renderHistorySuggestions('', true);
   }
+});
+
+elements.input.addEventListener('input', () => {
+  renderHistorySuggestions(elements.input.value);
+});
+
+elements.input.addEventListener('focus', () => {
+  renderHistorySuggestions(elements.input.value);
+});
+
+elements.input.addEventListener('blur', () => {
+  window.setTimeout(() => renderHistorySuggestions('', true), 120);
 });
 
 logBoot('main ready');

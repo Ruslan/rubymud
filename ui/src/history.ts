@@ -79,6 +79,27 @@ export class InputHistory {
     return currentValue;
   }
 
+  matches(prefix: string, limit = 3): string[] {
+    if (!prefix) {
+      return [];
+    }
+
+    const seen = new Set<string>();
+    const result: string[] = [];
+
+    for (let i = this.history.length - 1; i >= 0 && result.length < limit; i--) {
+      const value = this.history[i];
+      if (!value || !value.startsWith(prefix) || seen.has(value)) {
+        continue;
+      }
+
+      seen.add(value);
+      result.push(value);
+    }
+
+    return result;
+  }
+
   private loadHistory() {
     const storedHistory = localStorage.getItem('commandHistory');
     if (!storedHistory) return;
