@@ -573,18 +573,115 @@ body {
 }
 
 @media (max-width: 640px) {
+  body {
+    font-size: var(--app-font-size, 15px);
+  }
+
   .bottom-toolbar {
-    flex-wrap: wrap;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 8px 10px 10px;
+  }
+
+  .bottom-toolbar__tabs {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
   }
 
   .bottom-toolbar__meta {
     width: 100%;
     justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  .panel-tab {
+    justify-content: center;
+    gap: 6px;
+    min-height: 38px;
+    padding: 6px 8px;
+  }
+
+  .panel-tab__icon {
+    font-size: 15px;
+  }
+
+  .panel-tab__label {
+    font-size: 10px;
+    letter-spacing: 0.02em;
+  }
+
+  .secondary-timers {
+    order: 3;
+    width: 100%;
+    overflow-x: auto;
+    padding-bottom: 2px;
+  }
+
+  .ticker,
+  #connection-status {
+    min-height: 24px;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  .pane-header {
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 6px 8px;
+  }
+
+  .pane-select {
+    flex: 1 1 140px;
+    min-width: 0;
+  }
+
+  .font-size-controls {
+    margin-left: auto;
+  }
+
+  .font-size-btn {
+    min-width: 36px;
+    min-height: 30px;
+    padding: 4px 8px;
+  }
+
+  .pane-actions {
+    margin-left: auto;
+  }
+
+  .bottom-panel {
+    max-height: 42vh;
+  }
+
+  .panel-section {
+    padding: 8px 10px;
   }
 
   .variable-row {
-    grid-template-columns: 1fr;
-    gap: 4px;
+    flex-basis: 100%;
+    max-width: none;
+  }
+
+  .group-chips-container {
+    padding: 10px;
+  }
+
+  .group-chip {
+    min-height: 34px;
+  }
+
+  .hotkey-chip {
+    min-height: 34px;
+  }
+
+  .pane-scroll-bottom {
+    width: 40px;
+    height: 40px;
+    right: 10px;
+    bottom: 10px;
   }
 }
 
