@@ -92,6 +92,14 @@
     status: string;
   }
 
+  interface HistoryEntry {
+    id: number;
+    session_id: number;
+    kind: string;
+    line: string;
+    created_at: string;
+  }
+
   let currentTab = window.location.hash.slice(1) || 'variables';
   let loading = true;
   let formError = '';
@@ -129,6 +137,7 @@
     { id: 'highlights', label: 'Highlights' },
     { id: 'hotkeys', label: 'Hotkeys' },
     { id: 'groups', label: 'Groups' },
+    { id: 'history', label: 'History' },
     { id: 'app', label: 'App' },
   ];
 
@@ -139,6 +148,9 @@
   $: currentSession = sessions.find(s => s.id === selectedSessionID);
 
   let sessionProfiles: SessionProfile[] = [];
+
+  // History State
+  let historyEntries: HistoryEntry[] = [];
 
   // Profiles State
   let profiles: Profile[] = [];
@@ -282,6 +294,9 @@
       } else if (currentTab === 'variables' && selectedSessionID) {
         const varRes = await fetch(`/api/sessions/${selectedSessionID}/variables`, { headers });
         variables = await varRes.json() || [];
+      } else if (currentTab === 'history' && selectedSessionID) {
+        const histRes = await fetch(`/api/sessions/${selectedSessionID}/history`, { headers });
+        historyEntries = await histRes.json() || [];
       } else if (['aliases', 'triggers', 'highlights', 'hotkeys', 'groups', 'declared_variables'].includes(currentTab) && selectedProfileID) {
         const endpoint = currentTab === 'declared_variables' ? 'variables' : currentTab;
         const res = await fetch(`/api/profiles/${selectedProfileID}/${endpoint}`, { headers });
@@ -353,6 +368,8 @@
     let url = `/api/${domain}/${id}`;
     if (domain === 'variables' && selectedSessionID) {
         url = `/api/sessions/${selectedSessionID}/variables/${encodeURIComponent(String(id))}`;
+    } else if (domain === 'history' && selectedSessionID) {
+        url = `/api/sessions/${selectedSessionID}/history/${id}`;
     } else if (['aliases', 'triggers', 'highlights', 'hotkeys', 'declared_variables'].includes(domain) && selectedProfileID) {
         const endpoint = domain === 'declared_variables' ? 'variables' : domain;
         url = `/api/profiles/${selectedProfileID}/${endpoint}/${id}`;
@@ -564,7 +581,7 @@
   </nav>
 
   <section class="content">
-    {#if ['variables', 'sessions'].includes(currentTab) && currentTab !== 'sessions'}
+    {#if ['variables', 'sessions', 'history'].includes(currentTab) && currentTab !== 'sessions'}
         <div class="selector-box">
             <label for="session-selector">Configuring Session:</label>
             <select id="session-selector" bind:value={selectedSessionID}>
@@ -1016,6 +1033,27 @@
             <button class="btn-primary" disabled={!profileEditor.id} on:click={() => { if (profileEditor.id) addProfileToSession(profileEditor.id); profileEditor.id = undefined; }}>Add</button>
         </div>
       {/if}
+
+    {:else if currentTab === 'history'}
+      <header class="content-header"><h2>History</h2><p class="description">Command history for {currentSession?.name || 'selected session'}.</p></header>
+      <table class="data-table">
+        <thead><tr><th>Time</th><th>Kind</th><th>Command</th><th style="width: 100px">Actions</th></tr></thead>
+        <tbody>
+          {#each historyEntries as entry}
+            <tr>
+              <td class="dim-cell" title={entry.created_at}>{new Date(entry.created_at).toLocaleString()}</td>
+              <td class="dim-cell">{entry.kind}</td>
+              <td class="key-cell">{entry.line}</td>
+              <td class="actions-cell">
+                <button class="btn-link btn-danger" on:click={() => deleteItem('history', entry.id)}>Delete</button>
+              </td>
+            </tr>
+          {/each}
+          {#if historyEntries.length === 0}
+            <tr><td colspan="4" class="dim-cell">No history entries found for this session.</td></tr>
+          {/if}
+        </tbody>
+      </table>
 
     {:else if currentTab === 'app'}
         <header class="content-header"><h2>App Settings</h2><p class="description">Global application configuration.</p></header>

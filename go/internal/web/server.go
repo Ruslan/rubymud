@@ -116,6 +116,11 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 					r.Delete("/{key}", s.deleteVariable)
 				})
 
+				r.Route("/history", func(r chi.Router) {
+					r.Get("/", s.listHistory)
+					r.Delete("/{entryID}", s.deleteHistoryEntry)
+				})
+
 				r.Route("/profiles", func(r chi.Router) {
 					r.Get("/", s.listSessionProfiles)
 					r.Post("/", s.addProfileToSession)
@@ -396,6 +401,42 @@ func (s *Server) deleteVariable(w http.ResponseWriter, r *http.Request) {
 	}
 	if sess != nil {
 		sess.NotifySettingsChanged("variables")
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// Session History
+
+func (s *Server) listHistory(w http.ResponseWriter, r *http.Request) {
+	_, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	history, err := s.store.ListHistory(id, 1000)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(history)
+}
+
+func (s *Server) deleteHistoryEntry(w http.ResponseWriter, r *http.Request) {
+	_, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	entryIDStr := chi.URLParam(r, "entryID")
+	entryID, err := strconv.ParseInt(entryIDStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid entry ID", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.DeleteHistoryEntry(id, entryID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

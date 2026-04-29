@@ -46,3 +46,16 @@ func (s *Store) RecentInputHistory(sessionID int64, limit int) ([]string, error)
 	}
 	return history, nil
 }
+
+func (s *Store) ListHistory(sessionID int64, limit int) ([]HistoryEntry, error) {
+	var entries []HistoryEntry
+	err := s.db.Where("session_id = ?", sessionID).
+		Order("created_at DESC, id DESC").
+		Limit(limit).
+		Find(&entries).Error
+	return entries, err
+}
+
+func (s *Store) DeleteHistoryEntry(sessionID int64, id int64) error {
+	return s.db.Where("session_id = ? AND id = ?", sessionID, id).Delete(&HistoryEntry{}).Error
+}
