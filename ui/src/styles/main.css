@@ -79,11 +79,6 @@ body {
   gap: 10px;
 }
 
-.bottom-toolbar__hint {
-  font-size: 12px;
-  color: #97a4b3;
-}
-
 .bottom-panels {
   display: none;
   border-top: 1px solid #232a31;

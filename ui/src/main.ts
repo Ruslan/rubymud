@@ -8,6 +8,37 @@ import { createRenderer } from './render';
 import { createSocket, sendSocketCommand } from './socket';
 import type { Hotkey, ServerMessage } from './types';
 
+type WakeLockSentinelLike = {
+  release(): Promise<void>;
+  addEventListener(type: 'release', listener: () => void): void;
+};
+
+type WakeLockNavigator = Navigator & {
+  wakeLock?: {
+    request(type: 'screen'): Promise<WakeLockSentinelLike>;
+  };
+};
+
+const wakeLockEnabledStorageKey = 'mudhost.wakeLockEnabled';
+
+function isWakeLockEnabled(): boolean {
+  return localStorage.getItem(wakeLockEnabledStorageKey) !== 'false';
+}
+
+async function releaseWakeLock() {
+  if (!wakeLock) {
+    return;
+  }
+
+  const activeWakeLock = wakeLock;
+  wakeLock = null;
+  try {
+    await activeWakeLock.release();
+  } catch (err) {
+    console.error('Failed to release wake lock:', err);
+  }
+}
+
 function logBoot(stage: string, extra?: unknown) {
   const time = Math.round(performance.now());
   if (extra === undefined) {
@@ -19,6 +50,48 @@ function logBoot(stage: string, extra?: unknown) {
 }
 
 logBoot('module start');
+
+const wakeLockNavigator = navigator as WakeLockNavigator;
+let wakeLock: WakeLockSentinelLike | null = null;
+
+async function requestWakeLock() {
+  if (!isWakeLockEnabled()) {
+    await releaseWakeLock();
+    return;
+  }
+
+  if (!wakeLockNavigator.wakeLock || document.visibilityState !== 'visible' || wakeLock) {
+    return;
+  }
+
+  try {
+    wakeLock = await wakeLockNavigator.wakeLock.request('screen');
+    wakeLock.addEventListener('release', () => {
+      wakeLock = null;
+    });
+    logBoot('wake lock acquired');
+  } catch (err) {
+    console.error('Failed to acquire wake lock:', err);
+  }
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    void requestWakeLock();
+  }
+});
+
+window.addEventListener('focus', () => {
+  void requestWakeLock();
+});
+
+window.addEventListener('storage', (event) => {
+  if (event.key === wakeLockEnabledStorageKey) {
+    void requestWakeLock();
+  }
+});
+
+void requestWakeLock();
 
 const elements = getAppElements();
 logBoot('dom elements resolved');

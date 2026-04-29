@@ -549,7 +549,6 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     elements.groupsPanel.classList.toggle('bottom-panel_active', state.activePanel === 'groups');
     
     elements.bottomPanels.classList.toggle('bottom-panels_visible', Boolean(state.activePanel));
-    elements.bottomToolbarHint.textContent = state.activePanel ? `${state.activePanel} open` : 'Panels';
 
     if (state.activePanel === 'variables') {
       requestVariables();

@@ -11,7 +11,6 @@ export function getAppElements() {
     panesContainer: requireElement<HTMLDivElement>('panes-container'),
     groupsToggle: requireElement<HTMLButtonElement>('panel-toggle-groups'),
     bottomPanels: requireElement<HTMLDivElement>('bottom-panels'),
-    bottomToolbarHint: requireElement<HTMLSpanElement>('bottom-toolbar-hint'),
     hotkeysBox: requireElement<HTMLDivElement>('hotkeys'),
     variablesList: requireElement<HTMLDivElement>('variables-list'),
     groupsList: requireElement<HTMLDivElement>('groups-list'),

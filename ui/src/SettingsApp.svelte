@@ -101,6 +101,13 @@
   let selectedProfileID: number | null = null;
   
   let appSettings: { api_token: string } = { api_token: '' };
+  const wakeLockEnabledStorageKey = 'mudhost.wakeLockEnabled';
+  let wakeLockEnabled = true;
+
+  function setWakeLockEnabled(enabled: boolean) {
+    wakeLockEnabled = enabled;
+    localStorage.setItem(wakeLockEnabledStorageKey, String(enabled));
+  }
 
   window.onhashchange = () => {
     currentTab = window.location.hash.slice(1) || 'variables';
@@ -538,6 +545,7 @@
   }
 
   onMount(() => {
+    wakeLockEnabled = localStorage.getItem(wakeLockEnabledStorageKey) !== 'false';
     lastFetchKey = `${currentTab}|${selectedSessionID ?? ''}|${selectedProfileID ?? ''}`;
     void fetchData();
   });
@@ -1011,6 +1019,14 @@
 
     {:else if currentTab === 'app'}
         <header class="content-header"><h2>App Settings</h2><p class="description">Global application configuration.</p></header>
+        <div class="editor-box">
+            <h3>Wake Lock</h3>
+            <p class="description">Keep the screen awake while the main client tab or installed app is visible. Local to this browser/PWA.</p>
+            <label class="checkbox-label">
+                <input type="checkbox" checked={wakeLockEnabled} on:change={(event) => setWakeLockEnabled((event.currentTarget as HTMLInputElement).checked)} />
+                Keep screen awake while active
+            </label>
+        </div>
         <div class="editor-box">
             <h3>API Token</h3>
             <p class="description">Use this token for external REST or WebSocket access. Header: <code>X-Session-Token</code></p>

@@ -5,6 +5,7 @@ import { resolve } from 'path';
 export default defineConfig({
   root: 'src',
   base: './',
+  publicDir: resolve(__dirname, 'public'),
   plugins: [svelte()],
   build: {
     outDir: resolve(__dirname, '../go/internal/web/static'),
