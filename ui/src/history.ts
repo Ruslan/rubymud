@@ -6,6 +6,10 @@ export class InputHistory {
   private lastResult: string | null = null;
   private arrowQuery = '';
 
+  private startsWithQuery(value: string, query: string): boolean {
+    return value.toLocaleLowerCase().startsWith(query.toLocaleLowerCase());
+  }
+
   constructor() {
     this.loadHistory();
   }
@@ -41,7 +45,7 @@ export class InputHistory {
 
     for (let i = this.historyIndex - 1; i >= 0; i--) {
       const value = this.history[i];
-      if (value && value.startsWith(currentValue) && !this.historyViewed.includes(value)) {
+      if (value && this.startsWithQuery(value, currentValue) && !this.historyViewed.includes(value)) {
         this.historyIndex = i;
         this.historyViewed.push(value);
         this.lastResult = value;
@@ -67,7 +71,7 @@ export class InputHistory {
 
     for (let i = this.historyIndex + 1; i < this.history.length; i++) {
       const value = this.history[i];
-      if (value && value.startsWith(currentValue) && !this.historyViewed.includes(value)) {
+      if (value && this.startsWithQuery(value, currentValue) && !this.historyViewed.includes(value)) {
         this.historyIndex = i;
         this.historyViewed.push(value);
         this.lastResult = value;
@@ -89,7 +93,7 @@ export class InputHistory {
 
     for (let i = this.history.length - 1; i >= 0 && result.length < limit; i--) {
       const value = this.history[i];
-      if (!value || !value.startsWith(prefix) || seen.has(value)) {
+      if (!value || !this.startsWithQuery(value, prefix) || seen.has(value)) {
         continue;
       }
 

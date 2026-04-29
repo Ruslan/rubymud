@@ -742,6 +742,14 @@ body {
     min-height: 34px;
   }
 
+  .hotkey-chip kbd {
+    display: none;
+  }
+
+  .hotkey-chip button {
+    gap: 0;
+  }
+
   .pane-scroll-bottom {
     width: 40px;
     height: 40px;
