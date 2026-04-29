@@ -44,6 +44,7 @@ interface RenderedPane {
   node: PaneNode;
   el: HTMLElement;
   outputEl: HTMLElement;
+  scrollButtonEl: HTMLButtonElement;
   selectEl: HTMLSelectElement;
   ansiUp: AnsiUp;
 }
@@ -206,17 +207,36 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     actionsEl.appendChild(menuWrapper);
     headerEl.appendChild(actionsEl);
 
+    const bodyEl = document.createElement('div');
+    bodyEl.className = 'pane-body';
+
     const outputEl = document.createElement('div');
     outputEl.className = 'pane-output';
     outputEl.id = `output-${node.id}`;
 
+    const scrollButtonEl = document.createElement('button');
+    scrollButtonEl.className = 'pane-scroll-bottom';
+    scrollButtonEl.type = 'button';
+    scrollButtonEl.textContent = '↓';
+    scrollButtonEl.title = 'Scroll to bottom';
+    scrollButtonEl.hidden = true;
+    scrollButtonEl.addEventListener('click', () => {
+      outputEl.scrollTop = outputEl.scrollHeight;
+      updateScrollButtonVisibility(renderedPanes.get(node.id));
+    });
+    outputEl.addEventListener('scroll', () => {
+      updateScrollButtonVisibility(renderedPanes.get(node.id));
+    });
+
     el.appendChild(headerEl);
-    el.appendChild(outputEl);
+    bodyEl.appendChild(outputEl);
+    bodyEl.appendChild(scrollButtonEl);
+    el.appendChild(bodyEl);
 
     const paneAnsiUp = new AnsiUp();
     paneAnsiUp.use_classes = true;
 
-    renderedPanes.set(node.id, { node, el, outputEl, selectEl, ansiUp: paneAnsiUp });
+    renderedPanes.set(node.id, { node, el, outputEl, scrollButtonEl, selectEl, ansiUp: paneAnsiUp });
 
     // Initial render
     // Defer slight to ensure it's in DOM
@@ -444,6 +464,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     if (!state.restoreInProgress) {
       pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
     }
+    updateScrollButtonVisibility(pane);
   }
 
   function appendEntry(entry: LogEntry) {
@@ -471,6 +492,8 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
         if (shouldScroll && !state.restoreInProgress) {
           pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
         }
+
+        updateScrollButtonVisibility(pane);
       }
     });
   }
@@ -527,6 +550,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     // Preserve bindings — they will be re-populated as entries arrive in restore_begin.
     renderedPanes.forEach(pane => {
       pane.outputEl.innerHTML = '';
+      updateScrollButtonVisibility(pane);
     });
     updateAllSelects();
   }
@@ -534,6 +558,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   function scrollOutputToBottom() {
     renderedPanes.forEach(pane => {
       pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
+      updateScrollButtonVisibility(pane);
     });
   }
 
@@ -541,6 +566,15 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     const threshold = 100; // pixels from bottom
     const distanceToBottom = pane.outputEl.scrollHeight - pane.outputEl.scrollTop - pane.outputEl.clientHeight;
     return distanceToBottom <= threshold;
+  }
+
+  function updateScrollButtonVisibility(pane: RenderedPane | undefined) {
+    if (!pane) {
+      return;
+    }
+
+    const hasOverflow = pane.outputEl.scrollHeight > pane.outputEl.clientHeight + 8;
+    pane.scrollButtonEl.hidden = !hasOverflow || shouldStickToBottom(pane);
   }
 
   function setActivePanel(panel: 'keyboard' | 'variables' | 'groups' | null) {

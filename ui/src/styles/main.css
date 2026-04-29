@@ -772,10 +772,41 @@ body {
   color: white;
 }
 
+.pane-body {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
 .pane-output {
   flex: 1;
   overflow: auto;
   padding: 12px;
+}
+
+.pane-scroll-bottom {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  width: 34px;
+  height: 34px;
+  border: 1px solid rgba(125, 207, 255, 0.35);
+  border-radius: 999px;
+  background: rgba(21, 25, 30, 0.92);
+  color: #7dcfff;
+  font: inherit;
+  font-size: 16px;
+  line-height: 1;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  z-index: 2;
+}
+
+.pane-scroll-bottom:hover {
+  background: #202833;
+  border-color: rgba(125, 207, 255, 0.6);
+  color: #e8edf2;
 }
 
 /* Groups Panel */
