@@ -178,9 +178,15 @@
 #highlight {256:46} {^Ваше зрение вернулось!} {alerts}
 
 #nop --- Hotkeys ---
+#nop rubymud:rule {"mobile_row":1,"mobile_order":1}
+#hotkey {num_5} {scan}
+#nop rubymud:rule {"mobile_row":1,"mobile_order":2}
 #hotkey {pageup} {север}
+#nop rubymud:rule {"mobile_row":2,"mobile_order":2}
 #hotkey {pagedown} {юг}
+#nop rubymud:rule {"mobile_row":2,"mobile_order":3}
 #hotkey {end} {восток}
+#nop rubymud:rule {"mobile_row":2,"mobile_order":1}
 #hotkey {home} {запад}
 #hotkey {ctrl+o} {подняться}
 #hotkey {ctrl+l} {опуститься}
@@ -190,7 +196,6 @@
 #hotkey {num_6} {e}
 #hotkey {num_9} {u}
 #hotkey {num_3} {d}
-#hotkey {num_5} {scan}
 #hotkey {f2} {пом;сби;вста}
 #hotkey {f3} {спас $r1;спас $r2;спас $r3;спас $r4}
 #hotkey {f4} {взя тру;взя все тру;брос тру}

@@ -65,6 +65,8 @@
     position?: number;
     shortcut: string;
     command: string;
+    mobile_row: number;
+    mobile_order: number;
   }
 
   interface ProfileVariable {
@@ -180,7 +182,7 @@
 
   // Hotkeys State
   let hotkeys: Hotkey[] = [];
-  const defaultHotkey = (): Hotkey => ({ shortcut: '', command: '' });
+  const defaultHotkey = (): Hotkey => ({ shortcut: '', command: '', mobile_row: 0, mobile_order: 0 });
   let hotkeyEditor: Hotkey = defaultHotkey();
 
   // Profile Variables State
@@ -861,13 +863,17 @@
         <div class="form-row">
           <input type="text" bind:value={hotkeyEditor.shortcut} placeholder="Shortcut (e.g. F1, Ctrl+A)" required />
           <input type="text" bind:value={hotkeyEditor.command} placeholder="Command" required />
+          <div class="form-row-group">
+            <label class="compact-label">Mob Row: <input type="number" bind:value={hotkeyEditor.mobile_row} min="0" style="width: 60px" /></label>
+            <label class="compact-label">Order: <input type="number" bind:value={hotkeyEditor.mobile_order} min="0" style="width: 60px" /></label>
+          </div>
           <button class="btn-primary" on:click={() => saveItem('hotkeys', hotkeyEditor, () => hotkeyEditor = defaultHotkey())}>
             {hotkeyEditor.id ? 'Update' : 'Add'}
           </button>
         </div>
       </div>
       <table class="data-table">
-        <thead><tr><th style="width: 60px">Order</th><th>Shortcut</th><th>Command</th><th style="width: 140px">Actions</th></tr></thead>
+        <thead><tr><th style="width: 60px">Order</th><th>Shortcut</th><th>Command</th><th style="width: 80px">Mob Row</th><th style="width: 80px">Mob Ord</th><th style="width: 140px">Actions</th></tr></thead>
         <tbody>
           {#each hotkeys as h, i}
             <tr>
@@ -876,6 +882,8 @@
                  <button class="btn-icon" disabled={i === hotkeys.length - 1} on:click={() => moveRule('hotkeys', h, 1)}>▼</button>
               </td>
               <td class="key-cell">{h.shortcut}</td><td class="value-cell">{h.command}</td>
+              <td class="dim-cell center-cell">{h.mobile_row || '-'}</td>
+              <td class="dim-cell center-cell">{h.mobile_order || '-'}</td>
               <td class="actions-cell">
                 <button class="btn-link" on:click={() => hotkeyEditor = { ...h }}>Edit</button>
                 <button class="btn-link btn-danger" on:click={() => deleteItem('hotkeys', h.id!)}>Delete</button>
@@ -1095,8 +1103,11 @@
   .selector-box select { background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 6px 12px; border-radius: 6px; }
   .form-grid { display: flex; flex-direction: column; gap: 12px; }
   .form-row { display: flex; gap: 12px; align-items: center; }
+  .form-row-group { display: flex; gap: 12px; align-items: center; background: #111315; padding: 4px 12px; border-radius: 6px; border: 1px solid #30363d; }
+  .compact-label { font-size: 0.75rem; color: #9ba3af; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
   .options-row { margin-top: 8px; border-top: 1px solid #2d333b; padding-top: 12px; flex-wrap: wrap; }
   input[type="text"], input[type="number"] { background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px 12px; border-radius: 6px; flex: 1; }
+  .center-cell { text-align: center; }
   .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #9ba3af; cursor: pointer; }
   .color-field { display: flex; align-items: center; gap: 10px; color: #9ba3af; min-width: 0; }
   .color-field span { font-size: 0.85rem; min-width: 20px; }

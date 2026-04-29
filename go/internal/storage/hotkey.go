@@ -12,15 +12,17 @@ func (s *Store) ListHotkeys(profileID int64) ([]HotkeyRule, error) {
 	return hotkeys, err
 }
 
-func (s *Store) CreateHotkey(profileID int64, shortcut, command string) (HotkeyRule, error) {
+func (s *Store) CreateHotkey(profileID int64, shortcut, command string, mobileRow, mobileOrder int) (HotkeyRule, error) {
 	var maxPos int
 	s.db.Model(&HotkeyRule{}).Where("profile_id = ?", profileID).Select("COALESCE(MAX(position), 0)").Scan(&maxPos)
 
 	h := HotkeyRule{
-		ProfileID: profileID,
-		Position:  maxPos + 1,
-		Shortcut:  shortcut,
-		Command:   command,
+		ProfileID:   profileID,
+		Position:    maxPos + 1,
+		Shortcut:    shortcut,
+		Command:     command,
+		MobileRow:   mobileRow,
+		MobileOrder: mobileOrder,
 	}
 	err := s.db.Create(&h).Error
 	return h, err
@@ -30,9 +32,11 @@ func (s *Store) UpdateHotkey(h HotkeyRule) error {
 	result := s.db.Model(&HotkeyRule{}).
 		Where("id = ? AND profile_id = ?", h.ID, h.ProfileID).
 		Updates(map[string]interface{}{
-			"position": h.Position,
-			"shortcut": h.Shortcut,
-			"command":  h.Command,
+			"position":     h.Position,
+			"shortcut":     h.Shortcut,
+			"command":      h.Command,
+			"mobile_row":   h.MobileRow,
+			"mobile_order": h.MobileOrder,
 		})
 	if result.Error != nil {
 		return result.Error

@@ -186,7 +186,7 @@ func TestProfileScript_ExportAndParse(t *testing.T) {
 	})
 
 	// Add Hotkey
-	s.CreateHotkey(p.ID, "f1", "north")
+	s.CreateHotkey(p.ID, "f1", "north", 0, 0)
 
 	// Export
 	exported, err := s.ExportProfileScript(p.ID)

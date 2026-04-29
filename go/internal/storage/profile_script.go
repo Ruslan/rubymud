@@ -168,6 +168,11 @@ func (s *Store) ExportProfileScript(profileID int64) (string, error) {
 	hotkeys, _ := s.ListHotkeys(profileID)
 	if len(hotkeys) > 0 {
 		for _, hk := range hotkeys {
+			if hk.MobileRow != 0 || hk.MobileOrder != 0 {
+				meta := map[string]int{"mobile_row": hk.MobileRow, "mobile_order": hk.MobileOrder}
+				mj, _ := json.Marshal(meta)
+				sb.WriteString(fmt.Sprintf("#nop rubymud:rule %s\n", string(mj)))
+			}
 			sb.WriteString(fmt.Sprintf("#hotkey {%s} {%s}\n", hk.Shortcut, hk.Command))
 		}
 		sb.WriteString("\n")
@@ -340,9 +345,22 @@ func ParseProfileScript(text string) (*ProfileScript, error) {
 			rest := strings.TrimSpace(strings.TrimPrefix(line, "#hotkey "))
 			shortcut, rest := splitBraceArg(rest)
 			command, _ := splitBraceArg(rest)
+			
+			mRow := 0
+			mOrder := 0
+			if pendingMeta != nil {
+				if r, ok := pendingMeta["mobile_row"].(float64); ok {
+					mRow = int(r)
+				}
+				if o, ok := pendingMeta["mobile_order"].(float64); ok {
+					mOrder = int(o)
+				}
+			}
+
 			if shortcut != "" && command != "" {
 				ps.Hotkeys = append(ps.Hotkeys, HotkeyRule{
 					Position: hkPos, Shortcut: shortcut, Command: command,
+					MobileRow: mRow, MobileOrder: mOrder,
 				})
 				hkPos++
 			}

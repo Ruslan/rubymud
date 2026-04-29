@@ -96,11 +96,13 @@ type SessionProfile struct {
 }
 
 type HotkeyRule struct {
-	ID        int64  `gorm:"primaryKey" json:"id"`
-	ProfileID int64  `json:"profile_id"`
-	Position  int    `json:"position"`
-	Shortcut  string `json:"shortcut"`
-	Command   string `json:"command"`
+	ID          int64  `gorm:"primaryKey" json:"id"`
+	ProfileID   int64  `json:"profile_id"`
+	Position    int    `json:"position"`
+	Shortcut    string `json:"shortcut"`
+	Command     string `json:"command"`
+	MobileRow   int    `gorm:"column:mobile_row" json:"mobile_row"`
+	MobileOrder int    `gorm:"column:mobile_order" json:"mobile_order"`
 }
 
 type ProfileVariable struct {

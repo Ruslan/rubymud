@@ -682,34 +682,115 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     });
   }
 
-  function renderHotkeys(items: Hotkey[]) {
-    elements.hotkeysBox.innerHTML = '';
-    (items || []).forEach((item) => {
-      const chip = document.createElement('span');
-      chip.className = 'hotkey-chip';
+  function createHotkeyChip(item: Hotkey, hideShortcut = false): HTMLElement {
+    const chip = document.createElement('span');
+    chip.className = 'hotkey-chip';
 
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.addEventListener('click', () => {
-        appendCommandHint(item.command);
-        scrollOutputToBottom();
-        sendCommand(item.command, 'key');
-      });
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.addEventListener('click', () => {
+      appendCommandHint(item.command);
+      scrollOutputToBottom();
+      sendCommand(item.command, 'key');
+    });
 
+    if (!hideShortcut) {
       const key = document.createElement('kbd');
       key.textContent = item.shortcut;
       button.appendChild(key);
+    }
 
-      const label = document.createElement('span');
-      label.textContent = item.command;
-      button.appendChild(label);
+    const label = document.createElement('span');
+    label.textContent = item.command;
+    button.appendChild(label);
 
-      chip.appendChild(button);
-      elements.hotkeysBox.appendChild(chip);
-    });
+    chip.appendChild(button);
+    return chip;
+  }
 
-    elements.keyboardToggle.style.display = items && items.length ? 'inline-flex' : 'none';
-    if ((!items || !items.length) && state.activePanel === 'keyboard') {
+  function renderHotkeys(items: Hotkey[]) {
+    elements.hotkeysBox.innerHTML = '';
+    const hotkeys = items || [];
+    const isMobile = window.innerWidth <= 640;
+
+    if (!isMobile) {
+      hotkeys.forEach((item) => {
+        elements.hotkeysBox.appendChild(createHotkeyChip(item));
+      });
+    } else {
+      const positioned = hotkeys.filter(h => h.mobile_row && h.mobile_row > 0);
+      const free = [...hotkeys.filter(h => !h.mobile_row || h.mobile_row <= 0)];
+
+      const rowsMap = new Map<number, HTMLElement>();
+      const sortedRowNums = Array.from(new Set(positioned.map(h => h.mobile_row!))).sort((a, b) => a - b);
+      
+      sortedRowNums.forEach(rowNum => {
+        const rowEl = document.createElement('div');
+        rowEl.className = 'hotkeys-row';
+        rowEl.dataset.row = String(rowNum);
+        elements.hotkeysBox.appendChild(rowEl);
+        rowsMap.set(rowNum, rowEl);
+      });
+
+      // Add positioned hotkeys
+      positioned.sort((a, b) => (a.mobile_order || 0) - (b.mobile_order || 0)).forEach(hk => {
+        rowsMap.get(hk.mobile_row!)!.appendChild(createHotkeyChip(hk, true));
+      });
+
+      // Best-effort auto-fill
+      if (free.length > 0) {
+        const containerWidth = elements.hotkeysBox.clientWidth || (window.innerWidth - 24);
+        const gap = 6;
+
+        free.forEach(hk => {
+          const chip = createHotkeyChip(hk, true);
+          elements.hotkeysBox.appendChild(chip);
+          const chipWidth = chip.offsetWidth || (hk.command.length * 9 + 24);
+          chip.remove();
+
+          let placed = false;
+          for (const rowNum of sortedRowNums) {
+            const rowEl = rowsMap.get(rowNum)!;
+            let currentRowWidth = 0;
+            for (const child of Array.from(rowEl.children)) {
+              currentRowWidth += ((child as HTMLElement).offsetWidth || (child.textContent?.length || 0) * 9 + 24) + gap;
+            }
+
+            if (currentRowWidth + chipWidth < containerWidth - 12) {
+              rowEl.appendChild(chip);
+              placed = true;
+              break;
+            }
+          }
+
+          if (!placed) {
+            const freeRows = elements.hotkeysBox.querySelectorAll('.hotkeys-row_free');
+            let lastFreeRow = freeRows[freeRows.length - 1] as HTMLElement;
+            
+            if (lastFreeRow) {
+              let currentRowWidth = 0;
+              for (const child of Array.from(lastFreeRow.children)) {
+                currentRowWidth += ((child as HTMLElement).offsetWidth || (child.textContent?.length || 0) * 9 + 24) + gap;
+              }
+              if (currentRowWidth + chipWidth < containerWidth - 12) {
+                lastFreeRow.appendChild(chip);
+                placed = true;
+              }
+            }
+            
+            if (!placed) {
+              lastFreeRow = document.createElement('div');
+              lastFreeRow.className = 'hotkeys-row hotkeys-row_free';
+              lastFreeRow.appendChild(chip);
+              elements.hotkeysBox.appendChild(lastFreeRow);
+            }
+          }
+        });
+      }
+    }
+
+    elements.keyboardToggle.style.display = hotkeys.length ? 'inline-flex' : 'none';
+    if (!hotkeys.length && state.activePanel === 'keyboard') {
       setActivePanel('keyboard');
     }
   }

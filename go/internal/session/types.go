@@ -34,8 +34,10 @@ type ButtonOverlay struct {
 }
 
 type HotkeyJSON struct {
-	Shortcut string `json:"shortcut"`
-	Command  string `json:"command"`
+	Shortcut    string `json:"shortcut"`
+	Command     string `json:"command"`
+	MobileRow   int    `json:"mobile_row"`
+	MobileOrder int    `json:"mobile_order"`
 }
 
 type VariableJSON struct {

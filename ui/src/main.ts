@@ -503,8 +503,11 @@ function connectSocket() {
   logBoot('socket reconnect created', { readyState: socket.readyState, url: socket.url, sessionID });
   attachSocketHandlers(socket);
 }
-
 attachSocketHandlers(socket);
+
+window.addEventListener('resize', () => {
+  renderer.renderHotkeys(configuredHotkeys);
+});
 
 window.addEventListener('keydown', (event) => {
   if (focusInputForTyping(event)) {

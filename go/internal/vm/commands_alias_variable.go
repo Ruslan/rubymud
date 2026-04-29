@@ -130,7 +130,7 @@ func (v *VM) cmdHotkey(rest string) []Result {
 		if pid == 0 {
 			return echoResults([]string{"#hotkey: error: no primary profile"})
 		}
-		if _, err := v.store.CreateHotkey(pid, shortcut, command); err != nil {
+		if _, err := v.store.CreateHotkey(pid, shortcut, command, 0, 0); err != nil {
 			return echoResults([]string{fmt.Sprintf("#hotkey: error: %v", err)})
 		}
 		v.ensureFresh()

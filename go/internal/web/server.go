@@ -934,7 +934,7 @@ func (s *Server) createProfileHotkey(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	_, err = s.store.CreateHotkey(pid, h.Shortcut, h.Command)
+	_, err = s.store.CreateHotkey(pid, h.Shortcut, h.Command, h.MobileRow, h.MobileOrder)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -1298,7 +1298,12 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 	profileIDs, _ := s.store.GetOrderedProfileIDs(sess.SessionID())
 	hotkeys, _ := s.store.LoadHotkeysForProfiles(profileIDs)
 	for _, hk := range hotkeys {
-		begin.Hotkeys = append(begin.Hotkeys, session.HotkeyJSON{Shortcut: hk.Shortcut, Command: hk.Command})
+		begin.Hotkeys = append(begin.Hotkeys, session.HotkeyJSON{
+			Shortcut:    hk.Shortcut,
+			Command:     hk.Command,
+			MobileRow:   hk.MobileRow,
+			MobileOrder: hk.MobileOrder,
+		})
 	}
 
 	if err := writeJSON(begin); err != nil {

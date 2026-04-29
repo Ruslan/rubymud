@@ -15,6 +15,8 @@ export interface TimerSnapshot {
 export interface Hotkey {
   shortcut: string;
   command: string;
+  mobile_row?: number;
+  mobile_order?: number;
 }
 
 export interface Variable {
