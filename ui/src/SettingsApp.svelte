@@ -1144,4 +1144,14 @@
   .btn-link { background: none; border: none; color: #3498db; cursor: pointer; padding: 0; font-size: 0.9rem; }
   .btn-link:hover { text-decoration: underline; }
   .btn-danger { color: #e74c3c; margin-left: 12px; }
+
+  @media (max-width: 768px) {
+    .settings-layout { grid-template-columns: 128px 1fr; height: 100svh; }
+    .sidebar-header { padding: 16px 12px; }
+    .sidebar-header h1 { margin: 0; font-size: 1rem; }
+    .nav-links { padding: 8px 0; }
+    .nav-links li button { padding: 10px 12px; font-size: 0.85rem; }
+    .content { padding: 18px 14px; }
+    .description { margin-bottom: 20px; }
+  }
 </style>

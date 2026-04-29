@@ -187,9 +187,15 @@ if (!params.get('session_id')) {
 }
 
 const sessionID = params.get('session_id') ? parseInt(params.get('session_id')!, 10) : undefined;
+
+function currentHotkeysViewportWidth(): number {
+  return Math.round(window.visualViewport?.width || window.innerWidth);
+}
+
 let socket = createSocket(sessionID);
 let reconnectTimer: number | null = null;
 let reconnectAttempts = 0;
+let lastHotkeysViewportWidth = currentHotkeysViewportWidth();
 logBoot('socket created', { readyState: socket.readyState, url: socket.url, sessionID });
 
 fetchWithToken('/api/sessions')
@@ -505,9 +511,17 @@ function connectSocket() {
 }
 attachSocketHandlers(socket);
 
-window.addEventListener('resize', () => {
+function rerenderHotkeysForViewportWidth() {
+  const nextWidth = currentHotkeysViewportWidth();
+  if (nextWidth === lastHotkeysViewportWidth) {
+    return;
+  }
+  lastHotkeysViewportWidth = nextWidth;
   renderer.renderHotkeys(configuredHotkeys);
-});
+}
+
+window.addEventListener('resize', rerenderHotkeysForViewportWidth);
+window.visualViewport?.addEventListener('resize', rerenderHotkeysForViewportWidth);
 
 window.addEventListener('keydown', (event) => {
   if (focusInputForTyping(event)) {
