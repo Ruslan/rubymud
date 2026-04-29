@@ -5,7 +5,7 @@ body {
   margin: 0;
   background: #111315;
   color: #e8edf2;
-  font: 16px/1.4 "Fira Code", monospace;
+  font: var(--app-font-size, 16px)/1.4 "Fira Code", monospace;
 }
 
 .app {
@@ -77,6 +77,48 @@ body {
   display: inline-flex;
   align-items: center;
   gap: 10px;
+}
+
+.font-size-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.font-size-btn {
+  min-width: 40px;
+  padding: 2px 8px;
+  border: 1px solid #2a3440;
+  border-radius: 999px;
+  background: #1a2027;
+  color: #b8c4d0;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.font-size-btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.font-size-btn:hover {
+  background: #202833;
+  border-color: #3b4959;
+  color: #e8edf2;
+}
+
+.font-size-btn:disabled:hover {
+  background: #1a2027;
+  border-color: #2a3440;
+  color: #b8c4d0;
+}
+
+.font-size-value {
+  min-width: 38px;
+  color: #97a4b3;
+  font-size: 12px;
+  text-align: center;
 }
 
 .bottom-panels {
@@ -204,6 +246,10 @@ body {
 #connection-status.status-disconnected {
   background: #40242a;
   color: #f7768e;
+}
+
+#connection-status.status-actionable {
+  cursor: pointer;
 }
 
 .ticker {
@@ -529,6 +575,11 @@ body {
 @media (max-width: 640px) {
   .bottom-toolbar {
     flex-wrap: wrap;
+  }
+
+  .bottom-toolbar__meta {
+    width: 100%;
+    justify-content: space-between;
   }
 
   .variable-row {

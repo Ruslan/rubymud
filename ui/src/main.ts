@@ -20,9 +20,63 @@ type WakeLockNavigator = Navigator & {
 };
 
 const wakeLockEnabledStorageKey = 'mudhost.wakeLockEnabled';
+const fontSizeStorageKey = 'mudhost.fontSizePx';
+const defaultFontSize = 16;
+const minFontSize = 6;
+const maxFontSize = 24;
+let currentFontSize = defaultFontSize;
+const fontSizeControls = document.createElement('div');
+fontSizeControls.className = 'font-size-controls';
+fontSizeControls.setAttribute('aria-label', 'Font size controls');
+
+const fontSizeDecreaseButton = document.createElement('button');
+fontSizeDecreaseButton.className = 'font-size-btn';
+fontSizeDecreaseButton.type = 'button';
+fontSizeDecreaseButton.title = 'Decrease font size';
+fontSizeDecreaseButton.textContent = 'A-';
+
+const fontSizeValue = document.createElement('span');
+fontSizeValue.className = 'font-size-value';
+fontSizeValue.textContent = `${defaultFontSize}px`;
+
+const fontSizeIncreaseButton = document.createElement('button');
+fontSizeIncreaseButton.className = 'font-size-btn';
+fontSizeIncreaseButton.type = 'button';
+fontSizeIncreaseButton.title = 'Increase font size';
+fontSizeIncreaseButton.textContent = 'A+';
+
+fontSizeControls.appendChild(fontSizeDecreaseButton);
+fontSizeControls.appendChild(fontSizeValue);
+fontSizeControls.appendChild(fontSizeIncreaseButton);
 
 function isWakeLockEnabled(): boolean {
   return localStorage.getItem(wakeLockEnabledStorageKey) !== 'false';
+}
+
+function clampFontSize(value: number): number {
+  return Math.max(minFontSize, Math.min(maxFontSize, Math.round(value)));
+}
+
+function readFontSize(): number {
+  const stored = Number(localStorage.getItem(fontSizeStorageKey));
+  if (!Number.isFinite(stored)) {
+    return defaultFontSize;
+  }
+
+  return clampFontSize(stored);
+}
+
+function applyFontSize(value: number) {
+  const next = clampFontSize(value);
+  currentFontSize = next;
+  document.documentElement.style.setProperty('--app-font-size', `${next}px`);
+  localStorage.setItem(fontSizeStorageKey, String(next));
+}
+
+function renderFontSizeControls() {
+  fontSizeValue.textContent = `${currentFontSize}px`;
+  fontSizeDecreaseButton.disabled = currentFontSize <= minFontSize;
+  fontSizeIncreaseButton.disabled = currentFontSize >= maxFontSize;
 }
 
 async function releaseWakeLock() {
@@ -50,6 +104,7 @@ function logBoot(stage: string, extra?: unknown) {
 }
 
 logBoot('module start');
+applyFontSize(readFontSize());
 
 const wakeLockNavigator = navigator as WakeLockNavigator;
 let wakeLock: WakeLockSentinelLike | null = null;
@@ -95,6 +150,7 @@ void requestWakeLock();
 
 const elements = getAppElements();
 logBoot('dom elements resolved');
+renderFontSizeControls();
 
 const params = new URLSearchParams(window.location.search);
 
@@ -131,7 +187,9 @@ if (!params.get('session_id')) {
 }
 
 const sessionID = params.get('session_id') ? parseInt(params.get('session_id')!, 10) : undefined;
-const socket = createSocket(sessionID);
+let socket = createSocket(sessionID);
+let reconnectTimer: number | null = null;
+let reconnectAttempts = 0;
 logBoot('socket created', { readyState: socket.readyState, url: socket.url, sessionID });
 
 fetchWithToken('/api/sessions')
@@ -259,6 +317,7 @@ function sendCommand(value: string, source = 'input'): boolean {
 const renderer = createRenderer({
   elements,
   ansiUp,
+  fontSizeControls,
   requestVariables,
   requestGroups,
   toggleGroup,
@@ -268,6 +327,146 @@ const renderer = createRenderer({
 });
 renderer.loadLayout();
 logBoot('renderer initialized');
+
+function clearReconnectTimer() {
+  if (reconnectTimer === null) {
+    return;
+  }
+
+  window.clearTimeout(reconnectTimer);
+  reconnectTimer = null;
+}
+
+function scheduleReconnect() {
+  if (reconnectTimer !== null) {
+    return;
+  }
+
+  const delay = Math.min(1000 * 2 ** reconnectAttempts, 10000);
+  reconnectAttempts += 1;
+  reconnectTimer = window.setTimeout(() => {
+    reconnectTimer = null;
+    connectSocket();
+  }, delay);
+}
+
+function attachSocketHandlers(target: WebSocket) {
+  target.onopen = () => {
+    if (socket !== target) {
+      return;
+    }
+
+    clearReconnectTimer();
+    reconnectAttempts = 0;
+    renderer.updateConnectionStatus('connected');
+    logBoot('socket open');
+    elements.input.focus();
+  };
+
+  target.onmessage = (event) => {
+    if (socket !== target) {
+      return;
+    }
+
+    logBoot('socket message received', { length: event.data.length });
+    const message: ServerMessage = JSON.parse(event.data);
+    logBoot('socket message parsed', { type: message.type });
+
+    if (message.type === 'status') {
+      renderer.updateConnectionStatus(message.status || 'connected');
+    }
+
+    if (message.type === 'restore_begin') {
+      logBoot('restore begin', {
+        history: message.history?.length || 0,
+        hotkeys: message.hotkeys?.length || 0,
+        variables: message.variables?.length || 0,
+        buffers: Object.keys(message.buffers || {}).join(', ') || 'none',
+      });
+      state.restoreInProgress = true;
+      renderer.clearOutput();
+      history.merge(message.history || []);
+      configuredHotkeys = message.hotkeys || [];
+      renderer.renderHotkeys(configuredHotkeys);
+      if (message.timers) {
+        renderer.renderTimers(message.timers);
+      }
+      requestVariables();
+      for (const entries of Object.values(message.buffers || {})) {
+        entries.forEach(renderer.appendEntry);
+      }
+    }
+
+    if (message.type === 'tick' && message.timers) {
+      renderer.renderTimers(message.timers);
+    }
+
+    if (message.type === 'restore_chunk') {
+      logBoot('restore chunk (legacy)', { entries: message.entries?.length || 0 });
+      (message.entries || []).forEach(renderer.appendEntry);
+    }
+
+    if (message.type === 'restore_end') {
+      logBoot('restore end');
+      state.restoreInProgress = false;
+      renderer.scrollOutputToBottom();
+    }
+
+    if (message.type === 'output') {
+      logBoot('output message', { entries: message.entries?.length || 0 });
+      (message.entries || []).forEach(renderer.appendEntry);
+    }
+
+    if (message.type === 'variables') {
+      logBoot('variables message -> fetch resolved');
+      requestVariables();
+    }
+
+    if (message.type === 'settings.changed' && message.settings?.domain === 'variables') {
+      logBoot('settings changed -> request variables');
+      requestVariables();
+    }
+
+    if (message.type === 'command_hint' && message.entry_id && message.command) {
+      logBoot('command hint received', { id: message.entry_id, buffer: message.buffer, cmd: message.command });
+      renderer.addCommandHint(message.entry_id, message.buffer || 'main', message.command);
+    }
+  };
+
+  target.onerror = (event) => {
+    if (socket !== target) {
+      return;
+    }
+
+    logBoot('socket error', event);
+  };
+
+  target.onclose = () => {
+    if (socket !== target) {
+      return;
+    }
+
+    logBoot('socket close', { readyState: target.readyState, reconnectAttempts });
+    renderer.updateConnectionStatus('disconnected');
+    if (reconnectAttempts === 0) {
+      renderer.appendEntry({ text: '[disconnected]' });
+    }
+    scheduleReconnect();
+  };
+}
+
+function connectSocket() {
+  if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+    return;
+  }
+
+  renderer.updateConnectionStatus('connecting');
+  socket = createSocket(sessionID);
+  logBoot('socket reconnect created', { readyState: socket.readyState, url: socket.url, sessionID });
+  attachSocketHandlers(socket);
+}
+
+attachSocketHandlers(socket);
 
 window.addEventListener('keydown', (event) => {
   if (focusInputForTyping(event)) {
@@ -299,6 +498,23 @@ elements.keyboardToggle.addEventListener('click', () => renderer.setActivePanel(
 elements.variablesToggle.addEventListener('click', () => renderer.setActivePanel('variables'));
 elements.groupsToggle.addEventListener('click', () => renderer.setActivePanel('groups'));
 elements.settingsToggle.addEventListener('click', () => window.open('/settings', 'settings'));
+fontSizeDecreaseButton.addEventListener('click', () => {
+  applyFontSize(currentFontSize - 1);
+  renderFontSizeControls();
+});
+fontSizeIncreaseButton.addEventListener('click', () => {
+  applyFontSize(currentFontSize + 1);
+  renderFontSizeControls();
+});
+elements.connectionStatus.addEventListener('click', () => {
+  if (elements.connectionStatus.textContent !== 'disconnected') {
+    return;
+  }
+
+  clearReconnectTimer();
+  reconnectAttempts = 0;
+  connectSocket();
+});
 
 elements.panesContainer.addEventListener('click', (event) => {
   const selection = window.getSelection();
@@ -313,88 +529,6 @@ elements.panesContainer.addEventListener('click', (event) => {
   elements.input.focus();
 });
 logBoot('event listeners attached');
-
-socket.onopen = () => {
-  logBoot('socket open');
-  elements.input.focus();
-};
-
-socket.onmessage = (event) => {
-  logBoot('socket message received', { length: event.data.length });
-  const message: ServerMessage = JSON.parse(event.data);
-  logBoot('socket message parsed', { type: message.type });
-
-  if (message.type === 'status') {
-    renderer.updateConnectionStatus(message.status || 'connected');
-  }
-
-  if (message.type === 'restore_begin') {
-    logBoot('restore begin', {
-      history: message.history?.length || 0,
-      hotkeys: message.hotkeys?.length || 0,
-      variables: message.variables?.length || 0,
-      buffers: Object.keys(message.buffers || {}).join(', ') || 'none',
-    });
-    state.restoreInProgress = true;
-    renderer.clearOutput();
-    history.merge(message.history || []);
-    configuredHotkeys = message.hotkeys || [];
-    renderer.renderHotkeys(configuredHotkeys);
-    if (message.timers) {
-      renderer.renderTimers(message.timers);
-    }
-    requestVariables();
-    for (const entries of Object.values(message.buffers || {})) {
-      entries.forEach(renderer.appendEntry);
-    }
-  }
-
-  if (message.type === 'tick' && message.timers) {
-    renderer.renderTimers(message.timers);
-  }
-
-  if (message.type === 'restore_chunk') {
-    // Legacy fallback: server no longer sends chunks, but handle gracefully.
-    logBoot('restore chunk (legacy)', { entries: message.entries?.length || 0 });
-    (message.entries || []).forEach(renderer.appendEntry);
-  }
-
-  if (message.type === 'restore_end') {
-    logBoot('restore end');
-    state.restoreInProgress = false;
-    renderer.scrollOutputToBottom();
-  }
-
-  if (message.type === 'output') {
-    logBoot('output message', { entries: message.entries?.length || 0 });
-    (message.entries || []).forEach(renderer.appendEntry);
-  }
-
-  if (message.type === 'variables') {
-    logBoot('variables message -> fetch resolved');
-    requestVariables();
-  }
-
-  if (message.type === 'settings.changed' && message.settings?.domain === 'variables') {
-    logBoot('settings changed -> request variables');
-    requestVariables();
-  }
-
-  if (message.type === 'command_hint' && message.entry_id && message.command) {
-    logBoot('command hint received', { id: message.entry_id, buffer: message.buffer, cmd: message.command });
-    renderer.addCommandHint(message.entry_id, message.buffer || 'main', message.command);
-  }
-};
-
-socket.onerror = (event) => {
-  logBoot('socket error', event);
-};
-
-socket.onclose = () => {
-  logBoot('socket close', { readyState: socket.readyState });
-  renderer.updateConnectionStatus('disconnected');
-  renderer.appendEntry({ text: '[disconnected]' });
-};
 
 window.addEventListener('focus', () => {
   logBoot('window focus -> request variables');

@@ -12,6 +12,7 @@ interface RendererState {
 interface RendererDeps {
   elements: AppElements;
   ansiUp: AnsiUp;
+  fontSizeControls?: HTMLElement;
   sendCommand: (value: string, source: string) => boolean;
   requestVariables: () => void;
   requestGroups: () => void;
@@ -47,7 +48,7 @@ interface RenderedPane {
   ansiUp: AnsiUp;
 }
 
-export function createRenderer({ elements, ansiUp, sendCommand, requestVariables, requestGroups, toggleGroup, onButtonRendered, state }: RendererDeps) {
+export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand, requestVariables, requestGroups, toggleGroup, onButtonRendered, state }: RendererDeps) {
   let nextId = 0;
   const generateId = (prefix: string) => `${prefix}-${++nextId}`;
 
@@ -134,6 +135,11 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
       renderPaneBuffer(node.id);
     });
     headerEl.appendChild(selectEl);
+
+    const isTopLeftPane = layout.columns[0]?.panes[0]?.id === node.id;
+    if (fontSizeControls && isTopLeftPane) {
+      headerEl.appendChild(fontSizeControls);
+    }
 
     const actionsEl = document.createElement('div');
     actionsEl.className = 'pane-actions';
@@ -562,6 +568,8 @@ export function createRenderer({ elements, ansiUp, sendCommand, requestVariables
     elements.connectionStatus.textContent = status;
     elements.connectionStatus.classList.toggle('status-connected', status === 'connected');
     elements.connectionStatus.classList.toggle('status-disconnected', status === 'disconnected');
+    elements.connectionStatus.classList.toggle('status-actionable', status === 'disconnected');
+    elements.connectionStatus.title = status === 'disconnected' ? 'Reconnect' : '';
   }
 
   let activeTimers: TimerSnapshot[] = [];
