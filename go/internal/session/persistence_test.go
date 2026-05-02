@@ -283,6 +283,7 @@ func (m *mockTimerControlWithAdjust) TickSet(name string, seconds float64) { m.s
 func (m *mockTimerControlWithAdjust) TickSize(name string, seconds float64) { m.size = name; m.sizeVal = seconds }
 func (m *mockTimerControlWithAdjust) TickIcon(name string, icon string) { m.iconName = name; m.icon = icon }
 func (m *mockTimerControlWithAdjust) TickAdjust(name string, delta float64) { m.adjName = name; m.adjVal = delta }
+func (m *mockTimerControlWithAdjust) TickMode(name string, mode string)    {}
 func (m *mockTimerControlWithAdjust) SubscribeTimer(name string, second int, command string) {
 	m.subName = name
 	m.subSec = second

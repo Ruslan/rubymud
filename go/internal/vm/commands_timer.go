@@ -299,6 +299,42 @@ func (v *VM) cmdTickIcon(rest string) []Result {
 	return nil
 }
 
+func (v *VM) cmdTickMode(rest string) []Result {
+	if v.timerCtrl == nil {
+		return nil
+	}
+
+	arg1, after1 := splitBraceArg(rest)
+	arg2, remaining := splitBraceArg(strings.TrimSpace(after1))
+
+	if arg1 == "" || strings.TrimSpace(remaining) != "" {
+		return echoResults([]string{"#tickmode: usage: #tickmode [{name}] {repeating|one_shot}"})
+	}
+
+	var name string
+	var mode string
+
+	if strings.TrimSpace(after1) != "" {
+		// Named form: #tickmode {name} {mode}
+		if !isValidTimerName(arg1) {
+			return echoResults([]string{fmt.Sprintf("#tickmode: invalid timer name %q", arg1)})
+		}
+		name = arg1
+		mode = arg2
+	} else {
+		// Single argument form: #tickmode {mode} (for default ticker)
+		name = "ticker"
+		mode = arg1
+	}
+
+	if mode != "repeating" && mode != "one_shot" {
+		return echoResults([]string{"#tickmode: mode must be 'repeating' or 'one_shot'"})
+	}
+
+	v.timerCtrl.TickMode(name, mode)
+	return nil
+}
+
 func (v *VM) cmdTicker(rest string) []Result {
 	if v.timerCtrl == nil {
 		return nil

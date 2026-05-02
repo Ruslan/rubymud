@@ -7,7 +7,7 @@ Make timer configuration safer, more portable, and less entangled with live sess
 1. preventing accidental exact duplicate subscriptions
 2. splitting timer declaration from timer runtime state
 3. adding profile export/import support for timer declarations
-4. making multi-profile timer declarations behave like ordered override layers
+4. preparing timer declarations so layered multi-profile behavior can be added cleanly in `0.0.8.6`
 
 ---
 
@@ -164,7 +164,18 @@ This is especially important for timers such as long buffs where the player want
 Named timer declarations should also support a one-shot mode.
 This allows a visible non-repeating timer object, distinct from `#delay`, for cases such as long buffs or cooldowns where the player wants visible UI state but no automatic repeat after expiry.
 
-### Multi-Profile Merge Semantics
+### Deferred to `0.0.8.6`: Multi-Profile Merge Semantics
+
+The behavior below was originally considered for `0.0.8.5`, but is deferred to `0.0.8.6` to keep this release smaller and safer.
+
+`0.0.8.5` should stop at:
+
+1. declaration/runtime split
+2. exact duplicate dedupe
+3. named timer startup from declaration
+4. declaration-only import/export
+
+Actual multi-profile timer layering, exact layered unsubscribe, and resolved declaration merge semantics belong to `0.0.8.6`.
 
 Timer declarations from multiple active profiles should be applied in profile order, as override layers.
 
@@ -259,9 +270,9 @@ The likely direction for now:
 7. `#tickon {name}` can start a named timer from declaration alone when its cycle is already declared
 8. profile export includes timer declaration (`#ticksize`, `#tickat`, `#tickicon`) in a stable, re-importable form
 9. profile import restores exported timer declaration without restoring runtime phase or one-shot delays
-10. multi-profile timer declaration layering uses later-profile override for scalar fields and sequential merge for subscriptions
-11. exact-removal `#untickat {name} {second} {command}` works for declaration/import layering cases
+10. multi-profile timer declaration layering is explicitly deferred to `0.0.8.6`
+11. exact-removal `#untickat {name} {second} {command}` is explicitly deferred to `0.0.8.6`
 12. timer declarations are stored profile-scoped, while live timer runtime remains session-scoped
 13. import/export preserves command order for multiple subscriptions on the same timer second
 14. importing a profile does not auto-restore current remaining time or unexpectedly resume old timer phase
-15. user-facing docs mention exact-duplicate dedupe behavior, declaration/runtime boundaries, and multi-profile override semantics
+15. user-facing docs mention exact-duplicate dedupe behavior, declaration/runtime boundaries, and that multi-profile timer layering is deferred to `0.0.8.6`

@@ -123,6 +123,7 @@ type TimerRecord struct {
 	RemainingMS int         `gorm:"column:remaining_ms"`
 	Enabled     bool        `gorm:"column:enabled"`
 	Icon        string      `gorm:"column:icon"`
+	RepeatMode  string      `gorm:"column:repeat_mode" json:"repeat_mode"`
 }
 
 func (TimerRecord) TableName() string {
@@ -139,6 +140,30 @@ type TimerSubscriptionRecord struct {
 
 func (TimerSubscriptionRecord) TableName() string {
 	return "timer_subscriptions"
+}
+
+type ProfileTimer struct {
+	ProfileID  int64  `gorm:"primaryKey" json:"profile_id"`
+	Name       string `gorm:"primaryKey" json:"name"`
+	Icon       string `json:"icon"`
+	CycleMS    int    `gorm:"column:cycle_ms" json:"cycle_ms"`
+	RepeatMode string `gorm:"column:repeat_mode" json:"repeat_mode"`
+}
+
+func (ProfileTimer) TableName() string {
+	return "profile_timers"
+}
+
+type ProfileTimerSubscription struct {
+	ProfileID int64  `gorm:"primaryKey" json:"profile_id"`
+	TimerName string `gorm:"primaryKey" json:"timer_name"`
+	Second    int    `gorm:"primaryKey" json:"second"`
+	SortOrder int    `gorm:"primaryKey" json:"sort_order"`
+	Command   string `json:"command"`
+}
+
+func (ProfileTimerSubscription) TableName() string {
+	return "profile_timer_subscriptions"
 }
 
 

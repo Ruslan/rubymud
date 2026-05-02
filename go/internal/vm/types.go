@@ -48,6 +48,7 @@ type TimerControl interface {
 	TickSize(name string, seconds float64)
 	TickIcon(name string, icon string)
 	TickAdjust(name string, deltaSeconds float64)
+	TickMode(name string, mode string)
 	SubscribeTimer(name string, second int, command string)
 	UnsubscribeTimer(name string, second int)
 	ScheduleDelay(id string, seconds float64, command string) error

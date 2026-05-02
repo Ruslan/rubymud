@@ -175,15 +175,56 @@ func (s *Session) BroadcastTick() {
 func (s *Session) TickOn(name string) {
 	s.timersMu.Lock()
 	defer s.timersMu.Unlock()
-	t, ok := s.timers[name]
-	if !ok {
-		t = NewTimer(name, 60*time.Second)
-		s.timers[name] = t
-	}
+	t := s.ensureTimer(name)
 	if t.On() {
 		s.BroadcastTick()
 		s.persistTimer(t)
 	}
+}
+
+func (s *Session) ensureTimer(name string) *Timer {
+	t, ok := s.timers[name]
+	if ok {
+		return t
+	}
+
+	// Try to load from declaration if it's a named timer
+	if name != "ticker" && s.store != nil {
+		profileID, err := s.store.GetPrimaryProfileID(s.sessionID)
+		if err == nil {
+			decls, err := s.store.GetProfileTimers(profileID)
+			if err == nil {
+				for _, d := range decls {
+					if d.Name == name {
+						t = NewTimer(name, time.Duration(d.CycleMS)*time.Millisecond)
+						t.Icon = d.Icon
+						t.RepeatMode = d.RepeatMode
+						if t.RepeatMode == "" {
+							t.RepeatMode = "repeating"
+						}
+
+						// Also load subscriptions
+						subs, err := s.store.GetProfileTimerSubscriptions(profileID, name)
+						if err == nil {
+							for _, sub := range subs {
+								t.Subscriptions[sub.Second] = append(t.Subscriptions[sub.Second], sub.Command)
+							}
+						}
+
+						s.timers[name] = t
+						s.persistTimer(t)
+						s.persistSubscriptions(t)
+						return t
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback to default auto-create
+	t = NewTimer(name, 60*time.Second)
+	s.timers[name] = t
+	return t
 }
 
 func (s *Session) TickOff(name string) {
@@ -200,22 +241,17 @@ func (s *Session) TickOff(name string) {
 func (s *Session) TickReset(name string) {
 	s.timersMu.Lock()
 	defer s.timersMu.Unlock()
-	if t, ok := s.timers[name]; ok {
-		if t.Reset() {
-			s.BroadcastTick()
-			s.persistTimer(t)
-		}
+	t := s.ensureTimer(name)
+	if t.Reset() {
+		s.BroadcastTick()
+		s.persistTimer(t)
 	}
 }
 
 func (s *Session) TickSet(name string, seconds float64) {
 	s.timersMu.Lock()
 	defer s.timersMu.Unlock()
-	t, ok := s.timers[name]
-	if !ok {
-		t = NewTimer(name, time.Duration(seconds*float64(time.Second)))
-		s.timers[name] = t
-	}
+	t := s.ensureTimer(name)
 	if t.Set(time.Duration(seconds * float64(time.Second))) {
 		s.BroadcastTick()
 		s.persistTimer(t)
@@ -225,45 +261,123 @@ func (s *Session) TickSet(name string, seconds float64) {
 func (s *Session) TickSize(name string, seconds float64) {
 	s.timersMu.Lock()
 	defer s.timersMu.Unlock()
-	t, ok := s.timers[name]
-	if !ok {
-		t = NewTimer(name, time.Duration(seconds*float64(time.Second)))
-		s.timers[name] = t
-	}
+	t := s.ensureTimer(name)
 	if t.Size(time.Duration(seconds * float64(time.Second))) {
 		s.BroadcastTick()
 		s.persistTimer(t)
+		s.persistProfileTimerDeclaration(t)
 	}
 }
 
 func (s *Session) TickIcon(name string, icon string) {
 	s.timersMu.Lock()
 	defer s.timersMu.Unlock()
-	t, ok := s.timers[name]
-	if !ok {
-		t = NewTimer(name, 60*time.Second)
-		s.timers[name] = t
-	}
+	t := s.ensureTimer(name)
 	t.SetIcon(icon)
 	s.BroadcastTick()
 	s.persistTimer(t)
+	s.persistProfileTimerDeclaration(t)
+}
+
+func (s *Session) TickMode(name string, mode string) {
+	s.timersMu.Lock()
+	defer s.timersMu.Unlock()
+	t := s.ensureTimer(name)
+	t.mu.Lock()
+	t.RepeatMode = mode
+	t.mu.Unlock()
+	s.BroadcastTick()
+	s.persistTimer(t)
+	s.persistProfileTimerDeclaration(t)
+}
+
+func (s *Session) persistProfileTimerDeclaration(t *Timer) {
+	if t.Name == "ticker" || s.store == nil {
+		return
+	}
+	profileID, err := s.store.GetPrimaryProfileID(s.sessionID)
+	if err != nil {
+		return
+	}
+	timerDecl := storage.ProfileTimer{
+		ProfileID:  profileID,
+		Name:       t.Name,
+		CycleMS:    t.CycleMS,
+		Icon:       t.Icon,
+		RepeatMode: t.RepeatMode,
+	}
+	if timerDecl.RepeatMode == "" {
+		timerDecl.RepeatMode = "repeating"
+	}
+	if err := s.store.SaveProfileTimer(timerDecl); err != nil {
+		log.Printf("failed to persist profile timer declaration %q: %v", t.Name, err)
+	}
 }
 
 func (s *Session) SubscribeTimer(name string, second int, command string) {
 	s.timersMu.Lock()
 	defer s.timersMu.Unlock()
-	t, ok := s.timers[name]
-	if !ok {
-		t = NewTimer(name, 60*time.Second)
-		s.timers[name] = t
-	}
+	t := s.ensureTimer(name)
 
 	t.mu.Lock()
-	t.Subscriptions[second] = append(t.Subscriptions[second], command)
+	// Deduplicate: check if command already exists for this second
+	exists := false
+	for _, existing := range t.Subscriptions[second] {
+		if existing == command {
+			exists = true
+			break
+		}
+	}
+	if !exists {
+		t.Subscriptions[second] = append(t.Subscriptions[second], command)
+	}
 	t.mu.Unlock()
 
 	s.persistSubscriptions(t)
 	s.persistTimer(t)
+
+	if name != "ticker" {
+		s.persistProfileTimerDeclaration(t)
+		s.persistProfileTimerSubscriptions(t)
+	}
+}
+
+func (s *Session) persistProfileTimerSubscriptions(t *Timer) {
+	if t.Name == "ticker" || s.store == nil {
+		return
+	}
+	profileID, err := s.store.GetPrimaryProfileID(s.sessionID)
+	if err != nil {
+		return
+	}
+
+	t.mu.Lock()
+	subsCopy := make(map[int][]string)
+	for k, v := range t.Subscriptions {
+		subsCopy[k] = append([]string{}, v...)
+	}
+	t.mu.Unlock()
+
+	s.store.Transaction(func(store *storage.Store) error {
+		if err := store.ClearProfileTimerSubscriptions(profileID, t.Name); err != nil {
+			return err
+		}
+		for second, commands := range subsCopy {
+			for i, cmd := range commands {
+				sub := storage.ProfileTimerSubscription{
+					ProfileID: profileID,
+					TimerName: t.Name,
+					Second:    second,
+					SortOrder: i,
+					Command:   cmd,
+				}
+				if err := store.SaveProfileTimerSubscription(sub); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
 }
 
 func (s *Session) UnsubscribeTimer(name string, second int) {
@@ -276,6 +390,10 @@ func (s *Session) UnsubscribeTimer(name string, second int) {
 
 		s.persistSubscriptions(t)
 		s.persistTimer(t)
+
+		if name != "ticker" {
+			s.persistProfileTimerSubscriptions(t)
+		}
 	}
 }
 
@@ -314,8 +432,10 @@ func (s *Session) CancelDelay(id string) {
 
 func (s *Session) GetTimerCycleSeconds(name string) int {
 	s.timersMu.Lock()
-	defer s.timersMu.Unlock()
-	if t, ok := s.timers[name]; ok {
+	t, ok := s.timers[name]
+	s.timersMu.Unlock()
+
+	if ok {
 		t.mu.Lock()
 		defer t.mu.Unlock()
 		cycle := int(t.Cycle.Seconds())
@@ -324,17 +444,25 @@ func (s *Session) GetTimerCycleSeconds(name string) int {
 		}
 		return cycle
 	}
+
+	// Not in runtime, check declaration
+	if name != "ticker" && s.store != nil {
+		profileID, err := s.store.GetPrimaryProfileID(s.sessionID)
+		if err == nil {
+			d, err := s.store.GetProfileTimer(profileID, name)
+			if err == nil {
+				return d.CycleMS / 1000
+			}
+		}
+	}
+
 	return 60 // Default cycle for any unknown named timer
 }
 
 func (s *Session) TickAdjust(name string, deltaSeconds float64) {
 	s.timersMu.Lock()
 	defer s.timersMu.Unlock()
-	t, ok := s.timers[name]
-	if !ok {
-		t = NewTimer(name, 60*time.Second)
-		s.timers[name] = t
-	}
+	t := s.ensureTimer(name)
 	if t.Adjust(deltaSeconds) {
 		s.BroadcastTick()
 		s.persistTimer(t)
@@ -354,6 +482,7 @@ func (s *Session) persistTimer(t *Timer) {
 		RemainingMS: snapshot.RemainingMS,
 		Enabled:     snapshot.Enabled,
 		Icon:        snapshot.Icon,
+		RepeatMode:  snapshot.RepeatMode,
 	}
 
 	if snapshot.Enabled && snapshot.CycleMS > 0 {
@@ -447,6 +576,10 @@ func (s *Session) restoreTimers() {
 		t.Enabled = enabled
 		t.Icon = rt.Icon
 		t.RemainingMS = rt.RemainingMS
+		t.RepeatMode = rt.RepeatMode
+		if t.RepeatMode == "" {
+			t.RepeatMode = "repeating"
+		}
 
 		if enabled && rt.NextTickAt != nil {
 			nextAt := rt.NextTickAt.Time
@@ -454,16 +587,21 @@ func (s *Session) restoreTimers() {
 
 			if now.After(nextAt) {
 				// Timer was running while server was down
-				elapsed := now.Sub(nextAt)
-				cycle := time.Duration(cycleMS) * time.Millisecond
-				if cycle > 0 {
-					// Recalculate phase: remaining = cycle - (elapsed % cycle)
-					rem := cycle - (elapsed % cycle)
-					t.NextTickAt = now.Add(rem)
-					t.RemainingMS = int(rem.Milliseconds())
-				} else {
+				if rt.RepeatMode == "one_shot" {
 					t.Enabled = false
 					t.RemainingMS = 0
+				} else {
+					elapsed := now.Sub(nextAt)
+					cycle := time.Duration(cycleMS) * time.Millisecond
+					if cycle > 0 {
+						// Recalculate phase: remaining = cycle - (elapsed % cycle)
+						rem := cycle - (elapsed % cycle)
+						t.NextTickAt = now.Add(rem)
+						t.RemainingMS = int(rem.Milliseconds())
+					} else {
+						t.Enabled = false
+						t.RemainingMS = 0
+					}
 				}
 			} else {
 				t.NextTickAt = nextAt

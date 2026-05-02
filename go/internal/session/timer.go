@@ -15,6 +15,7 @@ type Timer struct {
 	Subscriptions map[int][]string `json:"-"`
 	Icon          string           `json:"icon"`
 	RemainingMS   int              `json:"remaining_ms"` // Paused or last known remaining time
+	RepeatMode    string           `json:"repeat_mode"`  // "repeating" or "one_shot"
 	mu            sync.Mutex
 }
 
@@ -25,6 +26,7 @@ type TimerSnapshot struct {
 	NextTickAt  time.Time `json:"next_tick_at"`
 	Icon        string    `json:"icon"`
 	RemainingMS int       `json:"remaining_ms"`
+	RepeatMode  string    `json:"repeat_mode"`
 }
 
 func NewTimer(name string, cycle time.Duration) *Timer {
@@ -33,6 +35,7 @@ func NewTimer(name string, cycle time.Duration) *Timer {
 		Cycle:         cycle,
 		CycleMS:       int(cycle.Milliseconds()),
 		Subscriptions: make(map[int][]string),
+		RepeatMode:    "repeating",
 	}
 }
 
@@ -95,6 +98,7 @@ func (t *Timer) Snapshot() TimerSnapshot {
 		NextTickAt:  t.NextTickAt,
 		Icon:        t.Icon,
 		RemainingMS: remMS,
+		RepeatMode:  t.RepeatMode,
 	}
 }
 
@@ -240,9 +244,14 @@ func (t *Timer) Check() bool {
 		return false
 	}
 	if time.Now().After(t.NextTickAt) {
-		t.NextTickAt = time.Now().Add(t.Cycle)
-		// Update RemainingMS for snapshot consistency
-		t.RemainingMS = t.CycleMS
+		if t.RepeatMode == "one_shot" {
+			t.Enabled = false
+			t.RemainingMS = 0
+		} else {
+			t.NextTickAt = time.Now().Add(t.Cycle)
+			// Update RemainingMS for snapshot consistency
+			t.RemainingMS = t.CycleMS
+		}
 		return true
 	}
 	return false

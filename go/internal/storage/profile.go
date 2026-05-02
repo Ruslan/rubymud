@@ -62,6 +62,12 @@ func (s *Store) DeleteProfile(id int64) error {
 		if err := tx.Where("profile_id = ?", id).Delete(&HotkeyRule{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("profile_id = ?", id).Delete(&ProfileTimerSubscription{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("profile_id = ?", id).Delete(&ProfileTimer{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("profile_id = ?", id).Delete(&SessionProfile{}).Error; err != nil {
 			return err
 		}

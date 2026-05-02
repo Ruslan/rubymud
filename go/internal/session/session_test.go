@@ -172,6 +172,7 @@ func newTestStore(t *testing.T) *storage.Store {
 		&storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{}, &storage.ProfileVariable{},
 		&storage.LogRecord{}, &storage.LogOverlay{}, &storage.HistoryEntry{},
 		&storage.TimerRecord{}, &storage.TimerSubscriptionRecord{},
+		&storage.ProfileTimer{}, &storage.ProfileTimerSubscription{},
 	)
 	if err != nil {
 		t.Fatalf("AutoMigrate: %v", err)

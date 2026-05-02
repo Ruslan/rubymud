@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -19,6 +20,8 @@ type ProfileScript struct {
 	Highlights        []HighlightRule
 	Hotkeys           []HotkeyRule
 	DeclaredVariables []ProfileVariable
+	Timers            []ProfileTimer
+	Subscriptions     []ProfileTimerSubscription
 }
 
 func splitBraceArg(s string) (string, string) {
@@ -178,6 +181,34 @@ func (s *Store) ExportProfileScript(profileID int64) (string, error) {
 		sb.WriteString("\n")
 	}
 
+	timers, _ := s.GetProfileTimers(profileID)
+	if len(timers) > 0 {
+		// Stable order by name
+		sort.Slice(timers, func(i, j int) bool {
+			return timers[i].Name < timers[j].Name
+		})
+
+		for _, t := range timers {
+			if t.Name == "ticker" {
+				continue
+			}
+			if t.Icon != "" {
+				sb.WriteString(fmt.Sprintf("#tickicon {%s} {%s}\n", t.Name, t.Icon))
+			}
+			if t.CycleMS > 0 {
+				sb.WriteString(fmt.Sprintf("#ticksize {%s} {%g}\n", t.Name, float64(t.CycleMS)/1000.0))
+			}
+			if t.RepeatMode == "one_shot" {
+				sb.WriteString(fmt.Sprintf("#tickmode {%s} {one_shot}\n", t.Name))
+			}
+			subs, _ := s.GetProfileTimerSubscriptions(profileID, t.Name)
+			for _, sub := range subs {
+				sb.WriteString(fmt.Sprintf("#tickat {%s} {%d} {%s}\n", t.Name, sub.Second, sub.Command))
+			}
+			sb.WriteString("\n")
+		}
+	}
+
 	return sb.String(), nil
 }
 
@@ -192,6 +223,20 @@ func ParseProfileScript(text string) (*ProfileScript, error) {
 	hlPos := 1
 	hkPos := 1
 	varPos := 1
+
+	ensurePSTimer := func(name string) *ProfileTimer {
+		for i := range ps.Timers {
+			if ps.Timers[i].Name == name {
+				return &ps.Timers[i]
+			}
+		}
+		ps.Timers = append(ps.Timers, ProfileTimer{
+			Name:       name,
+			CycleMS:    60000,
+			RepeatMode: "repeating",
+		})
+		return &ps.Timers[len(ps.Timers)-1]
+	}
 
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
@@ -385,8 +430,78 @@ func ParseProfileScript(text string) (*ProfileScript, error) {
 				varPos++
 			}
 			pendingMeta = nil
+		} else if strings.HasPrefix(line, "#tickicon ") {
+			rest := strings.TrimSpace(strings.TrimPrefix(line, "#tickicon "))
+			name, rest := splitBraceArg(rest)
+			icon, _ := splitBraceArg(rest)
+			if name != "" && name != "ticker" {
+				t := ensurePSTimer(name)
+				t.Icon = icon
+			}
+			pendingMeta = nil
+		} else if strings.HasPrefix(line, "#ticksize ") {
+			rest := strings.TrimSpace(strings.TrimPrefix(line, "#ticksize "))
+			name, rest := splitBraceArg(rest)
+			secondsStr, _ := splitBraceArg(rest)
+			if name != "" && name != "ticker" {
+				var s float64
+				n, err := fmt.Sscanf(secondsStr, "%f", &s)
+				if n != 1 || err != nil {
+					return nil, fmt.Errorf("invalid #ticksize for %q: %q", name, secondsStr)
+				}
+				if s <= 0 {
+					return nil, fmt.Errorf("invalid #ticksize for %q: cycle must be positive", name)
+				}
+				t := ensurePSTimer(name)
+				t.CycleMS = int(s * 1000)
+			}
+			pendingMeta = nil
+		} else if strings.HasPrefix(line, "#tickmode ") {
+			rest := strings.TrimSpace(strings.TrimPrefix(line, "#tickmode "))
+			name, rest := splitBraceArg(rest)
+			mode, _ := splitBraceArg(rest)
+			if name != "" && name != "ticker" {
+				if mode == "repeating" || mode == "one_shot" {
+					t := ensurePSTimer(name)
+					t.RepeatMode = mode
+				} else {
+					return nil, fmt.Errorf("invalid #tickmode for %q: %q", name, mode)
+				}
+			}
+			pendingMeta = nil
+		} else if strings.HasPrefix(line, "#tickat ") {
+			rest := strings.TrimSpace(strings.TrimPrefix(line, "#tickat "))
+			name, rest := splitBraceArg(rest)
+			secondStr, rest := splitBraceArg(rest)
+			command, _ := splitBraceArg(rest)
+
+			if name != "" && name != "ticker" && secondStr != "" && command != "" {
+				var second int
+				n, err := fmt.Sscanf(secondStr, "%d", &second)
+				if n != 1 || err != nil {
+					return nil, fmt.Errorf("invalid #tickat for %q: invalid second %q", name, secondStr)
+				}
+				
+				// Add subscription
+				ps.Subscriptions = append(ps.Subscriptions, ProfileTimerSubscription{
+					TimerName: name,
+					Second:    second,
+					Command:   command,
+				})
+			}
+			pendingMeta = nil
 		}
 	}
+
+	// Final validation pass: ensure all subscriptions are within range of declared cycles
+	for _, sub := range ps.Subscriptions {
+		t := ensurePSTimer(sub.TimerName)
+		maxSec := t.CycleMS / 1000
+		if sub.Second < 0 || sub.Second > maxSec {
+			return nil, fmt.Errorf("invalid #tickat for %q: second %d is out of range (max %d)", sub.TimerName, sub.Second, maxSec)
+		}
+	}
+
 	return ps, nil
 }
 
@@ -437,6 +552,12 @@ func (s *Store) ImportProfileScript(ps *ProfileScript) (Profile, error) {
 		if err := tx.Where("profile_id = ?", p.ID).Delete(&ProfileVariable{}).Error; err != nil {
 			return Profile{}, err
 		}
+		if err := tx.Where("profile_id = ?", p.ID).Delete(&ProfileTimerSubscription{}).Error; err != nil {
+			return Profile{}, err
+		}
+		if err := tx.Where("profile_id = ?", p.ID).Delete(&ProfileTimer{}).Error; err != nil {
+			return Profile{}, err
+		}
 	}
 
 	for _, dv := range ps.DeclaredVariables {
@@ -470,6 +591,30 @@ func (s *Store) ImportProfileScript(ps *ProfileScript) (Profile, error) {
 	for _, hk := range ps.Hotkeys {
 		hk.ProfileID = p.ID
 		if err := tx.Create(&hk).Error; err != nil {
+			return Profile{}, err
+		}
+	}
+
+	for _, t := range ps.Timers {
+		t.ProfileID = p.ID
+		if err := tx.Create(&t).Error; err != nil {
+			return Profile{}, err
+		}
+	}
+	// Track sort order per timer/second to allow multiple commands per second
+	type timerSec struct {
+		name   string
+		second int
+	}
+	orders := make(map[timerSec]int)
+
+	for _, sub := range ps.Subscriptions {
+		sub.ProfileID = p.ID
+		key := timerSec{sub.TimerName, sub.Second}
+		sub.SortOrder = orders[key]
+		orders[key]++
+
+		if err := tx.Create(&sub).Error; err != nil {
 			return Profile{}, err
 		}
 	}
