@@ -72,12 +72,12 @@ func TestTimerDeclarationWiring(t *testing.T) {
 
 	// 1. named #tickat on a not-yet-started timer creates declaration
 	v.ProcessInputDetailed("#tickat {herb} {5} {say herb 5}")
-	
+
 	decls, _ := store.GetProfileTimers(profile.ID)
 	if len(decls) != 1 || decls[0].Name != "herb" {
 		t.Fatalf("expected 'herb' timer declaration, got %v", decls)
 	}
-	
+
 	subs, _ := store.GetProfileTimerSubscriptions(profile.ID, "herb")
 	if len(subs) != 1 || subs[0].Command != "say herb 5" {
 		t.Errorf("expected subscription declaration, got %v", subs)
@@ -89,7 +89,7 @@ func TestTimerDeclarationWiring(t *testing.T) {
 	if len(subs) != 1 {
 		t.Errorf("expected no duplicate subscription in declaration, got %d", len(subs))
 	}
-	
+
 	// Also check memory state
 	tHerb := s.timers["herb"]
 	tHerb.mu.Lock()
@@ -108,7 +108,7 @@ func TestTimerDeclarationWiring(t *testing.T) {
 	// 4. repeated identical #ticker does not duplicate second 0 command
 	v.ProcessInputDetailed("#ticker {buff} {10} {say buffing}")
 	v.ProcessInputDetailed("#ticker {buff} {10} {say buffing}")
-	
+
 	subs, _ = store.GetProfileTimerSubscriptions(profile.ID, "buff")
 	count0 := 0
 	for _, sub := range subs {
@@ -123,7 +123,7 @@ func TestTimerDeclarationWiring(t *testing.T) {
 	// 5. named #tickicon and #ticksize create/update declaration for missing timer
 	v.ProcessInputDetailed("#tickicon {gold} {💰}")
 	v.ProcessInputDetailed("#ticksize {gold} {120}")
-	
+
 	decls, _ = store.GetProfileTimers(profile.ID)
 	foundGold := false
 	for _, d := range decls {
@@ -207,17 +207,17 @@ func TestTimerDeclarationWiring(t *testing.T) {
 	v.ProcessInputDetailed("#ticksize {once} {1}")
 	v.ProcessInputDetailed("#tickmode {once} {one_shot}")
 	v.ProcessInputDetailed("#tickon {once}")
-	
+
 	tOnce := s.timers["once"]
 	if tOnce.RepeatMode != "one_shot" {
 		t.Errorf("expected one_shot mode, got %q", tOnce.RepeatMode)
 	}
-	
+
 	// Fast-forward time
 	tOnce.mu.Lock()
 	tOnce.NextTickAt = time.Now().Add(-100 * time.Millisecond)
 	tOnce.mu.Unlock()
-	
+
 	if !tOnce.Check() {
 		t.Error("expected timer to fire")
 	}
@@ -229,12 +229,12 @@ func TestTimerDeclarationWiring(t *testing.T) {
 	v.ProcessInputDetailed("#ticksize {rep} {1}")
 	v.ProcessInputDetailed("#tickmode {rep} {repeating}")
 	v.ProcessInputDetailed("#tickon {rep}")
-	
+
 	tRep := s.timers["rep"]
 	tRep.mu.Lock()
 	tRep.NextTickAt = time.Now().Add(-100 * time.Millisecond)
 	tRep.mu.Unlock()
-	
+
 	if !tRep.Check() {
 		t.Error("expected timer to fire")
 	}
@@ -255,7 +255,7 @@ func TestTimerDeclarationWiring(t *testing.T) {
 	// 11. round-trip one-shot declaration
 	v.ProcessInputDetailed("#ticksize {rtonce} {30}")
 	v.ProcessInputDetailed("#tickmode {rtonce} {one_shot}")
-	
+
 	// Verify declaration in storage
 	decls, _ = store.GetProfileTimers(profile.ID)
 	foundRT := false
@@ -291,13 +291,13 @@ func TestTimerDeclarationWiring(t *testing.T) {
 		ProfileID: profile.ID, Name: "shorty", CycleMS: 30000, RepeatMode: "repeating",
 	})
 	delete(s.timers, "shorty") // Ensure not in runtime
-	
+
 	// Should fail (50 > 30)
 	res := v.ProcessInputDetailed("#tickat {shorty} {50} {say fail}")
 	if len(res) == 0 || res[0].Kind != vm.ResultEcho || !strings.Contains(res[0].Text, "out of range") {
 		t.Errorf("expected out of range diagnostic, got %v", res)
 	}
-	
+
 	// Should succeed (20 < 30)
 	res = v.ProcessInputDetailed("#tickat {shorty} {20} {say ok}")
 	if len(res) != 0 && res[0].Kind == vm.ResultEcho {
@@ -310,10 +310,10 @@ func TestTimerDeclarationWiring(t *testing.T) {
 	store.SaveTimer(storage.TimerRecord{
 		SessionID: 1, Name: "past_once", CycleMS: 10000, Enabled: true, RepeatMode: "one_shot", NextTickAt: &pastSQL,
 	})
-	
+
 	s2 := &Session{sessionID: 1, store: store, timers: make(map[string]*Timer)}
 	s2.restoreTimers()
-	
+
 	tOncePast := s2.timers["past_once"]
 	if tOncePast == nil {
 		t.Fatal("past_once not restored")
@@ -326,10 +326,10 @@ func TestTimerDeclarationWiring(t *testing.T) {
 	store.SaveTimer(storage.TimerRecord{
 		SessionID: 1, Name: "past_rep", CycleMS: 60000, Enabled: true, RepeatMode: "repeating", NextTickAt: &pastSQL,
 	})
-	
+
 	s3 := &Session{sessionID: 1, store: store, timers: make(map[string]*Timer)}
 	s3.restoreTimers()
-	
+
 	tRepPast := s3.timers["past_rep"]
 	if tRepPast == nil {
 		t.Fatal("past_rep not restored")
@@ -343,7 +343,7 @@ func TestTimerDeclarationWiring(t *testing.T) {
 		ProfileID: profile.ID, Name: "adj_dormant", CycleMS: 15000, RepeatMode: "repeating",
 	})
 	delete(s.timers, "adj_dormant") // Ensure not in runtime
-	
+
 	v.ProcessInputDetailed("#tickset {adj_dormant} {+5}")
 	tAdj := s.timers["adj_dormant"]
 	if tAdj == nil {
@@ -358,7 +358,7 @@ func TestTimerDeclarationWiring(t *testing.T) {
 		ProfileID: profile.ID, Name: "reset_dormant", CycleMS: 40000, RepeatMode: "repeating",
 	})
 	delete(s.timers, "reset_dormant") // Ensure not in runtime
-	
+
 	v.ProcessInputDetailed("#tickset {reset_dormant}")
 	tReset := s.timers["reset_dormant"]
 	if tReset == nil {

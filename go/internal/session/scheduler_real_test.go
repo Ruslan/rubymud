@@ -12,9 +12,9 @@ import (
 func TestSchedulerDispatcherTermination(t *testing.T) {
 	store := newTestStore(t)
 	v := vm.New(store, 1)
-	
+
 	before := runtime.NumGoroutine()
-	
+
 	s := &Session{
 		sessionID: 1,
 		conn:      &recordingConn{},
@@ -26,20 +26,20 @@ func TestSchedulerDispatcherTermination(t *testing.T) {
 		cmdQueue:  make(chan cmdItem, 100),
 		done:      make(chan struct{}),
 	}
-	
+
 	go s.runTimerLoop()
 	go s.runCommandDispatcher()
 
 	// For testing purpose, we manually close it to see if goroutines stop
 	s.Close()
-	
+
 	// Wait a bit for goroutines to exit
 	time.Sleep(200 * time.Millisecond)
-	
+
 	after := runtime.NumGoroutine()
-	// New started 2 goroutines, Close should stop them. 
+	// New started 2 goroutines, Close should stop them.
 	// NumGoroutine is global, so we use some slack.
-	if after > before+5 { 
+	if after > before+5 {
 		t.Errorf("possible goroutine leak: before=%d after=%d", before, after)
 	}
 }
@@ -78,11 +78,11 @@ func TestSchedulerTickBoundaries(t *testing.T) {
 
 	// Immediately after ticker.On(), remSec should be 2 (math.Ceil(2.0))
 	// So max_boundary should fire soon.
-	
+
 	start := time.Now()
 	foundMax := false
 	foundZero := false
-	
+
 	for time.Since(start) < 3*time.Second {
 		out := conn.String()
 		if !foundMax && strings.Contains(out, "max_boundary\n") {
@@ -135,7 +135,7 @@ func TestSchedulerShortCycle(t *testing.T) {
 	defer s.Close()
 
 	time.Sleep(1500 * time.Millisecond)
-	
+
 	if !strings.Contains(conn.String(), "short_zero\n") {
 		t.Error("zero boundary subscription didn't fire on 1s cycle")
 	}

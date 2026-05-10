@@ -50,6 +50,10 @@ type Session struct {
 	cmdQueue     chan cmdItem
 	done         chan struct{}
 
+	outputBatch      []ClientLogEntry
+	outputBatchHints []ServerMsg
+	batchActive      bool
+
 	readSrc      io.Reader
 	initCmds     string
 	mccpOn       bool

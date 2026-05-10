@@ -65,7 +65,7 @@ func TestTimerPersistence(t *testing.T) {
 	if !t1.Enabled {
 		t.Error("expected ticker to be enabled")
 	}
-	
+
 	t1.mu.Lock()
 	cmds := t1.Subscriptions[10]
 	t1.mu.Unlock()
@@ -107,13 +107,13 @@ func TestTimerPhaseRestore(t *testing.T) {
 
 	s1.TickSize("ticker", 10) // 10s cycle
 	s1.TickOn("ticker")
-	
+
 	// Manually manipulate NextTickAt in DB to simulate time passed during downtime
 	// Let's set it to 5 seconds ago. Cycle is 10s.
 	// So 5 seconds elapsed, 5 seconds should remain.
 	fiveSecAgo := time.Now().Add(-5 * time.Second)
 	at := storage.SQLiteTime{Time: fiveSecAgo}
-	
+
 	err := store.SaveTimer(storage.TimerRecord{
 		SessionID:  1,
 		Name:       "ticker",
@@ -140,7 +140,7 @@ func TestTimerPhaseRestore(t *testing.T) {
 
 	tRestored := s2.timers["ticker"]
 	rem := tRestored.RemainingSeconds()
-	// Should be around 5. 
+	// Should be around 5.
 	if rem < 4 || rem > 6 {
 		t.Errorf("expected restored remaining around 5s, got %d", rem)
 	}
@@ -163,10 +163,10 @@ func TestTimerRestoreHardening(t *testing.T) {
 
 	// 2. Corrupt enabled row (next_tick_at=nil)
 	err = store.SaveTimer(storage.TimerRecord{
-		SessionID: 1,
-		Name:      "broken",
-		CycleMS:   10000,
-		Enabled:   true,
+		SessionID:  1,
+		Name:       "broken",
+		CycleMS:    10000,
+		Enabled:    true,
 		NextTickAt: nil,
 	})
 	if err != nil {
@@ -236,7 +236,7 @@ func TestTickAdjustClamping(t *testing.T) {
 func TestTickAdjustParsing(t *testing.T) {
 	store := newTestStore(t)
 	v := vm.New(store, 1)
-	
+
 	// Mock TimerControl to verify calls
 	m := &mockTimerControlWithAdjust{}
 	v.SetTimerControl(m)
@@ -250,7 +250,7 @@ func TestTickAdjustParsing(t *testing.T) {
 	if m.adjName != "herb" || m.adjVal != -2 {
 		t.Errorf("failed to parse #tickset {herb} {-2}, got %s %v", m.adjName, m.adjVal)
 	}
-	
+
 	v.ProcessInputDetailed("#tickset {-1.5}")
 	if m.adjName != "ticker" || m.adjVal != -1.5 {
 		t.Errorf("failed to parse #tickset {-1.5}, got %s %v", m.adjName, m.adjVal)
@@ -276,14 +276,26 @@ type mockTimerControlWithAdjust struct {
 	unsubSec  int
 }
 
-func (m *mockTimerControlWithAdjust) TickOn(name string) { m.on = name }
-func (m *mockTimerControlWithAdjust) TickOff(name string) { m.off = name }
+func (m *mockTimerControlWithAdjust) TickOn(name string)    { m.on = name }
+func (m *mockTimerControlWithAdjust) TickOff(name string)   { m.off = name }
 func (m *mockTimerControlWithAdjust) TickReset(name string) { m.reset = name }
-func (m *mockTimerControlWithAdjust) TickSet(name string, seconds float64) { m.set = name; m.setVal = seconds }
-func (m *mockTimerControlWithAdjust) TickSize(name string, seconds float64) { m.size = name; m.sizeVal = seconds }
-func (m *mockTimerControlWithAdjust) TickIcon(name string, icon string) { m.iconName = name; m.icon = icon }
-func (m *mockTimerControlWithAdjust) TickAdjust(name string, delta float64) { m.adjName = name; m.adjVal = delta }
-func (m *mockTimerControlWithAdjust) TickMode(name string, mode string)    {}
+func (m *mockTimerControlWithAdjust) TickSet(name string, seconds float64) {
+	m.set = name
+	m.setVal = seconds
+}
+func (m *mockTimerControlWithAdjust) TickSize(name string, seconds float64) {
+	m.size = name
+	m.sizeVal = seconds
+}
+func (m *mockTimerControlWithAdjust) TickIcon(name string, icon string) {
+	m.iconName = name
+	m.icon = icon
+}
+func (m *mockTimerControlWithAdjust) TickAdjust(name string, delta float64) {
+	m.adjName = name
+	m.adjVal = delta
+}
+func (m *mockTimerControlWithAdjust) TickMode(name string, mode string) {}
 func (m *mockTimerControlWithAdjust) SubscribeTimer(name string, second int, command string) {
 	m.subName = name
 	m.subSec = second
@@ -293,6 +305,8 @@ func (m *mockTimerControlWithAdjust) UnsubscribeTimer(name string, second int) {
 	m.unsubName = name
 	m.unsubSec = second
 }
-func (m *mockTimerControlWithAdjust) ScheduleDelay(id string, seconds float64, command string) error { return nil }
-func (m *mockTimerControlWithAdjust) CancelDelay(id string) {}
+func (m *mockTimerControlWithAdjust) ScheduleDelay(id string, seconds float64, command string) error {
+	return nil
+}
+func (m *mockTimerControlWithAdjust) CancelDelay(id string)                {}
 func (m *mockTimerControlWithAdjust) GetTimerCycleSeconds(name string) int { return 60 }

@@ -437,7 +437,7 @@ function attachSocketHandlers(target: WebSocket) {
       }
       requestVariables();
       for (const entries of Object.values(message.buffers || {})) {
-        entries.forEach(renderer.appendEntry);
+        renderer.appendEntries(entries);
       }
     }
 
@@ -447,7 +447,7 @@ function attachSocketHandlers(target: WebSocket) {
 
     if (message.type === 'restore_chunk') {
       logBoot('restore chunk (legacy)', { entries: message.entries?.length || 0 });
-      (message.entries || []).forEach(renderer.appendEntry);
+      renderer.appendEntries(message.entries || []);
     }
 
     if (message.type === 'restore_end') {
@@ -458,7 +458,7 @@ function attachSocketHandlers(target: WebSocket) {
 
     if (message.type === 'output') {
       logBoot('output message', { entries: message.entries?.length || 0 });
-      (message.entries || []).forEach(renderer.appendEntry);
+      renderer.appendEntries(message.entries || []);
     }
 
     if (message.type === 'variables') {

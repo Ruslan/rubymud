@@ -1,19 +1,19 @@
 package session
 
 type ServerMsg struct {
-	Type      string                        `json:"type"`
-	Buffers   map[string][]ClientLogEntry   `json:"buffers,omitempty"`
-	Entries   []ClientLogEntry              `json:"entries,omitempty"`
-	History   []string                      `json:"history,omitempty"`
-	Hotkeys   []HotkeyJSON                  `json:"hotkeys,omitempty"`
-	Variables []VariableJSON                `json:"variables,omitempty"`
-	Status    string                        `json:"status,omitempty"`
-	Message   string                        `json:"message,omitempty"`
-	Settings  *SettingsChangedJSON          `json:"settings,omitempty"`
-	EntryID   int64                         `json:"entry_id,omitempty"` // For targeted updates
-	Command   string                        `json:"command,omitempty"`  // For targeted updates
-	Buffer    string                        `json:"buffer,omitempty"`   // For targeted updates
-	Timers    []TimerSnapshot               `json:"timers,omitempty"`
+	Type      string                      `json:"type"`
+	Buffers   map[string][]ClientLogEntry `json:"buffers,omitempty"`
+	Entries   []ClientLogEntry            `json:"entries,omitempty"`
+	History   []string                    `json:"history,omitempty"`
+	Hotkeys   []HotkeyJSON                `json:"hotkeys,omitempty"`
+	Variables []VariableJSON              `json:"variables,omitempty"`
+	Status    string                      `json:"status,omitempty"`
+	Message   string                      `json:"message,omitempty"`
+	Settings  *SettingsChangedJSON        `json:"settings,omitempty"`
+	EntryID   int64                       `json:"entry_id,omitempty"` // For targeted updates
+	Command   string                      `json:"command,omitempty"`  // For targeted updates
+	Buffer    string                      `json:"buffer,omitempty"`   // For targeted updates
+	Timers    []TimerSnapshot             `json:"timers,omitempty"`
 }
 
 type SettingsChangedJSON struct {

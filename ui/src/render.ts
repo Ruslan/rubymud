@@ -467,35 +467,58 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     updateScrollButtonVisibility(pane);
   }
 
-  function appendEntry(entry: LogEntry) {
-    const bufferName = entry.buffer || 'main';
-    registerBuffer(bufferName);
-    
-    const data = getBufferData(bufferName);
-    data.push(entry);
-    
-    if (data.length > maxRenderedLines + pruneRenderedLines) {
-      data.splice(0, pruneRenderedLines);
+  function appendEntries(entries: LogEntry[]) {
+    if (entries.length === 0) return;
+
+    // Group entries by buffer for efficient processing
+    const byBuffer = new Map<string, LogEntry[]>();
+    for (const entry of entries) {
+      const buf = entry.buffer || 'main';
+      registerBuffer(buf);
+      if (!byBuffer.has(buf)) byBuffer.set(buf, []);
+      byBuffer.get(buf)!.push(entry);
     }
 
-    renderedPanes.forEach(pane => {
-      if (pane.node.buffer === bufferName) {
-        const shouldScroll = shouldStickToBottom(pane);
-        pane.outputEl.appendChild(createEntryDOM(entry, pane));
+    byBuffer.forEach((bufferEntries, bufferName) => {
+      const data = getBufferData(bufferName);
+      data.push(...bufferEntries);
 
-        if (pane.outputEl.children.length > maxRenderedLines) {
-          for (let i = 0; i < pruneRenderedLines && pane.outputEl.firstChild; i++) {
-            pane.outputEl.removeChild(pane.outputEl.firstChild);
-          }
-        }
-
-        if (shouldScroll && !state.restoreInProgress) {
-          pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
-        }
-
-        updateScrollButtonVisibility(pane);
+      if (data.length > maxRenderedLines + pruneRenderedLines) {
+        data.splice(0, pruneRenderedLines);
       }
+
+      renderedPanes.forEach(pane => {
+        if (pane.node.buffer === bufferName) {
+          const shouldScroll = shouldStickToBottom(pane);
+          const fragment = document.createDocumentFragment();
+
+          for (const entry of bufferEntries) {
+            fragment.appendChild(createEntryDOM(entry, pane));
+          }
+          pane.outputEl.appendChild(fragment);
+
+          if (pane.outputEl.children.length > maxRenderedLines) {
+            const excess = pane.outputEl.children.length - maxRenderedLines;
+            if (excess > 0) {
+              const toRemove = Math.max(excess, pruneRenderedLines);
+              for (let i = 0; i < toRemove && pane.outputEl.firstChild; i++) {
+                pane.outputEl.removeChild(pane.outputEl.firstChild);
+              }
+            }
+          }
+
+          if (shouldScroll && !state.restoreInProgress) {
+            pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
+          }
+
+          updateScrollButtonVisibility(pane);
+        }
+      });
     });
+  }
+
+  function appendEntry(entry: LogEntry) {
+    appendEntries([entry]);
   }
 
   function addCommandHint(entryId: number, buffer: string, command: string) {
@@ -945,6 +968,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     appendCommandHint,
     addCommandHint,
     appendEntry,
+    appendEntries,
     clearOutput,
     renderHotkeys,
     renderVariables,

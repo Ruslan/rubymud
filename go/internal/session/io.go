@@ -32,6 +32,7 @@ func (s *Session) RunReadLoop() {
 			s.mccpDecompressedBytes.Add(uint64(n))
 		}
 
+		s.beginOutputBatch()
 		events := decoder.Feed(buf[:n])
 
 		for _, ev := range events {
@@ -44,6 +45,7 @@ func (s *Session) RunReadLoop() {
 				if !s.mccpAccepted {
 					log.Printf("MCCP2 start received but not accepted/enabled, closing session")
 					s.Close()
+					s.flushOutputBatch()
 					return
 				}
 				if lineBuf.Len() > 0 {
@@ -63,6 +65,7 @@ func (s *Session) RunReadLoop() {
 		}
 
 		processBufferedLines(&lineBuf, s)
+		s.flushOutputBatch()
 
 		if decoder.IsCompressed() {
 			decoder.ResetForDecompressed()

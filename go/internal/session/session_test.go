@@ -141,7 +141,7 @@ func TestVariableUpdateAppliesImmediatelyInLiveSession(t *testing.T) {
 	if err := sess.SendCommand("#var {weapon} {sword}", "input"); err != nil {
 		t.Fatalf("SendCommand(#var): %v", err)
 	}
-	
+
 	// substitution in VM should be immediate because sess.SendCommand calls vm.Reload if it changes settings
 	if err := sess.SendCommand("wield $weapon", "input"); err != nil {
 		t.Fatalf("SendCommand(wield $weapon): %v", err)
@@ -201,7 +201,7 @@ func (a dummyAddr) String() string  { return string(a) }
 func TestSessionTimerSnapshot(t *testing.T) {
 	// We don't need a real connection for this
 	s := &Session{
-		timers:   make(map[string]*Timer),
+		timers: make(map[string]*Timer),
 	}
 	s.timers["ticker"] = NewTimer("ticker", 60*time.Second)
 
@@ -212,7 +212,7 @@ func TestSessionTimerSnapshot(t *testing.T) {
 
 	// Modify internal state and ensure snapshot was a copy
 	s.timers["ticker"].On()
-	
+
 	if snapshots[0].Enabled {
 		t.Error("snapshot should not have been updated after internal state change")
 	}

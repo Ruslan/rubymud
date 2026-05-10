@@ -1,8 +1,8 @@
 package session
 
 import (
-	"testing"
 	"rubymud/go/internal/vm"
+	"testing"
 )
 
 type mockTimerControl struct {
@@ -26,14 +26,14 @@ type mockTimerControl struct {
 	cancelId  string
 }
 
-func (m *mockTimerControl) TickOn(name string) { m.on = name }
-func (m *mockTimerControl) TickOff(name string) { m.off = name }
-func (m *mockTimerControl) TickReset(name string) { m.reset = name }
-func (m *mockTimerControl) TickSet(name string, seconds float64) { m.set = name; m.setVal = seconds }
+func (m *mockTimerControl) TickOn(name string)                    { m.on = name }
+func (m *mockTimerControl) TickOff(name string)                   { m.off = name }
+func (m *mockTimerControl) TickReset(name string)                 { m.reset = name }
+func (m *mockTimerControl) TickSet(name string, seconds float64)  { m.set = name; m.setVal = seconds }
 func (m *mockTimerControl) TickSize(name string, seconds float64) { m.size = name; m.sizeVal = seconds }
-func (m *mockTimerControl) TickIcon(name string, icon string) { m.iconName = name; m.icon = icon }
+func (m *mockTimerControl) TickIcon(name string, icon string)     { m.iconName = name; m.icon = icon }
 func (m *mockTimerControl) TickAdjust(name string, delta float64) {}
-func (m *mockTimerControl) TickMode(name string, mode string)    {}
+func (m *mockTimerControl) TickMode(name string, mode string)     {}
 func (m *mockTimerControl) SubscribeTimer(name string, second int, command string) {
 	m.subName = name
 	m.subSec = second

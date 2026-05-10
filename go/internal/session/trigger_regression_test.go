@@ -198,3 +198,89 @@ func TestGAPromptNoBlankLine(t *testing.T) {
 		t.Errorf("expected 0 log entries for empty flush, got %d", len(entries))
 	}
 }
+
+func TestOutputBatching(t *testing.T) {
+	store := newTestStore(t)
+	v := vm.New(store, 1)
+
+	var lastMsg ServerMsg
+	send := func(msg ServerMsg) error {
+		lastMsg = msg
+		return nil
+	}
+
+	sess := &Session{
+		sessionID: 1,
+		store:     store,
+		vm:        v,
+		clients:   map[int]clientSink{1: {id: 1, name: "test", send: send}},
+	}
+
+	// 1. Outside batch
+	sess.BroadcastEcho("immediate")
+	if lastMsg.Type != "output" || len(lastMsg.Entries) != 1 || lastMsg.Entries[0].Text != "immediate" {
+		t.Errorf("expected immediate broadcast, got %+v", lastMsg)
+	}
+
+	// 2. Inside batch
+	sess.beginOutputBatch()
+	sess.BroadcastEcho("line1")
+	sess.BroadcastEcho("line2")
+
+	// Should not have updated lastMsg to line2 yet
+	if lastMsg.Entries[0].Text == "line2" {
+		t.Errorf("broadcast happened inside batch unexpectedly")
+	}
+
+	sess.flushOutputBatch()
+	if len(lastMsg.Entries) != 2 || lastMsg.Entries[0].Text != "line1" || lastMsg.Entries[1].Text != "line2" {
+		t.Errorf("expected batched broadcast with 2 entries, got %+v", lastMsg)
+	}
+}
+
+func TestHintOrderingInBatch(t *testing.T) {
+	store := newTestStore(t)
+	v := vm.New(store, 1)
+
+	var messages []ServerMsg
+	send := func(msg ServerMsg) error {
+		messages = append(messages, msg)
+		return nil
+	}
+
+	sess := &Session{
+		sessionID: 1,
+		store:     store,
+		vm:        v,
+		clients:   map[int]clientSink{1: {id: 1, name: "test", send: send}},
+	}
+
+	// Start batch
+	sess.beginOutputBatch()
+
+	// Simulate the trigger case where hint is generated before the entry is queued:
+	// 1. broadcastCommandHint (called by ApplyEffects)
+	sess.broadcastCommandHint("say hello", 123, "main")
+	// 2. broadcastEntry (called by processLine)
+	sess.broadcastEntry(storage.LogEntry{ID: 123, RawText: "welcome", Buffer: "main"})
+
+	// Flush batch
+	sess.flushOutputBatch()
+
+	if len(messages) != 2 {
+		t.Fatalf("expected 2 messages, got %d", len(messages))
+	}
+
+	// Message 1 must be the output batch
+	if messages[0].Type != "output" {
+		t.Errorf("first message should be output, got %s", messages[0].Type)
+	}
+	if len(messages[0].Entries) != 1 || messages[0].Entries[0].ID != 123 {
+		t.Errorf("output batch incorrect: %+v", messages[0].Entries)
+	}
+
+	// Message 2 must be the command hint
+	if messages[1].Type != "command_hint" || messages[1].Command != "say hello" || messages[1].EntryID != 123 {
+		t.Errorf("second message should be command_hint for entry 123, got %+v", messages[1])
+	}
+}

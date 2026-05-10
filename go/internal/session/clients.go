@@ -27,12 +27,47 @@ func (s *Session) DetachClient(id int) {
 	log.Printf("client detached: %s, total clients=%d", name, len(s.clients))
 }
 
+func (s *Session) beginOutputBatch() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.batchActive = true
+}
+
+func (s *Session) flushOutputBatch() {
+	s.mu.Lock()
+	batch := s.outputBatch
+	hints := s.outputBatchHints
+	s.outputBatch = nil
+	s.outputBatchHints = nil
+	s.batchActive = false
+	s.mu.Unlock()
+
+	if len(batch) > 0 {
+		s.broadcastMsg(ServerMsg{Type: "output", Entries: batch})
+	}
+	for _, hint := range hints {
+		s.broadcastMsg(hint)
+	}
+}
+
+func (s *Session) queueOrBroadcast(cle ClientLogEntry) {
+	s.mu.Lock()
+	if s.batchActive {
+		s.outputBatch = append(s.outputBatch, cle)
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+
+	s.broadcastMsg(ServerMsg{Type: "output", Entries: []ClientLogEntry{cle}})
+}
+
 func (s *Session) broadcastEntry(entry storage.LogEntry) {
 	cle := ClientLogEntry{ID: entry.ID, Text: entry.RawText, Buffer: entry.Buffer, Commands: entry.Commands}
 	for _, b := range entry.Buttons {
 		cle.Buttons = append(cle.Buttons, ButtonOverlay{Label: b.Label, Command: b.Command})
 	}
-	s.broadcastMsg(ServerMsg{Type: "output", Entries: []ClientLogEntry{cle}})
+	s.queueOrBroadcast(cle)
 }
 
 func (s *Session) broadcastEntryWithText(entry storage.LogEntry, text string) {
@@ -40,11 +75,11 @@ func (s *Session) broadcastEntryWithText(entry storage.LogEntry, text string) {
 	for _, b := range entry.Buttons {
 		cle.Buttons = append(cle.Buttons, ButtonOverlay{Label: b.Label, Command: b.Command})
 	}
-	s.broadcastMsg(ServerMsg{Type: "output", Entries: []ClientLogEntry{cle}})
+	s.queueOrBroadcast(cle)
 }
 
 func (s *Session) BroadcastEcho(text string) {
-	s.broadcastMsg(ServerMsg{Type: "output", Entries: []ClientLogEntry{{Text: text}}})
+	s.queueOrBroadcast(ClientLogEntry{Text: text})
 }
 
 func (s *Session) BroadcastVariables() {
@@ -57,12 +92,22 @@ func (s *Session) BroadcastVariables() {
 }
 
 func (s *Session) broadcastCommandHint(cmd string, entryID int64, buffer string) {
-	s.broadcastMsg(ServerMsg{
+	msg := ServerMsg{
 		Type:    "command_hint",
 		Command: cmd,
 		EntryID: entryID,
 		Buffer:  buffer,
-	})
+	}
+
+	s.mu.Lock()
+	if s.batchActive {
+		s.outputBatchHints = append(s.outputBatchHints, msg)
+		s.mu.Unlock()
+		return
+	}
+	s.mu.Unlock()
+
+	s.broadcastMsg(msg)
 }
 
 func (s *Session) broadcastMsg(msg ServerMsg) {
