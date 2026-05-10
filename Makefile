@@ -6,7 +6,7 @@ MUD ?= 127.0.0.1:4000
 LISTEN ?= :8080
 DB_PATH ?= data/mudhost.db
 
-.PHONY: help run build test tidy db-init db-schema ui
+.PHONY: help run build go-build test tidy db-init db-schema ui
 
 help:
 	@printf "Targets:\n"
@@ -31,6 +31,9 @@ run: build
 	"./$(BIN_DIR)/$(BIN_NAME)" --mud "$(MUD)" --listen "$(LISTEN)" --db "$(DB_PATH)"
 
 build: ui
+	$(MAKE) go-build
+
+go-build:
 	mkdir -p "$(BIN_DIR)"
 	cd "$(GO_DIR)" && go build -o "../$(BIN_DIR)/$(BIN_NAME)" ./cmd/mudhost
 
@@ -40,7 +43,7 @@ test:
 tidy:
 	cd "$(GO_DIR)" && go mod tidy
 
-db-init: build
+db-init: go-build
 	"./$(BIN_DIR)/$(BIN_NAME)" --db "$(DB_PATH)" --migrate-only
 
 db-schema:
