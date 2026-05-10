@@ -77,6 +77,14 @@
     description: string;
   }
 
+  interface NamedColor {
+    name: string;
+    hex: string;
+    ansi_fg: number;
+    ansi_bg: number;
+    ansi256: number;
+  }
+
 
   interface RuleGroupSummary {
     domain: string;
@@ -203,6 +211,12 @@
   // Profile Files State
   let profileFiles: { filename: string }[] = [];
 
+  let namedColorList: NamedColor[] = [];
+  const namedColorAliasMap: Record<string, string> = {
+    'grey': 'white', 'gray': 'white', 'purple': 'magenta',
+    'coal': 'black', 'charcoal': 'black', 'yellow': 'brown', 'light brown': 'brown'
+  };
+
   type RGB = { r: number; g: number; b: number };
 
   const ansiBasePalette: RGB[] = [
@@ -240,13 +254,34 @@
   function colorValueToHex(value: string): string {
     const normalized = value.trim().toLowerCase();
     if (!normalized) return '#cccccc';
+    
+    // 1. Check named color list from backend
+    const named = namedColorList.find(c => c.name === normalized);
+    if (named) return named.hex;
+
+    // 2. Check local aliases
+    const aliased = namedColorAliasMap[normalized];
+    if (aliased) {
+      const namedAliased = namedColorList.find(c => c.name === aliased);
+      if (namedAliased) return namedAliased.hex;
+    }
+
+    // 3. Parse hex
     const parsedHex = parseHexColor(normalized);
     if (parsedHex) return rgbToHex(parsedHex);
+
+    // 4. Parse 256:N
     if (normalized.startsWith('256:')) {
       const index = Number.parseInt(normalized.slice(4), 10);
       if (!Number.isNaN(index) && index >= 0 && index <= 255) return rgbToHex(ansi256ToRGB(index));
     }
     return '#cccccc';
+  }
+
+  function namedColorSelectValue(value: string): string {
+    const normalized = value.trim().toLowerCase();
+    if (!normalized) return '';
+    return namedColorList.some((c) => c.name === normalized) ? normalized : '__custom__';
   }
 
   function colorValueToCss(value: string, fallback: string): string {
@@ -280,12 +315,14 @@
     const token = window.API_TOKEN || '';
     const headers = { 'X-Session-Token': token };
     try {
-      const [sessRes, profRes] = await Promise.all([
+      const [sessRes, profRes, colorsRes] = await Promise.all([
         fetch('/api/sessions', { headers }),
-        fetch('/api/profiles', { headers })
+        fetch('/api/profiles', { headers }),
+        fetch('/api/colors', { headers })
       ]);
       sessions = await sessRes.json() || [];
       profiles = await profRes.json() || [];
+      if (colorsRes.ok) namedColorList = await colorsRes.json() || [];
 
       if (selectedSessionID === null && sessions.length > 0) selectedSessionID = sessions[0]!.id;
       if (selectedProfileID === null && profiles.length > 0) selectedProfileID = profiles[0]!.id;
@@ -805,15 +842,47 @@
             <input type="text" bind:value={highlightEditor.pattern} placeholder="Pattern (Regex)" required />
             <input type="text" bind:value={highlightEditor.group_name} placeholder="Group Name" />
           </div>
-          <div class="form-row">
+          <div class="form-row color-controls">
             <label class="color-field">
               <span>FG</span>
+              <select 
+                value={namedColorSelectValue(highlightEditor.fg)} 
+                on:change={(e) => { 
+                  const v = (e.currentTarget as HTMLSelectElement).value; 
+                  if (v !== '__custom__') highlightEditor = { ...highlightEditor, fg: v }; 
+                }}
+              >
+                <option value="">default</option>
+                {#each namedColorList as c}
+                  <option value={c.name}>{c.name}</option>
+                {/each}
+                {#if namedColorSelectValue(highlightEditor.fg) === '__custom__'}
+                  <option value="__custom__">custom</option>
+                {/if}
+              </select>
               <input type="color" value={colorValueToHex(highlightEditor.fg)} on:input={(event) => setHighlightColor('fg', (event.currentTarget as HTMLInputElement).value)} />
+              <button type="button" class="btn-icon reset-btn" aria-label="Reset foreground color" on:click={() => highlightEditor = { ...highlightEditor, fg: '' }}>✕</button>
               <code>{highlightEditor.fg || 'default'}</code>
             </label>
             <label class="color-field">
               <span>BG</span>
+              <select 
+                value={namedColorSelectValue(highlightEditor.bg)} 
+                on:change={(e) => { 
+                  const v = (e.currentTarget as HTMLSelectElement).value; 
+                  if (v !== '__custom__') highlightEditor = { ...highlightEditor, bg: v }; 
+                }}
+              >
+                <option value="">default</option>
+                {#each namedColorList as c}
+                  <option value={c.name}>{c.name}</option>
+                {/each}
+                {#if namedColorSelectValue(highlightEditor.bg) === '__custom__'}
+                  <option value="__custom__">custom</option>
+                {/if}
+              </select>
               <input type="color" value={colorValueToHex(highlightEditor.bg)} on:input={(event) => setHighlightColor('bg', (event.currentTarget as HTMLInputElement).value)} />
+              <button type="button" class="btn-icon reset-btn" aria-label="Reset background color" on:click={() => highlightEditor = { ...highlightEditor, bg: '' }}>✕</button>
               <code>{highlightEditor.bg || 'default'}</code>
             </label>
           </div>
@@ -1155,10 +1224,14 @@
   input[type="text"], input[type="number"] { background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px 12px; border-radius: 6px; flex: 1; }
   .center-cell { text-align: center; }
   .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #9ba3af; cursor: pointer; }
-  .color-field { display: flex; align-items: center; gap: 10px; color: #9ba3af; min-width: 0; }
+  .color-field { display: flex; align-items: center; gap: 8px; color: #9ba3af; min-width: 0; }
   .color-field span { font-size: 0.85rem; min-width: 20px; }
-  .color-field code { color: #e8edf2; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; min-width: 72px; }
-  input[type="color"] { width: 44px; height: 32px; background: none; border: none; padding: 0; }
+  .color-field select { background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 4px 6px; border-radius: 6px; font-size: 0.85rem; }
+  .color-field code { color: #e8edf2; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 6px 8px; min-width: 72px; font-size: 0.85rem; }
+  .reset-btn { color: #ff7b72; padding: 4px; border-radius: 50%; width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+  .reset-btn:hover { background: rgba(248, 81, 73, 0.15); color: #f85149; }
+  .color-controls { flex-wrap: wrap; }
+  input[type="color"] { width: 36px; height: 32px; background: none; border: none; padding: 0; cursor: pointer; }
   .btn-primary { background: #3498db; color: white; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; }
   .btn-primary:disabled { background: #2980b9; opacity: 0.5; cursor: not-allowed; }
   .data-table { width: 100%; border-collapse: collapse; }

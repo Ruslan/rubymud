@@ -239,7 +239,7 @@ func TestProfileScript_ExportAndParse(t *testing.T) {
 		t.Fatalf("Parsed %d highlights, want 2", len(ps.Highlights))
 	}
 	h2 := ps.Highlights[1]
-	if h2.Pattern != "magic" || h2.FG != "#ff00ff" || h2.BG != "#000000" {
+	if h2.Pattern != "magic" || h2.FG != "#ff00ff" || h2.BG != "black" {
 		t.Errorf("Parsed highlight 2 = %+v", h2)
 	}
 	if !h2.Bold || !h2.Italic || !h2.Blink || !h2.Reverse || !h2.Underline || !h2.Strikethrough || !h2.Faint {
@@ -323,9 +323,9 @@ garbage line without hash
 	// Hotkey: one missing command
 	if len(ps.Hotkeys) != 1 {
 		t.Errorf("Expected 1 hotkey, got %d", len(ps.Hotkeys))
-		} else if ps.Hotkeys[0].Shortcut != "f2" {
-			t.Errorf("Hotkey shortcut = %q", ps.Hotkeys[0].Shortcut)
-		}
+	} else if ps.Hotkeys[0].Shortcut != "f2" {
+		t.Errorf("Hotkey shortcut = %q", ps.Hotkeys[0].Shortcut)
+	}
 }
 
 func TestImportProfileScript_ReplacesExistingProfileByName(t *testing.T) {
@@ -345,7 +345,7 @@ func TestImportProfileScript_ReplacesExistingProfileByName(t *testing.T) {
 	imported, err := s.ImportProfileScript(&ProfileScript{
 		Name:        "ReplaceMe",
 		Description: "new",
-		Aliases: []AliasRule{{Position: 1, Name: "new", Template: "new command", Enabled: true, GroupName: "default"}},
+		Aliases:     []AliasRule{{Position: 1, Name: "new", Template: "new command", Enabled: true, GroupName: "default"}},
 	})
 	if err != nil {
 		t.Fatalf("ImportProfileScript: %v", err)
@@ -368,5 +368,59 @@ func TestImportProfileScript_ReplacesExistingProfileByName(t *testing.T) {
 	}
 	if len(entries) != 1 || entries[0].ProfileID != p.ID {
 		t.Fatalf("expected existing session attachment to remain, got %+v", entries)
+	}
+}
+
+func TestProfileScript_ColorNormalization(t *testing.T) {
+	s := newProfileTestStore(t)
+
+	// 1. Import with aliases and custom colors
+	script := `
+#nop Profile: ColorNorm
+#nop rubymud:rule {"bg":"256:21"}
+#highlight {COAL} {pattern1}
+#nop rubymud:rule {"bg":"light brown"}
+#highlight {256:196} {pattern2}
+#highlight {default} {pattern3}
+`
+	ps, err := ParseProfileScript(script)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+
+	if len(ps.Highlights) != 3 {
+		t.Fatalf("Expected 3 highlights, got %d", len(ps.Highlights))
+	}
+
+	// Verify parsing normalization
+	if ps.Highlights[0].FG != "black" || ps.Highlights[0].BG != "256:21" {
+		t.Errorf("H1 normalization mismatch: FG=%q BG=%q", ps.Highlights[0].FG, ps.Highlights[0].BG)
+	}
+	if ps.Highlights[1].FG != "256:196" || ps.Highlights[1].BG != "brown" {
+		t.Errorf("H2 normalization mismatch: FG=%q BG=%q", ps.Highlights[1].FG, ps.Highlights[1].BG)
+	}
+	if ps.Highlights[2].FG != "" {
+		t.Errorf("H3 normalization mismatch: FG=%q", ps.Highlights[2].FG)
+	}
+
+	p, _ := s.ImportProfileScript(ps)
+
+	// 2. Export and verify normalization
+	exported, _ := s.ExportProfileScript(p.ID)
+
+	if !strings.Contains(exported, "#highlight {black} {pattern1}") {
+		t.Errorf("Export missing normalized black: %s", exported)
+	}
+	if !strings.Contains(exported, "#highlight {red} {pattern2}") {
+		t.Errorf("Export missing normalized red: %s", exported)
+	}
+	if !strings.Contains(exported, "#highlight {default} {pattern3}") {
+		t.Errorf("Export missing default for empty FG: %s", exported)
+	}
+	if !strings.Contains(exported, `"bg":"blue"`) {
+		t.Errorf("Export missing normalized BG blue in meta: %s", exported)
+	}
+	if !strings.Contains(exported, `"bg":"brown"`) {
+		t.Errorf("Export missing normalized BG brown in meta: %s", exported)
 	}
 }

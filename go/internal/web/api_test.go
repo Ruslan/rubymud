@@ -452,3 +452,58 @@ func TestGroupsAPI(t *testing.T) {
 	})
 }
 
+func TestColorsAPI(t *testing.T) {
+	s, _ := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	url := fmt.Sprintf("%s/api/colors", ts.URL)
+
+	// 1. Unauthorized request
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("unauthorized GET status = %d, want 401", resp.StatusCode)
+	}
+
+	// 2. Authorized request
+	req, _ = newAuthenticatedRequest(http.MethodGet, url, nil, s.apiToken)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("authenticated GET %s: %v", url, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("authenticated GET status = %d, want 200", resp.StatusCode)
+	}
+
+	var colors []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&colors); err != nil {
+		t.Fatalf("decode colors: %v", err)
+	}
+
+	if len(colors) == 0 {
+		t.Fatal("no colors returned")
+	}
+
+	// Check for a known color
+	found := false
+	for _, c := range colors {
+		if c["name"] == "red" {
+			found = true
+			if c["hex"] != "#aa0000" {
+				t.Errorf("red hex = %v, want #aa0000", c["hex"])
+			}
+			if fmt.Sprintf("%v", c["ansi_fg"]) != "31" {
+				t.Errorf("red ansi_fg = %v, want 31", c["ansi_fg"])
+			}
+			break
+		}
+	}
+	if !found {
+		t.Error("color 'red' not found in response")
+	}
+}
+

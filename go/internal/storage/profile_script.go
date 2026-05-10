@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"rubymud/go/internal/colorreg"
 )
 
 type ProfileScript struct {
@@ -151,7 +152,7 @@ func (s *Store) ExportProfileScript(profileID int64) (string, error) {
 			meta := map[string]any{
 				"bold": h.Bold, "faint": h.Faint, "italic": h.Italic,
 				"underline": h.Underline, "strikethrough": h.Strikethrough,
-				"blink": h.Blink, "reverse": h.Reverse, "bg": h.BG,
+				"blink": h.Blink, "reverse": h.Reverse, "bg": colorreg.NormalizeExportColor(h.BG),
 			}
 			if h.GroupName != "default" && h.GroupName != "" {
 				meta["group_name"] = h.GroupName
@@ -159,7 +160,7 @@ func (s *Store) ExportProfileScript(profileID int64) (string, error) {
 			mj, _ := json.Marshal(meta)
 			sb.WriteString(fmt.Sprintf("#nop rubymud:rule %s\n", string(mj)))
 
-			fg := h.FG
+			fg := colorreg.NormalizeExportColor(h.FG)
 			if fg == "" {
 				fg = "default"
 			}
@@ -361,10 +362,8 @@ func ParseProfileScript(text string) (*ProfileScript, error) {
 			fg, rest := splitBraceArg(rest)
 			pattern, rest := splitBraceArg(rest)
 
+			fg = colorreg.NormalizeStoredColor(fg)
 			group := "default"
-			if fg == "default" {
-				fg = ""
-			}
 
 			// Legacy positional group
 			oldGroup, _ := splitBraceArg(rest)
@@ -380,7 +379,7 @@ func ParseProfileScript(text string) (*ProfileScript, error) {
 					h.GroupName = g
 				}
 				if b, ok := pendingMeta["bg"].(string); ok {
-					h.BG = b
+					h.BG = colorreg.NormalizeStoredColor(b)
 				}
 				if b, ok := pendingMeta["bold"].(bool); ok {
 					h.Bold = b

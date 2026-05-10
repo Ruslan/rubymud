@@ -17,6 +17,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/gorilla/websocket"
 
+	"rubymud/go/internal/colorreg"
 	"rubymud/go/internal/session"
 	"rubymud/go/internal/storage"
 )
@@ -195,6 +196,8 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 			})
 		})
 
+		r.Get("/colors", s.listColors)
+
 		r.Route("/app", func(r chi.Router) {
 			r.Get("/settings", s.getAppSettings)
 			r.Post("/settings/rotate-api-token", s.rotateAPIToken)
@@ -337,6 +340,13 @@ func (s *Server) rotateAPIToken(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{
 		"api_token": apiToken,
 	})
+}
+
+// Colors
+
+func (s *Server) listColors(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(colorreg.All())
 }
 
 // Session Variables
