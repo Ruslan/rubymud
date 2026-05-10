@@ -87,9 +87,6 @@ func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM, initCm
 		mccpOn:    mccpOn,
 	}
 
-	// Initialize default ticker
-	s.timers["ticker"] = NewTimer("ticker", 60*time.Second)
-
 	s.restoreTimers()
 
 	v.SetTimerControl(s)
@@ -213,43 +210,52 @@ func (s *Session) ensureTimer(name string) *Timer {
 		return t
 	}
 
-	// Try to load from declaration if it's a named timer
-	if name != "ticker" && s.store != nil {
-		profileID, err := s.store.GetPrimaryProfileID(s.sessionID)
-		if err == nil {
-			decls, err := s.store.GetProfileTimers(profileID)
-			if err == nil {
-				for _, d := range decls {
-					if d.Name == name {
-						t = NewTimer(name, time.Duration(d.CycleMS)*time.Millisecond)
-						t.Icon = d.Icon
-						t.RepeatMode = d.RepeatMode
-						if t.RepeatMode == "" {
-							t.RepeatMode = "repeating"
-						}
-
-						// Also load subscriptions
-						subs, err := s.store.GetProfileTimerSubscriptions(profileID, name)
-						if err == nil {
-							for _, sub := range subs {
-								t.Subscriptions[sub.Second] = append(t.Subscriptions[sub.Second], sub.Command)
-							}
-						}
-
-						s.timers[name] = t
-						s.persistTimer(t)
-						s.persistSubscriptions(t)
-						return t
-					}
-				}
-			}
-		}
+	// Try to load from declaration (works for both named and 'ticker')
+	if t := s.loadProfileTimerDeclaration(name); t != nil {
+		s.timers[name] = t
+		s.persistTimer(t)
+		s.persistSubscriptions(t)
+		return t
 	}
 
 	// Fallback to default auto-create
 	t = NewTimer(name, 60*time.Second)
 	s.timers[name] = t
 	return t
+}
+
+func (s *Session) loadProfileTimerDeclaration(name string) *Timer {
+	if s.store == nil {
+		return nil
+	}
+	profileID, err := s.store.GetPrimaryProfileID(s.sessionID)
+	if err != nil {
+		return nil
+	}
+	decls, err := s.store.GetProfileTimers(profileID)
+	if err != nil {
+		return nil
+	}
+	for _, d := range decls {
+		if d.Name == name {
+			t := NewTimer(name, time.Duration(d.CycleMS)*time.Millisecond)
+			t.Icon = d.Icon
+			t.RepeatMode = d.RepeatMode
+			if t.RepeatMode == "" {
+				t.RepeatMode = "repeating"
+			}
+
+			// Also load subscriptions
+			subs, err := s.store.GetProfileTimerSubscriptions(profileID, name)
+			if err == nil {
+				for _, sub := range subs {
+					t.Subscriptions[sub.Second] = append(t.Subscriptions[sub.Second], sub.Command)
+				}
+			}
+			return t
+		}
+	}
+	return nil
 }
 
 func (s *Session) TickOff(name string) {
@@ -317,7 +323,7 @@ func (s *Session) TickMode(name string, mode string) {
 }
 
 func (s *Session) persistProfileTimerDeclaration(t *Timer) {
-	if t.Name == "ticker" || s.store == nil {
+	if s.store == nil {
 		return
 	}
 	profileID, err := s.store.GetPrimaryProfileID(s.sessionID)
@@ -361,14 +367,12 @@ func (s *Session) SubscribeTimer(name string, second int, command string) {
 	s.persistSubscriptions(t)
 	s.persistTimer(t)
 
-	if name != "ticker" {
-		s.persistProfileTimerDeclaration(t)
-		s.persistProfileTimerSubscriptions(t)
-	}
+	s.persistProfileTimerDeclaration(t)
+	s.persistProfileTimerSubscriptions(t)
 }
 
 func (s *Session) persistProfileTimerSubscriptions(t *Timer) {
-	if t.Name == "ticker" || s.store == nil {
+	if s.store == nil {
 		return
 	}
 	profileID, err := s.store.GetPrimaryProfileID(s.sessionID)
@@ -416,9 +420,7 @@ func (s *Session) UnsubscribeTimer(name string, second int) {
 		s.persistSubscriptions(t)
 		s.persistTimer(t)
 
-		if name != "ticker" {
-			s.persistProfileTimerSubscriptions(t)
-		}
+		s.persistProfileTimerSubscriptions(t)
 	}
 }
 
@@ -561,92 +563,98 @@ func (s *Session) persistSubscriptions(t *Timer) {
 }
 
 func (s *Session) restoreTimers() {
-	if s.store == nil {
-		return
-	}
-
-	timers, err := s.store.GetTimers(s.sessionID)
-	if err != nil {
-		log.Printf("failed to load persisted timers: %v", err)
-		return
-	}
-
-	subs, err := s.store.GetSubscriptions(s.sessionID)
-	if err != nil {
-		log.Printf("failed to load timer subscriptions: %v", err)
-	}
-
-	s.timersMu.Lock()
-	defer s.timersMu.Unlock()
-
-	for _, rt := range timers {
-		cycleMS := rt.CycleMS
-		enabled := rt.Enabled
-
-		if cycleMS <= 0 {
-			if rt.Name == "ticker" {
-				cycleMS = 60000 // Fallback to 60s for default ticker
-			} else {
-				enabled = false // Disable broken named timers
-				cycleMS = 60000 // Keep a safe positive cycle even if disabled
+	if s.store != nil {
+		timers, err := s.store.GetTimers(s.sessionID)
+		if err != nil {
+			log.Printf("failed to load persisted timers: %v", err)
+		} else {
+			subs, err := s.store.GetSubscriptions(s.sessionID)
+			if err != nil {
+				log.Printf("failed to load timer subscriptions: %v", err)
 			}
-		}
 
-		if enabled && rt.NextTickAt == nil {
-			log.Printf("timer %q in session %d had enabled=true but next_tick_at=NULL, forcing disabled", rt.Name, s.sessionID)
-			enabled = false
-		}
+			s.timersMu.Lock()
+			for _, rt := range timers {
+				cycleMS := rt.CycleMS
+				enabled := rt.Enabled
 
-		t := NewTimer(rt.Name, time.Duration(cycleMS)*time.Millisecond)
-		t.Enabled = enabled
-		t.Icon = rt.Icon
-		t.RemainingMS = rt.RemainingMS
-		t.RepeatMode = rt.RepeatMode
-		if t.RepeatMode == "" {
-			t.RepeatMode = "repeating"
-		}
-
-		if enabled && rt.NextTickAt != nil {
-			nextAt := rt.NextTickAt.Time
-			now := time.Now()
-
-			if now.After(nextAt) {
-				// Timer was running while server was down
-				if rt.RepeatMode == "one_shot" {
-					t.Enabled = false
-					t.RemainingMS = 0
-				} else {
-					elapsed := now.Sub(nextAt)
-					cycle := time.Duration(cycleMS) * time.Millisecond
-					if cycle > 0 {
-						// Recalculate phase: remaining = cycle - (elapsed % cycle)
-						rem := cycle - (elapsed % cycle)
-						t.NextTickAt = now.Add(rem)
-						t.RemainingMS = int(rem.Milliseconds())
+				if cycleMS <= 0 {
+					if rt.Name == "ticker" {
+						cycleMS = 60000 // Fallback to 60s for default ticker
 					} else {
-						t.Enabled = false
-						t.RemainingMS = 0
+						enabled = false // Disable broken named timers
+						cycleMS = 60000 // Keep a safe positive cycle even if disabled
 					}
 				}
-			} else {
-				t.NextTickAt = nextAt
-				t.RemainingMS = int(time.Until(nextAt).Milliseconds())
-			}
-		}
 
-		// Attach subscriptions
-		for _, rs := range subs {
-			if rs.TimerName == rt.Name {
-				t.Subscriptions[rs.Second] = append(t.Subscriptions[rs.Second], rs.Command)
-			}
-		}
+				if enabled && rt.NextTickAt == nil {
+					log.Printf("timer %q in session %d had enabled=true but next_tick_at=NULL, forcing disabled", rt.Name, s.sessionID)
+					enabled = false
+				}
 
-		s.timers[rt.Name] = t
+				t := NewTimer(rt.Name, time.Duration(cycleMS)*time.Millisecond)
+				t.Enabled = enabled
+				t.Icon = rt.Icon
+				t.RemainingMS = rt.RemainingMS
+				t.RepeatMode = rt.RepeatMode
+				if t.RepeatMode == "" {
+					t.RepeatMode = "repeating"
+				}
+
+				if enabled && rt.NextTickAt != nil {
+					nextAt := rt.NextTickAt.Time
+					now := time.Now()
+
+					if now.After(nextAt) {
+						// Timer was running while server was down
+						if rt.RepeatMode == "one_shot" {
+							t.Enabled = false
+							t.RemainingMS = 0
+						} else {
+							elapsed := now.Sub(nextAt)
+							cycle := time.Duration(cycleMS) * time.Millisecond
+							if cycle > 0 {
+								// Recalculate phase: remaining = cycle - (elapsed % cycle)
+								rem := cycle - (elapsed % cycle)
+								t.NextTickAt = now.Add(rem)
+								t.RemainingMS = int(rem.Milliseconds())
+							} else {
+								t.Enabled = false
+								t.RemainingMS = 0
+							}
+						}
+					} else {
+						t.NextTickAt = nextAt
+						t.RemainingMS = int(time.Until(nextAt).Milliseconds())
+					}
+				}
+
+				// Attach subscriptions
+				for _, rs := range subs {
+					if rs.TimerName == rt.Name {
+						t.Subscriptions[rs.Second] = append(t.Subscriptions[rs.Second], rs.Command)
+					}
+				}
+
+				s.timers[rt.Name] = t
+			}
+			s.timersMu.Unlock()
+		}
 	}
 
 	// Ensure default ticker exists
+	s.timersMu.Lock()
+	defer s.timersMu.Unlock()
 	if _, ok := s.timers["ticker"]; !ok {
-		s.timers["ticker"] = NewTimer("ticker", 60*time.Second)
+		// No session runtime state for ticker, try profile declaration
+		if t := s.loadProfileTimerDeclaration("ticker"); t != nil {
+			s.timers["ticker"] = t
+			s.persistTimer(t)
+			s.persistSubscriptions(t)
+		} else {
+			// Absolute fallback
+			s.timers["ticker"] = NewTimer("ticker", 60*time.Second)
+		}
 	}
 }
 
@@ -748,8 +756,10 @@ func (s *Session) Close() error {
 	s.mu.Unlock()
 
 	log.Printf("closing session for %s", s.mudAddr)
-	if err := s.store.MarkSessionDisconnected(s.sessionID); err != nil {
-		log.Printf("mark session disconnected failed: %v", err)
+	if s.store != nil {
+		if err := s.store.MarkSessionDisconnected(s.sessionID); err != nil {
+			log.Printf("mark session disconnected failed: %v", err)
+		}
 	}
 	if s.zlibCloser != nil {
 		_ = s.zlibCloser.Close()

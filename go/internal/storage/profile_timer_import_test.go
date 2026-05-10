@@ -43,8 +43,13 @@ func TestProfileTimer_ImportExport(t *testing.T) {
 		ProfileID: p.ID, TimerName: "once", Second: 0, Command: "once cmd 0",
 	})
 
-	// Add default ticker (should NOT be exported)
-	s.db.Create(&TimerRecord{SessionID: 1, Name: "ticker", CycleMS: 60000, Enabled: true})
+	// Add default ticker with customization (SHOULD be exported now)
+	s.SaveProfileTimer(ProfileTimer{
+		ProfileID: p.ID, Name: "ticker", Icon: "🕒", CycleMS: 45000, RepeatMode: "repeating",
+	})
+	s.SaveProfileTimerSubscription(ProfileTimerSubscription{
+		ProfileID: p.ID, TimerName: "ticker", Second: 3, Command: "tickat 3 cmd",
+	})
 
 	// 2. Export
 	exported, err := s.ExportProfileScript(p.ID)
@@ -53,31 +58,18 @@ func TestProfileTimer_ImportExport(t *testing.T) {
 	}
 
 	// Verify export content
-	if !strings.Contains(exported, "#tickicon {rep} {🔄}") {
-		t.Errorf("Export missing rep icon: %s", exported)
+	if !strings.Contains(exported, "#tickicon {🕒}") {
+		t.Errorf("Export missing ticker icon: %s", exported)
 	}
-	if !strings.Contains(exported, "#ticksize {rep} {30}") {
-		t.Errorf("Export missing rep size: %s", exported)
+	if !strings.Contains(exported, "#ticksize {45}") {
+		t.Errorf("Export missing ticker size: %s", exported)
 	}
-	if strings.Contains(exported, "#tickmode {rep} {repeating}") {
-		t.Error("Export should NOT contain default repeating mode line")
-	}
-	if !strings.Contains(exported, "#tickat {rep} {0} {rep cmd 0}") {
-		t.Errorf("Export missing rep sub 0: %s", exported)
-	}
-	if !strings.Contains(exported, "#tickat {rep} {10} {rep cmd 10}") {
-		t.Errorf("Export missing rep sub 10: %s", exported)
-	}
-
-	if !strings.Contains(exported, "#tickmode {once} {one_shot}") {
-		t.Errorf("Export missing one_shot mode: %s", exported)
-	}
-	if !strings.Contains(exported, "#tickicon {once} {🎯}") {
-		t.Errorf("Export missing once icon: %s", exported)
+	if !strings.Contains(exported, "#tickat {3} {tickat 3 cmd}") {
+		t.Errorf("Export missing ticker sub: %s", exported)
 	}
 
 	if strings.Contains(exported, "{ticker}") {
-		t.Error("Export should NOT contain default ticker")
+		t.Error("Export should NOT contain explicit {ticker} name for default forms")
 	}
 
 	// 3. Parse back
@@ -86,22 +78,25 @@ func TestProfileTimer_ImportExport(t *testing.T) {
 		t.Fatalf("ParseProfileScript: %v", err)
 	}
 
-	if len(ps.Timers) != 2 {
-		t.Fatalf("Expected 2 timers parsed, got %d", len(ps.Timers))
+	if len(ps.Timers) != 3 {
+		t.Fatalf("Expected 3 timers parsed, got %d", len(ps.Timers))
 	}
-	if len(ps.Subscriptions) != 3 {
-		t.Fatalf("Expected 3 subscriptions parsed, got %d", len(ps.Subscriptions))
+	if len(ps.Subscriptions) != 4 {
+		t.Fatalf("Expected 4 subscriptions parsed, got %d", len(ps.Subscriptions))
 	}
 
-	// Verify order in ps.Subscriptions (alphabetical timers: once then rep)
-	if ps.Subscriptions[0].TimerName != "once" || ps.Subscriptions[0].Second != 0 || ps.Subscriptions[0].Command != "once cmd 0" {
-		t.Errorf("Parsed sub 0 mismatch: %+v", ps.Subscriptions[0])
+	// Verify order in ps.Subscriptions (stable order: ticker then once then rep)
+	if ps.Subscriptions[0].TimerName != "ticker" || ps.Subscriptions[0].Second != 3 || ps.Subscriptions[0].Command != "tickat 3 cmd" {
+		t.Errorf("Parsed sub 0 (ticker) mismatch: %+v", ps.Subscriptions[0])
 	}
-	if ps.Subscriptions[1].TimerName != "rep" || ps.Subscriptions[1].Second != 0 || ps.Subscriptions[1].Command != "rep cmd 0" {
+	if ps.Subscriptions[1].TimerName != "once" || ps.Subscriptions[1].Second != 0 || ps.Subscriptions[1].Command != "once cmd 0" {
 		t.Errorf("Parsed sub 1 mismatch: %+v", ps.Subscriptions[1])
 	}
-	if ps.Subscriptions[2].TimerName != "rep" || ps.Subscriptions[2].Second != 10 || ps.Subscriptions[2].Command != "rep cmd 10" {
+	if ps.Subscriptions[2].TimerName != "rep" || ps.Subscriptions[2].Second != 0 || ps.Subscriptions[2].Command != "rep cmd 0" {
 		t.Errorf("Parsed sub 2 mismatch: %+v", ps.Subscriptions[2])
+	}
+	if ps.Subscriptions[3].TimerName != "rep" || ps.Subscriptions[3].Second != 10 || ps.Subscriptions[3].Command != "rep cmd 10" {
+		t.Errorf("Parsed sub 3 mismatch: %+v", ps.Subscriptions[3])
 	}
 
 	// 4. Import into new profile
@@ -113,8 +108,8 @@ func TestProfileTimer_ImportExport(t *testing.T) {
 
 	// 5. Verify DB content for imported profile
 	timers, _ := s.GetProfileTimers(p2.ID)
-	if len(timers) != 2 {
-		t.Errorf("Imported DB should have 2 timers, got %d", len(timers))
+	if len(timers) != 3 {
+		t.Errorf("Imported DB should have 3 timers, got %d", len(timers))
 	}
 
 	for _, timer := range timers {
