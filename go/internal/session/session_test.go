@@ -217,3 +217,43 @@ func TestSessionTimerSnapshot(t *testing.T) {
 		t.Error("snapshot should not have been updated after internal state change")
 	}
 }
+
+func TestMCCPAcceptance(t *testing.T) {
+	conn := &recordingConn{}
+	sess := &Session{
+		conn:   conn,
+		mccpOn: true,
+	}
+
+	// Server sends WILL MCCP2
+	sess.handleTelnetEvent(telEvent{typ: telEventWill, opt: mccp2})
+
+	if !sess.mccpAccepted {
+		t.Fatal("expected mccpAccepted to be true after WILL MCCP2 and mccpOn=true")
+	}
+
+	// Verify DO MCCP2 was written
+	if !bytes.Equal(conn.Bytes(), []byte{telIAC, telDO, mccp2}) {
+		t.Errorf("expected DO MCCP2, got %v", conn.Bytes())
+	}
+}
+
+func TestMCCPDisabledNegotiation(t *testing.T) {
+	conn := &recordingConn{}
+	sess := &Session{
+		conn:   conn,
+		mccpOn: false,
+	}
+
+	// Server sends WILL MCCP2
+	sess.handleTelnetEvent(telEvent{typ: telEventWill, opt: mccp2})
+
+	if sess.mccpAccepted {
+		t.Fatal("expected mccpAccepted to be false after WILL MCCP2 and mccpOn=false")
+	}
+
+	// Verify DONT MCCP2 was written
+	if !bytes.Equal(conn.Bytes(), []byte{telIAC, telDONT, mccp2}) {
+		t.Errorf("expected DONT MCCP2, got %v", conn.Bytes())
+	}
+}

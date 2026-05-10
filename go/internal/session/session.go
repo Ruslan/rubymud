@@ -1,17 +1,20 @@
 package session
 
 import (
+	"bytes"
+	"compress/zlib"
 	"fmt"
+	"io"
 	"log"
 	"net"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"rubymud/go/internal/storage"
 	"rubymud/go/internal/vm"
 )
-
-var packetEnd = []byte{0xff, 0xf9}
 
 type clientSink struct {
 	id   int
@@ -23,6 +26,11 @@ type delayTask struct {
 	id      string
 	due     time.Time
 	command string
+}
+
+type cmdItem struct {
+	line   string
+	source string
 }
 
 type Session struct {
@@ -39,11 +47,21 @@ type Session struct {
 	timersMu     sync.Mutex
 	delays       map[string]*delayTask
 	delaysMu     sync.Mutex
-	cmdQueue     chan string
+	cmdQueue     chan cmdItem
 	done         chan struct{}
+
+	readSrc      io.Reader
+	initCmds     string
+	mccpOn       bool
+	mccpAccepted bool
+	zlibCloser   io.Closer
+
+	mccpActive            atomic.Bool
+	mccpCompressedBytes   atomic.Uint64
+	mccpDecompressedBytes atomic.Uint64
 }
 
-func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM) (*Session, error) {
+func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM, initCmds string, mccpOn bool) (*Session, error) {
 	conn, err := net.Dial("tcp", mudAddr)
 	if err != nil {
 		return nil, err
@@ -58,8 +76,11 @@ func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM) (*Sess
 		clients:   make(map[int]clientSink),
 		timers:    make(map[string]*Timer),
 		delays:    make(map[string]*delayTask),
-		cmdQueue:  make(chan string, 100),
+		cmdQueue:  make(chan cmdItem, 100),
 		done:      make(chan struct{}),
+		readSrc:   conn,
+		initCmds:  initCmds,
+		mccpOn:    mccpOn,
 	}
 
 	// Initialize default ticker
@@ -78,18 +99,19 @@ func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM) (*Sess
 func (s *Session) runCommandDispatcher() {
 	for {
 		select {
-		case cmd := <-s.cmdQueue:
-			if err := s.SendCommand(cmd, "scheduler"); err != nil {
+		case item := <-s.cmdQueue:
+			if item.source == "" {
+				item.source = "scheduler"
+			}
+			if err := s.SendCommand(item.line, item.source); err != nil {
 				log.Printf("scheduler send command error: %v", err)
 			}
-			// Pacing: wait 50ms between commands
 			time.Sleep(50 * time.Millisecond)
 		case <-s.done:
 			return
 		}
 	}
 }
-
 
 func (s *Session) runTimerLoop() {
 	ticker := time.NewTicker(100 * time.Millisecond)
@@ -137,7 +159,7 @@ func (s *Session) runTimerLoop() {
 			// Queue commands
 			for _, cmd := range commandsToRun {
 				select {
-				case s.cmdQueue <- cmd:
+				case s.cmdQueue <- cmdItem{line: cmd, source: "scheduler"}:
 				default:
 					log.Printf("command queue full, dropping scheduled command: %s", cmd)
 				}
@@ -147,7 +169,6 @@ func (s *Session) runTimerLoop() {
 		}
 	}
 }
-
 
 func (s *Session) BroadcastTick() {
 	// Caller must hold s.timersMu
@@ -726,6 +747,9 @@ func (s *Session) Close() error {
 	if err := s.store.MarkSessionDisconnected(s.sessionID); err != nil {
 		log.Printf("mark session disconnected failed: %v", err)
 	}
+	if s.zlibCloser != nil {
+		_ = s.zlibCloser.Close()
+	}
 	return s.conn.Close()
 }
 
@@ -756,4 +780,98 @@ func (s *Session) IsClosed() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.closed
+}
+
+func (s *Session) writeTelnet(data []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return
+	}
+	if _, err := s.conn.Write(data); err != nil {
+		log.Printf("telnet write error: %v", err)
+	}
+}
+
+func (s *Session) handleTelnetEvent(ev telEvent) {
+	switch ev.typ {
+	case telEventWill:
+		if ev.opt == mccp2 && s.mccpOn {
+			log.Printf("telnet: server offers MCCP2, accepting")
+			s.writeTelnet([]byte{telIAC, telDO, mccp2})
+			s.mccpAccepted = true
+		} else {
+			s.writeTelnet([]byte{telIAC, telDONT, ev.opt})
+		}
+	case telEventWont:
+	case telEventDo:
+		s.writeTelnet([]byte{telIAC, telWONT, ev.opt})
+	case telEventDont:
+	case telEventSB:
+	}
+}
+
+func (s *Session) activateMCCP2(decoder *telnetDecoder) {
+	remaining := decoder.RemainingCompressed()
+	var zlibReader io.ReadCloser
+	var err error
+
+	var rawSrc io.Reader = s.conn
+	if len(remaining) > 0 {
+		rawSrc = io.MultiReader(bytes.NewReader(remaining), s.conn)
+	}
+
+	countingSrc := &countingReader{r: rawSrc, count: &s.mccpCompressedBytes}
+	zlibReader, err = zlib.NewReader(countingSrc)
+	if err != nil {
+		log.Printf("MCCP2 activation failed: %v", err)
+		s.Close()
+		return
+	}
+
+	decoder.SetCompressionActive(true)
+	s.readSrc = zlibReader
+	s.zlibCloser = zlibReader
+	s.mccpActive.Store(true)
+	log.Printf("MCCP2 compression activated (%d bytes leftover)", len(remaining))
+}
+
+func (s *Session) MCCPStats() (bool, uint64, uint64, string) {
+	active := s.mccpActive.Load()
+	comp := s.mccpCompressedBytes.Load()
+	decomp := s.mccpDecompressedBytes.Load()
+	ratio := "0%"
+	if comp > 0 && decomp > comp {
+		pct := 100.0 * (1.0 - float64(comp)/float64(decomp))
+		ratio = fmt.Sprintf("%.1f%%", pct)
+	}
+	return active, comp, decomp, ratio
+}
+
+type countingReader struct {
+	r     io.Reader
+	count *atomic.Uint64
+}
+
+func (c *countingReader) Read(p []byte) (n int, err error) {
+	n, err = c.r.Read(p)
+	c.count.Add(uint64(n))
+	return n, err
+}
+
+func (s *Session) QueueStartupCommands() {
+	if s.initCmds == "" {
+		return
+	}
+	for _, line := range strings.Split(s.initCmds, "\n") {
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			continue
+		}
+		select {
+		case s.cmdQueue <- cmdItem{line: line, source: "connect"}:
+		default:
+			log.Printf("startup command queue full, dropping: %s", line)
+		}
+	}
 }

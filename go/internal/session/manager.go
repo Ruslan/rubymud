@@ -34,6 +34,11 @@ func (m *Manager) ListSessions() ([]storage.SessionRecord, error) {
 	for i := range records {
 		if sess, ok := m.sessions[records[i].ID]; ok && !sess.IsClosed() {
 			records[i].Status = "connected"
+			active, comp, decomp, ratio := sess.MCCPStats()
+			records[i].MCCPActive = active
+			records[i].MCCPCompressedBytes = comp
+			records[i].MCCPDecompressedBytes = decomp
+			records[i].MCCPCompressionRatio = ratio
 		} else {
 			records[i].Status = "disconnected"
 		}
@@ -71,14 +76,18 @@ func (m *Manager) Connect(id int64) (*Session, error) {
 		return nil, fmt.Errorf("vm reload: %w", err)
 	}
 
+	mccpOn := record.MCCPEnabled != 0
+
 	addr := fmt.Sprintf("%s:%d", record.MudHost, record.MudPort)
-	sess, err := New(record.ID, addr, m.store, v)
+	sess, err := New(record.ID, addr, m.store, v, record.InitialCommands, mccpOn)
 	if err != nil {
 		return nil, err
 	}
 
 	m.sessions[id] = sess
 	go sess.RunReadLoop()
+
+	sess.QueueStartupCommands()
 
 	if err := m.store.MarkSessionConnected(id); err != nil {
 		log.Printf("failed to mark session connected in db: %v", err)

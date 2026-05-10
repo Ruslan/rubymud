@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
 
   interface Variable {
     key: string;
@@ -92,6 +92,12 @@
     mud_host: string;
     mud_port: number;
     status: string;
+    initial_commands: string;
+    mccp_enabled: number;
+    mccp_active?: boolean;
+    mccp_compressed_bytes?: number;
+    mccp_decompressed_bytes?: number;
+    mccp_compression_ratio?: string;
   }
 
   interface HistoryEntry {
@@ -145,7 +151,7 @@
 
   // Sessions State
   let sessions: Session[] = [];
-  const defaultSession = (): Partial<Session> => ({ name: '', mud_host: '', mud_port: 0 });
+  const defaultSession = (): Partial<Session> => ({ name: '', mud_host: '', mud_port: 0, initial_commands: '', mccp_enabled: 1 });
   let sessionEditor: Partial<Session> = defaultSession();
   $: currentSession = sessions.find(s => s.id === selectedSessionID);
 
@@ -563,10 +569,25 @@
     }
   }
 
+  let monitoringInterval: number | null = null;
+
   onMount(() => {
     wakeLockEnabled = localStorage.getItem(wakeLockEnabledStorageKey) !== 'false';
     lastFetchKey = `${currentTab}|${selectedSessionID ?? ''}|${selectedProfileID ?? ''}`;
     void fetchData();
+
+    // Small polling refresh for manual testing on the sessions page
+    monitoringInterval = window.setInterval(() => {
+      if (currentTab === 'sessions' && !loading) {
+        void fetchData();
+      }
+    }, 1500);
+  });
+
+  onDestroy(() => {
+    if (monitoringInterval) {
+      clearInterval(monitoringInterval);
+    }
   });
 </script>
 
@@ -979,9 +1000,21 @@
                 {sessionEditor.id ? 'Update' : 'Add'}
             </button>
         </div>
+        {#if sessionEditor.id}
+        <div class="form-row" style="flex-direction: column; align-items: stretch; margin-top: 8px;">
+            <label for="init-cmds" style="font-size: 0.85em; color: #8b949e;">Initial Commands <span style="font-weight: normal;">(one per line, sent on connect)</span></label>
+            <textarea id="init-cmds" bind:value={sessionEditor.initial_commands} rows="3" style="width: 100%; resize: vertical; font-family: monospace;"></textarea>
+        </div>
+        <div class="form-row" style="margin-top: 4px;">
+            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                <input type="checkbox" checked={sessionEditor.mccp_enabled === 1} on:change={(e) => sessionEditor.mccp_enabled = e.target.checked ? 1 : 0} />
+                Enable MCCP2 compression
+            </label>
+        </div>
+        {/if}
       </div>
       <table class="data-table">
-        <thead><tr><th>Status</th><th>Name</th><th>Connection</th><th>Actions</th></tr></thead>
+        <thead><tr><th style="width: 120px">Status</th><th style="width: 200px">Network</th><th>Name</th><th>Connection</th><th style="width: 240px">Actions</th></tr></thead>
         <tbody>
           {#each sessions as s}
             <tr>
@@ -989,6 +1022,19 @@
                 <span class="status-tag {s.status === 'connected' ? 'connected' : 'disconnected'}">
                   {s.status}
                 </span>
+              </td>
+              <td>
+                {#if s.mccp_active}
+                  <div class="mccp-stats">
+                    <span class="mccp-tag">MCCP Active</span>
+                    <span class="stats-text" title="Compressed / Decompressed">
+                      {Math.round((s.mccp_compressed_bytes || 0) / 1024)}K / {Math.round((s.mccp_decompressed_bytes || 0) / 1024)}K
+                    </span>
+                    <span class="ratio-text">{s.mccp_compression_ratio} saved</span>
+                  </div>
+                {:else}
+                  <span class="dim-cell">-</span>
+                {/if}
               </td>
               <td class="key-cell">{s.name}</td>
               <td class="value-cell">{s.mud_host}:{s.mud_port}</td>
@@ -1132,6 +1178,10 @@
   .status-tag { padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; text-transform: uppercase; }
   .status-tag.connected { background: rgba(46, 204, 113, 0.2); color: #2ecc71; border: 1px solid rgba(46, 204, 113, 0.3); }
   .status-tag.disconnected { background: rgba(231, 76, 60, 0.2); color: #e74c3c; border: 1px solid rgba(231, 76, 60, 0.3); }
+  .mccp-stats { display: flex; flex-direction: column; gap: 4px; }
+  .mccp-tag { align-self: flex-start; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: bold; background: rgba(52, 152, 219, 0.2); color: #3498db; border: 1px solid rgba(52, 152, 219, 0.3); text-transform: uppercase; }
+  .stats-text { font-size: 0.75rem; color: #9ba3af; font-family: monospace; }
+  .ratio-text { font-size: 0.7rem; color: #2ecc71; font-weight: bold; }
   .flags-cell { width: 80px; }
   .flags-wrapper { display: flex; gap: 8px; align-items: center; font-size: 1.1rem; line-height: 1; }
   .flag-on { color: #2ecc71; }

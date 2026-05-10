@@ -78,8 +78,10 @@ func (s *Session) SendCommand(command string, source string) error {
 		if err := s.store.AppendHistoryEntry(s.sessionID, source, cmd); err != nil {
 			log.Printf("append history entry failed: %v", err)
 		}
-		if err := s.store.AppendCommandHintToLatestLogEntry(s.sessionID, cmd); err != nil {
-			log.Printf("append command hint failed: %v", err)
+		if source != "connect" {
+			if err := s.store.AppendCommandHintToLatestLogEntry(s.sessionID, cmd); err != nil {
+				log.Printf("append command hint failed: %v", err)
+			}
 		}
 		if _, err := s.conn.Write([]byte(cmd + "\n")); err != nil {
 			return err

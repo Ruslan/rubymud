@@ -12,11 +12,12 @@ import (
 
 func (s *Session) RunReadLoop() {
 	log.Printf("session read loop started for %s", s.mudAddr)
+	decoder := newTelnetDecoder()
 	buf := make([]byte, 100*1024)
-	packet := make([]byte, 0, 100*1024)
+	var lineBuf bytes.Buffer
 
 	for {
-		n, err := s.conn.Read(buf)
+		n, err := s.readSrc.Read(buf)
 		if err != nil {
 			if !s.IsClosed() {
 				log.Printf("mud read error: %v", err)
@@ -27,89 +28,149 @@ func (s *Session) RunReadLoop() {
 			continue
 		}
 
-		packet = append(packet, buf[:n]...)
-		for bytes.Contains(packet, packetEnd) {
-			idx := bytes.Index(packet, packetEnd)
-			currentPacket := append([]byte(nil), packet[:idx]...)
-			packet = packet[idx+len(packetEnd):]
+		if s.mccpActive.Load() {
+			s.mccpDecompressedBytes.Add(uint64(n))
+		}
 
-			processed := normalizePacket(currentPacket)
-			if processed == "" {
-				continue
-			}
+		events := decoder.Feed(buf[:n])
 
-			for _, line := range splitLinesForLogs(processed) {
-				plainText := stripANSI(line)
-				effects, routing := s.vm.MatchTriggers(plainText)
-
-				id, err := s.store.AppendLogEntry(s.sessionID, routing.TargetBuffer, line, plainText)
-				if err != nil {
-					log.Printf("append log entry failed: %v", err)
+		for _, ev := range events {
+			switch ev.typ {
+			case telEventText:
+				lineBuf.Write(ev.data)
+			case telEventFlush:
+				flushLine(&lineBuf, s)
+			case telEventMCCP2Start:
+				if !s.mccpAccepted {
+					log.Printf("MCCP2 start received but not accepted/enabled, closing session")
+					s.Close()
+					return
+				}
+				if lineBuf.Len() > 0 {
+					flushLine(&lineBuf, s)
+				}
+				s.activateMCCP2(decoder)
+				decoder.ResetForDecompressed()
+			case telEventSB:
+				if ev.opt == mccp2 {
+					log.Printf("telnet: received duplicate MCCP2 start while active, ignoring")
 					continue
 				}
-
-				for i := range effects {
-					if effects[i].Type == "button" {
-						effects[i].LogEntryID = id
-					}
-				}
-
-				buttons := s.vm.ApplyEffects(effects, id, routing.TargetBuffer, s.sendTriggerCommand, s.BroadcastResult)
-
-				entry := storage.LogEntry{ID: id, Buffer: routing.TargetBuffer, RawText: line, PlainText: plainText}
-				for _, b := range buttons {
-					entry.Buttons = append(entry.Buttons, storage.ButtonOverlay{Label: b.Label, Command: b.Command})
-				}
-
-				highlighted := s.vm.ApplyHighlights(line)
-				s.broadcastEntryWithText(entry, highlighted)
-
-				// Handle copies
-				for _, copyBuffer := range routing.CopyBuffers {
-					copyID, err := s.store.AppendLogEntry(s.sessionID, copyBuffer, line, plainText)
-					if err == nil {
-						for _, b := range entry.Buttons {
-							_ = s.store.AppendButtonOverlay(copyID, b.Label, b.Command)
-						}
-						copyEntry := entry
-						copyEntry.ID = copyID
-						copyEntry.Buffer = copyBuffer
-						s.broadcastEntryWithText(copyEntry, highlighted)
-					}
-				}
-
-				// Handle echoes
-				for _, echo := range routing.Echoes {
-					echoPlain := stripANSI(echo.Text)
-					echoID, err := s.store.AppendLogEntry(s.sessionID, echo.TargetBuffer, echo.Text, echoPlain)
-					if err == nil {
-						echoEntry := storage.LogEntry{ID: echoID, Buffer: echo.TargetBuffer, RawText: echo.Text, PlainText: echoPlain}
-						s.broadcastEntryWithText(echoEntry, s.vm.ApplyHighlights(echo.Text))
-					}
-				}
+				s.handleTelnetEvent(ev)
+			default:
+				s.handleTelnetEvent(ev)
 			}
+		}
+
+		processBufferedLines(&lineBuf, s)
+
+		if decoder.IsCompressed() {
+			decoder.ResetForDecompressed()
 		}
 	}
 }
 
-func normalizePacket(packet []byte) string {
-	packet = bytes.ReplaceAll(packet, packetEnd, nil)
-	if len(packet) == 0 {
-		return ""
+type lineHandler interface {
+	processLine(line string)
+}
+
+func flushLine(buf *bytes.Buffer, h lineHandler) {
+	if buf.Len() == 0 {
+		return
+	}
+	line := buf.String()
+	buf.Reset()
+	line = strings.TrimRight(line, "\r\n")
+	if line == "" {
+		return
+	}
+	h.processLine(line)
+}
+
+func processBufferedLines(buf *bytes.Buffer, h lineHandler) {
+	for {
+		data := buf.Bytes()
+		idx := bytes.IndexByte(data, '\n')
+		if idx < 0 {
+			break
+		}
+		line := string(data[:idx])
+		buf.Next(idx + 1)
+		line = strings.TrimRight(line, "\r")
+		if line == "" {
+			continue
+		}
+		h.processLine(line)
+	}
+}
+
+func (s *Session) processLine(line string) {
+	processed := normalizeLine(line)
+	if processed == "" {
+		return
 	}
 
+	plainText := stripANSI(processed)
+	effects, routing := s.vm.MatchTriggers(plainText)
+
+	id, err := s.store.AppendLogEntry(s.sessionID, routing.TargetBuffer, processed, plainText)
+	if err != nil {
+		log.Printf("append log entry failed: %v", err)
+		return
+	}
+
+	for i := range effects {
+		if effects[i].Type == "button" {
+			effects[i].LogEntryID = id
+		}
+	}
+
+	buttons := s.vm.ApplyEffects(effects, id, routing.TargetBuffer, s.sendTriggerCommand, s.BroadcastResult)
+
+	entry := storage.LogEntry{ID: id, Buffer: routing.TargetBuffer, RawText: processed, PlainText: plainText}
+	for _, b := range buttons {
+		entry.Buttons = append(entry.Buttons, storage.ButtonOverlay{Label: b.Label, Command: b.Command})
+	}
+
+	highlighted := s.vm.ApplyHighlights(processed)
+	s.broadcastEntryWithText(entry, highlighted)
+
+	for _, copyBuffer := range routing.CopyBuffers {
+		copyID, err := s.store.AppendLogEntry(s.sessionID, copyBuffer, processed, plainText)
+		if err == nil {
+			for _, b := range entry.Buttons {
+				_ = s.store.AppendButtonOverlay(copyID, b.Label, b.Command)
+			}
+			copyEntry := entry
+			copyEntry.ID = copyID
+			copyEntry.Buffer = copyBuffer
+			s.broadcastEntryWithText(copyEntry, highlighted)
+		}
+	}
+
+	for _, echo := range routing.Echoes {
+		echoPlain := stripANSI(echo.Text)
+		echoID, err := s.store.AppendLogEntry(s.sessionID, echo.TargetBuffer, echo.Text, echoPlain)
+		if err == nil {
+			echoEntry := storage.LogEntry{ID: echoID, Buffer: echo.TargetBuffer, RawText: echo.Text, PlainText: echoPlain}
+			s.broadcastEntryWithText(echoEntry, s.vm.ApplyHighlights(echo.Text))
+		}
+	}
+}
+
+func normalizeLine(line string) string {
 	var out bytes.Buffer
-	for len(packet) > 0 {
-		r, size := utf8.DecodeRune(packet)
+	data := []byte(line)
+	for len(data) > 0 {
+		r, size := utf8.DecodeRune(data)
 		if r == utf8.RuneError && size == 1 {
-			out.WriteString(fmt.Sprintf("[\\x%02x]", packet[0]))
-			packet = packet[1:]
+			out.WriteString(fmt.Sprintf("[\\x%02x]", data[0]))
+			data = data[1:]
 			continue
 		}
 		out.WriteRune(r)
-		packet = packet[size:]
+		data = data[size:]
 	}
-
 	return out.String()
 }
 
@@ -140,3 +201,6 @@ func stripANSI(s string) string {
 	}
 	return result.String()
 }
+
+// compile-time interface check
+var _ lineHandler = (*Session)(nil)

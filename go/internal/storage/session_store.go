@@ -17,6 +17,7 @@ func (s *Store) EnsureDefaultSession(host string, port int) (SessionRecord, erro
 			MudHost:         host,
 			MudPort:         port,
 			Status:          "disconnected",
+			MCCPEnabled:     1,
 			LastConnectedAt: now,
 		}
 		if err := s.db.Create(&record).Error; err != nil {
@@ -45,10 +46,11 @@ func (s *Store) GetSession(id int64) (SessionRecord, error) {
 
 func (s *Store) CreateSession(name, host string, port int) (SessionRecord, error) {
 	record := SessionRecord{
-		Name:    name,
-		MudHost: host,
-		MudPort: port,
-		Status:  "disconnected",
+		Name:        name,
+		MudHost:     host,
+		MudPort:     port,
+		Status:      "disconnected",
+		MCCPEnabled: 1,
 	}
 	err := s.db.Create(&record).Error
 	if err != nil {

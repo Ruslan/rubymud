@@ -23,7 +23,7 @@ func TestSchedulerDispatcherTermination(t *testing.T) {
 		clients:   make(map[int]clientSink),
 		timers:    make(map[string]*Timer),
 		delays:    make(map[string]*delayTask),
-		cmdQueue:  make(chan string, 100),
+		cmdQueue:  make(chan cmdItem, 100),
 		done:      make(chan struct{}),
 	}
 	
@@ -57,7 +57,7 @@ func TestSchedulerTickBoundaries(t *testing.T) {
 		clients:   make(map[int]clientSink),
 		timers:    make(map[string]*Timer),
 		delays:    make(map[string]*delayTask),
-		cmdQueue:  make(chan string, 10),
+		cmdQueue:  make(chan cmdItem, 10),
 		done:      make(chan struct{}),
 	}
 	v.SetTimerControl(s)
@@ -118,7 +118,7 @@ func TestSchedulerShortCycle(t *testing.T) {
 		clients:   make(map[int]clientSink),
 		timers:    make(map[string]*Timer),
 		delays:    make(map[string]*delayTask),
-		cmdQueue:  make(chan string, 10),
+		cmdQueue:  make(chan cmdItem, 10),
 		done:      make(chan struct{}),
 	}
 	v.SetTimerControl(s)
@@ -154,7 +154,7 @@ func TestSchedulerSubscriptions(t *testing.T) {
 		clients:   make(map[int]clientSink),
 		timers:    make(map[string]*Timer),
 		delays:    make(map[string]*delayTask),
-		cmdQueue:  make(chan string, 10),
+		cmdQueue:  make(chan cmdItem, 10),
 		done:      make(chan struct{}),
 	}
 	v.SetTimerControl(s)
@@ -200,7 +200,7 @@ func TestSchedulerDelay(t *testing.T) {
 		clients:   make(map[int]clientSink),
 		timers:    make(map[string]*Timer),
 		delays:    make(map[string]*delayTask),
-		cmdQueue:  make(chan string, 10),
+		cmdQueue:  make(chan cmdItem, 10),
 		done:      make(chan struct{}),
 	}
 	v.SetTimerControl(s)
@@ -241,7 +241,7 @@ func TestSchedulerCancelDelay(t *testing.T) {
 		clients:   make(map[int]clientSink),
 		timers:    make(map[string]*Timer),
 		delays:    make(map[string]*delayTask),
-		cmdQueue:  make(chan string, 10),
+		cmdQueue:  make(chan cmdItem, 10),
 		done:      make(chan struct{}),
 	}
 	v.SetTimerControl(s)

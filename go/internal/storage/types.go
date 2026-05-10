@@ -21,13 +21,19 @@ type AppSetting struct {
 }
 
 type SessionRecord struct {
-	ID                 int64       `gorm:"primaryKey" json:"id"`
-	Name               string      `json:"name"`
-	MudHost            string      `json:"mud_host"`
-	MudPort            int         `json:"mud_port"`
-	Status             string      `json:"status"`
-	LastConnectedAt    *SQLiteTime `json:"last_connected_at"`
-	LastDisconnectedAt *SQLiteTime `json:"last_disconnected_at"`
+	ID                    int64       `gorm:"primaryKey" json:"id"`
+	Name                  string      `json:"name"`
+	MudHost               string      `json:"mud_host"`
+	MudPort               int         `json:"mud_port"`
+	Status                string      `json:"status"`
+	InitialCommands       string      `json:"initial_commands"`
+	MCCPEnabled           int         `gorm:"default:1" json:"mccp_enabled"`
+	MCCPActive            bool        `gorm:"-" json:"mccp_active"`
+	MCCPCompressedBytes   uint64      `gorm:"-" json:"mccp_compressed_bytes"`
+	MCCPDecompressedBytes uint64      `gorm:"-" json:"mccp_decompressed_bytes"`
+	MCCPCompressionRatio  string      `gorm:"-" json:"mccp_compression_ratio"`
+	LastConnectedAt       *SQLiteTime `json:"last_connected_at"`
+	LastDisconnectedAt    *SQLiteTime `json:"last_disconnected_at"`
 }
 
 type HistoryEntry struct {
@@ -165,5 +171,3 @@ type ProfileTimerSubscription struct {
 func (ProfileTimerSubscription) TableName() string {
 	return "profile_timer_subscriptions"
 }
-
-
