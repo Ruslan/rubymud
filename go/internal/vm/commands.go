@@ -1,6 +1,9 @@
 package vm
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+)
 
 func (v *VM) ProcessInput(input string) []string {
 	results := v.ProcessInputDetailed(input)
@@ -33,6 +36,10 @@ func (v *VM) evalStatement(stmt string, depth int) []Result {
 	stmt = strings.TrimSpace(stmt)
 	if stmt == "" {
 		return nil
+	}
+
+	if stmt == "#if" || strings.HasPrefix(stmt, "#if ") || strings.HasPrefix(stmt, "#if\t") || strings.HasPrefix(stmt, "#if{") {
+		return v.dispatchIf(stmt, depth)
 	}
 
 	// 1. Variable substitution
@@ -148,6 +155,49 @@ func (v *VM) dispatchCommand(input string, depth int) []Result {
 	}
 
 	return []Result{{Text: input, Kind: ResultCommand}}
+}
+
+func (v *VM) dispatchIf(input string, depth int) []Result {
+	rest := strings.TrimPrefix(input, "#if")
+	rest = strings.TrimSpace(rest)
+
+	if rest == "" {
+		return []Result{{Text: "#if error: missing expression", Kind: ResultEcho, TargetBuffer: "main"}}
+	}
+
+	exprStr, rest := splitBraceArg(rest)
+	if exprStr == "" {
+		return []Result{{Text: "#if error: missing expression", Kind: ResultEcho, TargetBuffer: "main"}}
+	}
+
+	thenBranch, rest := splitBraceArg(rest)
+	if thenBranch == "" {
+		return []Result{{Text: "#if error: missing then-branch", Kind: ResultEcho, TargetBuffer: "main"}}
+	}
+
+	elseBranch, rest := splitBraceArg(rest)
+	if strings.TrimSpace(rest) != "" {
+		return []Result{{Text: "#if error: too many arguments", Kind: ResultEcho, TargetBuffer: "main"}}
+	}
+
+	// Evaluate expression
+	res, err := EvalExpression(exprStr, v.variables)
+	if err != nil {
+		return []Result{{Text: fmt.Sprintf("#if expression error: %v", err), Kind: ResultEcho, TargetBuffer: "main"}}
+	}
+
+	boolRes, ok := res.(bool)
+	if !ok {
+		return []Result{{Text: fmt.Sprintf("#if error: expression must return boolean, got %T", res), Kind: ResultEcho, TargetBuffer: "main"}}
+	}
+
+	if boolRes {
+		return v.evalLine(thenBranch, depth+1)
+	} else if elseBranch != "" {
+		return v.evalLine(elseBranch, depth+1)
+	}
+
+	return nil
 }
 
 func commandResults(lines []string) []Result {
