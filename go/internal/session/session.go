@@ -718,7 +718,7 @@ func (s *Session) HighlightText(text string) string {
 }
 
 func (s *Session) BroadcastResult(res vm.Result) {
-	if res.Kind != vm.ResultEcho {
+	if res.Kind != vm.ResultEcho || res.IsInternal {
 		return
 	}
 

@@ -5,18 +5,18 @@ import (
 	"runtime"
 )
 
-func (v *VM) cmdTTS(rest string) []Result {
+func (v *VM) cmdTTS(rest string, depth int) []Result {
 	text, _ := splitBraceArg(rest)
 	if text == "" {
 		text = rest
 	}
 
 	if text == "" {
-		return echoResults([]string{"#tts: usage: #tts {text}"})
+		return echoResults([]string{"#tts: usage: #tts {text}"}, depth)
 	}
 
 	if runtime.GOOS != "darwin" && !v.ttsCustom {
-		return echoResults([]string{fmt.Sprintf("#tts: speech not supported on %s", runtime.GOOS)})
+		return echoResults([]string{fmt.Sprintf("#tts: speech not supported on %s", runtime.GOOS)}, depth)
 	}
 
 	if v.ttsFn != nil {

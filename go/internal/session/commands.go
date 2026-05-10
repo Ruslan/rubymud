@@ -45,6 +45,9 @@ func (s *Session) SendCommand(command string, source string) error {
 	echoMessages := make([]echoMsg, 0)
 	commands := make([]string, 0)
 	for _, r := range results {
+		if r.IsInternal && (r.Depth > 0 || source != "input") {
+			continue
+		}
 		switch r.Kind {
 		case vm.ResultEcho:
 			echoMessages = append(echoMessages, echoMsg{Text: r.Text, TargetBuffer: r.TargetBuffer})

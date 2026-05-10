@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-func (v *VM) cmdAction(rest string) []Result {
+func (v *VM) cmdAction(rest string, depth int) []Result {
 	if rest == "" {
 		var lines []string
 		for _, t := range v.triggers {
@@ -20,7 +20,7 @@ func (v *VM) cmdAction(rest string) []Result {
 		if len(lines) == 0 {
 			lines = append(lines, "#action: no actions defined")
 		}
-		return echoResults(lines)
+		return echoResults(lines, depth)
 	}
 
 	pattern, afterPattern := splitBraceArg(rest)
@@ -36,7 +36,7 @@ func (v *VM) cmdAction(rest string) []Result {
 	}
 
 	if pattern == "" || command == "" {
-		return echoResults([]string{"#action: usage: #action {pattern} {command} [group] [button]"})
+		return echoResults([]string{"#action: usage: #action {pattern} {command} [group] [button]"}, depth)
 	}
 
 	if group == "" {
@@ -46,10 +46,10 @@ func (v *VM) cmdAction(rest string) []Result {
 	if v.store != nil {
 		pid := v.primaryProfileID()
 		if pid == 0 {
-			return echoResults([]string{"#action: save error: no primary profile found"})
+			return echoResults([]string{"#action: save error: no primary profile found"}, depth)
 		}
 		if err := v.store.SaveTrigger(pid, pattern, command, isButton, group); err != nil {
-			return echoResults([]string{fmt.Sprintf("#action: save error: %v", err)})
+			return echoResults([]string{fmt.Sprintf("#action: save error: %v", err)}, depth)
 		}
 		v.ensureFresh()
 	} else {
@@ -66,27 +66,27 @@ func (v *VM) cmdAction(rest string) []Result {
 	if isButton {
 		label = " {button}"
 	}
-	return echoResults([]string{fmt.Sprintf("#action {%s} {%s} {%s}%s", pattern, command, group, label)})
+	return echoResults([]string{fmt.Sprintf("#action {%s} {%s} {%s}%s", pattern, command, group, label)}, depth)
 }
 
-func (v *VM) cmdUnaction(rest string) []Result {
+func (v *VM) cmdUnaction(rest string, depth int) []Result {
 	pattern := strings.TrimSpace(strings.Trim(rest, "{}'\""))
 	if pattern == "" {
-		return echoResults([]string{"#unaction: usage: #unaction {pattern}"})
+		return echoResults([]string{"#unaction: usage: #unaction {pattern}"}, depth)
 	}
 	if v.store != nil {
 		pid := v.primaryProfileID()
 		if pid != 0 {
 			if err := v.store.DeleteTrigger(pid, pattern); err != nil {
-				return echoResults([]string{fmt.Sprintf("#unaction: error: %v", err)})
+				return echoResults([]string{fmt.Sprintf("#unaction: error: %v", err)}, depth)
 			}
 			v.ensureFresh()
 		}
 	}
-	return echoResults([]string{fmt.Sprintf("#unaction: %s removed", pattern)})
+	return echoResults([]string{fmt.Sprintf("#unaction: %s removed", pattern)}, depth)
 }
 
-func (v *VM) cmdHighlight(rest string) []Result {
+func (v *VM) cmdHighlight(rest string, depth int) []Result {
 	if rest == "" {
 		var lines []string
 		for _, h := range v.highlights {
@@ -95,7 +95,7 @@ func (v *VM) cmdHighlight(rest string) []Result {
 		if len(lines) == 0 {
 			lines = append(lines, "#highlight: no highlights defined")
 		}
-		return echoResults(lines)
+		return echoResults(lines, depth)
 	}
 
 	colorSpec, afterColor := splitBraceArg(rest)
@@ -103,7 +103,7 @@ func (v *VM) cmdHighlight(rest string) []Result {
 	group, _ := splitBraceArg(strings.TrimSpace(afterPattern))
 
 	if pattern == "" {
-		return echoResults([]string{"#highlight: usage: #highlight {color} {pattern} [group]"})
+		return echoResults([]string{"#highlight: usage: #highlight {color} {pattern} [group]"}, depth)
 	}
 	if group == "" {
 		group = "default"
@@ -116,10 +116,10 @@ func (v *VM) cmdHighlight(rest string) []Result {
 	if v.store != nil {
 		pid := v.primaryProfileID()
 		if pid == 0 {
-			return echoResults([]string{"#highlight: save error: no primary profile found"})
+			return echoResults([]string{"#highlight: save error: no primary profile found"}, depth)
 		}
 		if err := v.store.SaveHighlight(pid, h); err != nil {
-			return echoResults([]string{fmt.Sprintf("#highlight: save error: %v", err)})
+			return echoResults([]string{fmt.Sprintf("#highlight: save error: %v", err)}, depth)
 		}
 		v.ensureFresh()
 	} else {
@@ -127,22 +127,22 @@ func (v *VM) cmdHighlight(rest string) []Result {
 		v.highlights = append(v.highlights, h)
 	}
 
-	return echoResults([]string{formatHighlight(h)})
+	return echoResults([]string{formatHighlight(h)}, depth)
 }
 
-func (v *VM) cmdUnhighlight(rest string) []Result {
+func (v *VM) cmdUnhighlight(rest string, depth int) []Result {
 	pattern := strings.TrimSpace(strings.Trim(rest, "{}'\""))
 	if pattern == "" {
-		return echoResults([]string{"#unhighlight: usage: #unhighlight {pattern}"})
+		return echoResults([]string{"#unhighlight: usage: #unhighlight {pattern}"}, depth)
 	}
 	if v.store != nil {
 		pid := v.primaryProfileID()
 		if pid != 0 {
 			if err := v.store.DeleteHighlight(pid, pattern); err != nil {
-				return echoResults([]string{fmt.Sprintf("#unhighlight: error: %v", err)})
+				return echoResults([]string{fmt.Sprintf("#unhighlight: error: %v", err)}, depth)
 			}
 			v.ensureFresh()
 		}
 	}
-	return echoResults([]string{fmt.Sprintf("#unhighlight: %s removed", pattern)})
+	return echoResults([]string{fmt.Sprintf("#unhighlight: %s removed", pattern)}, depth)
 }

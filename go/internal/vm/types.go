@@ -38,6 +38,8 @@ type Result struct {
 	Text         string
 	Kind         ResultKind
 	TargetBuffer string
+	IsInternal   bool
+	Depth        int
 }
 
 type TimerControl interface {

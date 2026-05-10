@@ -68,7 +68,7 @@ func (v *VM) evalStatement(stmt string, depth int) []Result {
 
 	// 4. Speedwalk expansion
 	if expanded, ok := expandSpeedwalk(stmt); ok {
-		return commandResults(expanded)
+		return commandResults(expanded, depth)
 	}
 
 	// 5. Default: send to MUD
@@ -107,63 +107,63 @@ func (v *VM) dispatchCommand(input string, depth int) []Result {
 
 	switch keyword {
 	case "alias", "ali":
-		return v.cmdAlias(rest)
+		return v.cmdAlias(rest, depth)
 	case "unalias":
-		return v.cmdUnalias(rest)
+		return v.cmdUnalias(rest, depth)
 	case "variable", "var":
-		return v.cmdVariable(rest)
+		return v.cmdVariable(rest, depth)
 	case "unvariable", "unvar":
-		return v.cmdUnvariable(rest)
+		return v.cmdUnvariable(rest, depth)
 	case "action", "act":
-		return v.cmdAction(rest)
+		return v.cmdAction(rest, depth)
 	case "unaction", "unact":
-		return v.cmdUnaction(rest)
+		return v.cmdUnaction(rest, depth)
 	case "highlight", "high":
-		return v.cmdHighlight(rest)
+		return v.cmdHighlight(rest, depth)
 	case "unhighlight", "unhigh":
-		return v.cmdUnhighlight(rest)
+		return v.cmdUnhighlight(rest, depth)
 	case "hotkey", "hot":
-		return v.cmdHotkey(rest)
+		return v.cmdHotkey(rest, depth)
 	case "tickon":
-		return v.cmdTickOn(rest)
+		return v.cmdTickOn(rest, depth)
 	case "tickoff":
-		return v.cmdTickOff(rest)
+		return v.cmdTickOff(rest, depth)
 	case "tickset":
-		return v.cmdTickSet(rest)
+		return v.cmdTickSet(rest, depth)
 	case "ticksize":
-		return v.cmdTickSize(rest)
+		return v.cmdTickSize(rest, depth)
 	case "tickicon":
-		return v.cmdTickIcon(rest)
+		return v.cmdTickIcon(rest, depth)
 	case "tickmode":
-		return v.cmdTickMode(rest)
+		return v.cmdTickMode(rest, depth)
 	case "ticker":
-		return v.cmdTicker(rest)
+		return v.cmdTicker(rest, depth)
 	case "tickat":
-		return v.cmdTickAt(rest)
+		return v.cmdTickAt(rest, depth)
 	case "untickat":
-		return v.cmdUntickat(rest)
+		return v.cmdUntickat(rest, depth)
 	case "delay":
-		return v.cmdDelay(rest)
+		return v.cmdDelay(rest, depth)
 	case "undelay":
-		return v.cmdUndelay(rest)
+		return v.cmdUndelay(rest, depth)
 	case "tts", "ts":
-		return v.cmdTTS(rest)
+		return v.cmdTTS(rest, depth)
 	case "showme", "show":
 		text, _ := splitBraceArg(rest)
 		if text == "" {
 			text = rest // Fallback if no braces
 		}
-		return []Result{{Text: text, Kind: ResultEcho, TargetBuffer: "main"}}
+		return []Result{{Text: text, Kind: ResultEcho, TargetBuffer: "main", IsInternal: false, Depth: depth}}
 	case "woutput":
 		buffer, afterBuffer := splitBraceArg(rest)
 		text, _ := splitBraceArg(afterBuffer)
 		if text == "" {
 			text = strings.TrimSpace(afterBuffer) // Fallback
 		}
-		return []Result{{Text: text, Kind: ResultEcho, TargetBuffer: buffer}}
+		return []Result{{Text: text, Kind: ResultEcho, TargetBuffer: buffer, IsInternal: false, Depth: depth}}
 	}
 
-	return []Result{{Text: input, Kind: ResultCommand}}
+	return []Result{{Text: input, Kind: ResultCommand, IsInternal: false, Depth: depth}}
 }
 
 func (v *VM) dispatchIf(input string, depth int) []Result {
@@ -171,33 +171,33 @@ func (v *VM) dispatchIf(input string, depth int) []Result {
 	rest = strings.TrimSpace(rest)
 
 	if rest == "" {
-		return []Result{{Text: "#if error: missing expression", Kind: ResultEcho, TargetBuffer: "main"}}
+		return []Result{{Text: "#if error: missing expression", Kind: ResultEcho, TargetBuffer: "main", IsInternal: true, Depth: depth}}
 	}
 
 	exprStr, rest := splitBraceArg(rest)
 	if exprStr == "" {
-		return []Result{{Text: "#if error: missing expression", Kind: ResultEcho, TargetBuffer: "main"}}
+		return []Result{{Text: "#if error: missing expression", Kind: ResultEcho, TargetBuffer: "main", IsInternal: true, Depth: depth}}
 	}
 
 	thenBranch, rest := splitBraceArg(rest)
 	if thenBranch == "" {
-		return []Result{{Text: "#if error: missing then-branch", Kind: ResultEcho, TargetBuffer: "main"}}
+		return []Result{{Text: "#if error: missing then-branch", Kind: ResultEcho, TargetBuffer: "main", IsInternal: true, Depth: depth}}
 	}
 
 	elseBranch, rest := splitBraceArg(rest)
 	if strings.TrimSpace(rest) != "" {
-		return []Result{{Text: "#if error: too many arguments", Kind: ResultEcho, TargetBuffer: "main"}}
+		return []Result{{Text: "#if error: too many arguments", Kind: ResultEcho, TargetBuffer: "main", IsInternal: true, Depth: depth}}
 	}
 
 	// Evaluate expression
 	res, err := EvalExpression(exprStr, v.variables)
 	if err != nil {
-		return []Result{{Text: fmt.Sprintf("#if expression error: %v", err), Kind: ResultEcho, TargetBuffer: "main"}}
+		return []Result{{Text: fmt.Sprintf("#if expression error: %v", err), Kind: ResultEcho, TargetBuffer: "main", IsInternal: true, Depth: depth}}
 	}
 
 	boolRes, ok := res.(bool)
 	if !ok {
-		return []Result{{Text: fmt.Sprintf("#if error: expression must return boolean, got %T", res), Kind: ResultEcho, TargetBuffer: "main"}}
+		return []Result{{Text: fmt.Sprintf("#if error: expression must return boolean, got %T", res), Kind: ResultEcho, TargetBuffer: "main", IsInternal: true, Depth: depth}}
 	}
 
 	if boolRes {
@@ -209,18 +209,18 @@ func (v *VM) dispatchIf(input string, depth int) []Result {
 	return nil
 }
 
-func commandResults(lines []string) []Result {
+func commandResults(lines []string, depth int) []Result {
 	results := make([]Result, 0, len(lines))
 	for _, line := range lines {
-		results = append(results, Result{Text: line, Kind: ResultCommand})
+		results = append(results, Result{Text: line, Kind: ResultCommand, IsInternal: false, Depth: depth})
 	}
 	return results
 }
 
-func echoResults(lines []string) []Result {
+func echoResults(lines []string, depth int) []Result {
 	results := make([]Result, 0, len(lines))
 	for _, line := range lines {
-		results = append(results, Result{Text: line, Kind: ResultEcho})
+		results = append(results, Result{Text: line, Kind: ResultEcho, IsInternal: true, Depth: depth})
 	}
 	return results
 }
