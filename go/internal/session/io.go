@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"log"
 	"strings"
-	"unicode/utf8"
 
 	"rubymud/go/internal/storage"
+	"rubymud/go/internal/vm"
 )
 
 func (s *Session) RunReadLoop() {
@@ -75,15 +75,13 @@ type lineHandler interface {
 }
 
 func flushLine(buf *bytes.Buffer, h lineHandler) {
+	processBufferedLines(buf, h)
 	if buf.Len() == 0 {
 		return
 	}
 	line := buf.String()
 	buf.Reset()
-	line = strings.TrimRight(line, "\r\n")
-	if line == "" {
-		return
-	}
+	line = strings.TrimRight(line, "\r\n\x00")
 	h.processLine(line)
 }
 
@@ -96,22 +94,24 @@ func processBufferedLines(buf *bytes.Buffer, h lineHandler) {
 		}
 		line := string(data[:idx])
 		buf.Next(idx + 1)
-		line = strings.TrimRight(line, "\r")
-		if line == "" {
-			continue
-		}
+		line = strings.TrimRight(line, "\r\x00")
 		h.processLine(line)
 	}
 }
 
 func (s *Session) processLine(line string) {
 	processed := normalizeLine(line)
-	if processed == "" {
-		return
-	}
 
 	plainText := stripANSI(processed)
-	effects, routing := s.vm.MatchTriggers(plainText)
+	var effects []vm.Effect
+	var routing vm.RoutingInfo
+
+	// Only match triggers if the line is not blank
+	if processed != "" {
+		effects, routing = s.vm.MatchTriggers(plainText)
+	} else {
+		routing.TargetBuffer = "main" // Default to main for blank lines
+	}
 
 	id, err := s.store.AppendLogEntry(s.sessionID, routing.TargetBuffer, processed, plainText)
 	if err != nil {
@@ -161,15 +161,13 @@ func (s *Session) processLine(line string) {
 func normalizeLine(line string) string {
 	var out bytes.Buffer
 	data := []byte(line)
-	for len(data) > 0 {
-		r, size := utf8.DecodeRune(data)
-		if r == utf8.RuneError && size == 1 {
-			out.WriteString(fmt.Sprintf("[\\x%02x]", data[0]))
-			data = data[1:]
+	for i := 0; i < len(data); i++ {
+		c := data[i]
+		if c < 32 && c != '\t' && c != '\n' && c != '\r' && c != '\x1b' {
+			out.WriteString(fmt.Sprintf("[\\x%02x]", c))
 			continue
 		}
-		out.WriteRune(r)
-		data = data[size:]
+		out.WriteByte(c)
 	}
 	return out.String()
 }
@@ -185,8 +183,10 @@ func splitLinesForLogs(text string) []string {
 
 func stripANSI(s string) string {
 	var result strings.Builder
+	data := []byte(s)
 	inEscape := false
-	for _, c := range s {
+	for i := 0; i < len(data); i++ {
+		c := data[i]
 		if c == '\x1b' {
 			inEscape = true
 			continue
@@ -197,7 +197,10 @@ func stripANSI(s string) string {
 			}
 			continue
 		}
-		result.WriteRune(c)
+		if c < 32 && c != '\t' && c != '\n' && c != '\r' {
+			continue
+		}
+		result.WriteByte(c)
 	}
 	return result.String()
 }
