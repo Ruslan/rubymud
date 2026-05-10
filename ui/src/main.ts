@@ -196,6 +196,7 @@ let socket = createSocket(sessionID);
 let reconnectTimer: number | null = null;
 let reconnectAttempts = 0;
 let lastHotkeysViewportWidth = currentHotkeysViewportWidth();
+let connectionStatus = 'connecting';
 logBoot('socket created', { readyState: socket.readyState, url: socket.url, sessionID });
 
 fetchWithToken('/api/sessions')
@@ -344,13 +345,18 @@ function toggleGroup(groupName: string, enabled: boolean) {
 function sendCommand(value: string, source = 'input'): boolean {
   if (!sessionID) {
     renderer.appendEntry({ text: '[no session selected]' });
-    renderer.updateConnectionStatus('no session');
+    updateConnectionStatus('no session');
     return false;
   }
 
   if (socket.readyState !== WebSocket.OPEN) {
     renderer.appendEntry({ text: '[disconnected]' });
-    renderer.updateConnectionStatus('disconnected');
+    updateConnectionStatus('disconnected');
+    return false;
+  }
+
+  if (connectionStatus !== 'connected') {
+    renderer.appendEntry({ text: `[${connectionStatus}]` });
     return false;
   }
 
@@ -381,6 +387,36 @@ function clearReconnectTimer() {
   reconnectTimer = null;
 }
 
+function updateConnectionStatus(status: string) {
+  connectionStatus = status;
+  renderer.updateConnectionStatus(status);
+}
+
+async function connectMudSession() {
+  if (!sessionID) {
+    updateConnectionStatus('no session');
+    return;
+  }
+
+  clearReconnectTimer();
+  updateConnectionStatus('connecting');
+  try {
+    const res = await fetchWithToken(`/api/sessions/${sessionID}/connect`, { method: 'POST' });
+    if (!res.ok) {
+      throw new Error(await res.text() || res.statusText);
+    }
+    if (socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({ method: 'attach', sess_id: sessionID }));
+    } else {
+      connectSocket();
+    }
+  } catch (err) {
+    console.error('Failed to connect session:', err);
+    updateConnectionStatus('disconnected');
+    renderer.appendEntry({ text: `[connect failed: ${err instanceof Error ? err.message : String(err)}]` });
+  }
+}
+
 function scheduleReconnect() {
   if (reconnectTimer !== null) {
     return;
@@ -402,7 +438,6 @@ function attachSocketHandlers(target: WebSocket) {
 
     clearReconnectTimer();
     reconnectAttempts = 0;
-    renderer.updateConnectionStatus('connected');
     logBoot('socket open');
     elements.input.focus();
   };
@@ -417,7 +452,7 @@ function attachSocketHandlers(target: WebSocket) {
     logBoot('socket message parsed', { type: message.type });
 
     if (message.type === 'status') {
-      renderer.updateConnectionStatus(message.status || 'connected');
+      updateConnectionStatus(message.status || 'connected');
     }
 
     if (message.type === 'restore_begin') {
@@ -491,7 +526,7 @@ function attachSocketHandlers(target: WebSocket) {
     }
 
     logBoot('socket close', { readyState: target.readyState, reconnectAttempts });
-    renderer.updateConnectionStatus('disconnected');
+    updateConnectionStatus('disconnected');
     if (reconnectAttempts === 0) {
       renderer.appendEntry({ text: '[disconnected]' });
     }
@@ -504,7 +539,7 @@ function connectSocket() {
     return;
   }
 
-  renderer.updateConnectionStatus('connecting');
+  updateConnectionStatus('connecting');
   socket = createSocket(sessionID);
   logBoot('socket reconnect created', { readyState: socket.readyState, url: socket.url, sessionID });
   attachSocketHandlers(socket);
@@ -570,13 +605,11 @@ fontSizeIncreaseButton.addEventListener('click', () => {
   renderFontSizeControls();
 });
 elements.connectionStatus.addEventListener('click', () => {
-  if (elements.connectionStatus.textContent !== 'disconnected') {
+  if (connectionStatus !== 'disconnected') {
     return;
   }
 
-  clearReconnectTimer();
-  reconnectAttempts = 0;
-  connectSocket();
+  void connectMudSession();
 });
 
 elements.panesContainer.addEventListener('click', (event) => {

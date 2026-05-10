@@ -751,9 +751,22 @@ func (s *Session) Close() error {
 		return nil
 	}
 	s.closed = true
-	close(s.done)
+	if s.done != nil {
+		close(s.done)
+	}
+	clients := make([]clientSink, 0, len(s.clients))
+	for _, client := range s.clients {
+		clients = append(clients, client)
+	}
 	s.clients = map[int]clientSink{}
 	s.mu.Unlock()
+
+	statusMsg := ServerMsg{Type: "status", Status: "disconnected"}
+	for _, client := range clients {
+		if err := client.send(statusMsg); err != nil {
+			log.Printf("client send error to %s: %v", client.name, err)
+		}
+	}
 
 	log.Printf("closing session for %s", s.mudAddr)
 	if s.store != nil {
@@ -763,6 +776,9 @@ func (s *Session) Close() error {
 	}
 	if s.zlibCloser != nil {
 		_ = s.zlibCloser.Close()
+	}
+	if s.conn == nil {
+		return nil
 	}
 	return s.conn.Close()
 }

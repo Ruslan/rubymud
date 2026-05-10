@@ -91,6 +91,10 @@ func (s *Session) BroadcastVariables() {
 	s.broadcastMsg(ServerMsg{Type: "variables", Variables: variables})
 }
 
+func (s *Session) BroadcastStatus(status string) {
+	s.broadcastMsg(ServerMsg{Type: "status", Status: status})
+}
+
 func (s *Session) broadcastCommandHint(cmd string, entryID int64, buffer string) {
 	msg := ServerMsg{
 		Type:    "command_hint",

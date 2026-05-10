@@ -142,12 +142,12 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 			r.Post("/import/all", s.importAllProfilesFromFiles)
 			r.Post("/import", s.importProfileFromFile)
 			r.Get("/files", s.listProfileFiles)
-			
+
 			r.Route("/{profileID}", func(r chi.Router) {
 				r.Post("/export", s.exportProfileToFile)
 				r.Put("/", s.updateProfile)
 				r.Delete("/", s.deleteProfile)
-				
+
 				r.Route("/aliases", func(r chi.Router) {
 					r.Get("/", s.listProfileAliases)
 					r.Post("/", s.createProfileAlias)
@@ -1194,6 +1194,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if id := message.SessID; id != 0 {
 				if sess, ok := s.manager.GetSession(id); ok {
 					currentSess = sess
+					if err := writeJSON(session.ServerMsg{Type: "status", Status: "connected"}); err != nil {
+						log.Printf("websocket status send failed: %v", err)
+						return
+					}
 					if err := s.sendRestoreState(sess, writeJSON); err != nil {
 						log.Printf("websocket restore state failed: %v", err)
 						return
@@ -1201,7 +1205,13 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 					clientID = sess.AttachClient(ws.RemoteAddr().String(), func(msg session.ServerMsg) error {
 						return writeJSON(msg)
 					})
+				} else if err := writeJSON(session.ServerMsg{Type: "status", Status: "disconnected"}); err != nil {
+					log.Printf("websocket status send failed: %v", err)
+					return
 				}
+			} else if err := writeJSON(session.ServerMsg{Type: "status", Status: "no session"}); err != nil {
+				log.Printf("websocket status send failed: %v", err)
+				return
 			}
 		case "variables":
 			if currentSess == nil {
@@ -1220,15 +1230,15 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if currentSess == nil {
 				continue
 			}
-			
+
 			command := message.Value
 			source := strings.TrimSpace(message.Source)
-			
+
 			// Only trim if it's not a direct empty input intent
 			if command != "" || source != "input" {
 				command = strings.TrimSpace(command)
 			}
-			
+
 			if command == "" && source != "input" {
 				continue
 			}
@@ -1312,6 +1322,7 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 
 	return writeJSON(session.ServerMsg{Type: "restore_end"})
 }
+
 // Profile Variables
 
 func (s *Server) listProfileVariables(w http.ResponseWriter, r *http.Request) {

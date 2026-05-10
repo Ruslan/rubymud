@@ -3,6 +3,7 @@ package session
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"strings"
 
@@ -20,7 +21,12 @@ func (s *Session) RunReadLoop() {
 		n, err := s.readSrc.Read(buf)
 		if err != nil {
 			if !s.IsClosed() {
-				log.Printf("mud read error: %v", err)
+				if err == io.EOF {
+					log.Printf("mud connection closed by remote host")
+				} else {
+					log.Printf("mud read error: %v", err)
+				}
+				s.Close()
 			}
 			return
 		}

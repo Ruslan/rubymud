@@ -2,6 +2,7 @@ package session
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -121,6 +122,96 @@ func TestSendCommandTextWithColonStillSends(t *testing.T) {
 	}
 }
 
+func TestReadLoopClosesSessionOnRemoteDisconnect(t *testing.T) {
+	tests := []struct {
+		name    string
+		readErr error
+	}{
+		{name: "EOF", readErr: io.EOF},
+		{name: "read error", readErr: errors.New("connection reset")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := newTestStore(t)
+			record, err := store.CreateSession("test", "localhost", 1234)
+			if err != nil {
+				t.Fatalf("CreateSession: %v", err)
+			}
+			if err := store.MarkSessionConnected(record.ID); err != nil {
+				t.Fatalf("MarkSessionConnected: %v", err)
+			}
+
+			conn := &recordingConn{readErr: tt.readErr}
+			sess := &Session{
+				sessionID: record.ID,
+				mudAddr:   "localhost:1234",
+				conn:      conn,
+				readSrc:   conn,
+				store:     store,
+				vm:        vm.New(store, record.ID),
+				clients:   map[int]clientSink{},
+				done:      make(chan struct{}),
+			}
+
+			var statuses []string
+			sess.AttachClient("test", func(msg ServerMsg) error {
+				if msg.Type == "status" {
+					statuses = append(statuses, msg.Status)
+				}
+				return nil
+			})
+
+			sess.RunReadLoop()
+
+			if !sess.IsClosed() {
+				t.Fatal("session should be closed after remote read failure")
+			}
+			updated, err := store.GetSession(record.ID)
+			if err != nil {
+				t.Fatalf("GetSession: %v", err)
+			}
+			if updated.Status != "disconnected" {
+				t.Fatalf("stored session status = %q, want disconnected", updated.Status)
+			}
+			if len(statuses) != 1 || statuses[0] != "disconnected" {
+				t.Fatalf("status broadcasts = %v, want [disconnected]", statuses)
+			}
+		})
+	}
+}
+
+func TestCloseBroadcastsDisconnectedOnce(t *testing.T) {
+	store := newTestStore(t)
+	conn := &recordingConn{}
+	sess := &Session{
+		sessionID: 1,
+		mudAddr:   "localhost:1234",
+		conn:      conn,
+		store:     store,
+		clients:   map[int]clientSink{},
+		done:      make(chan struct{}),
+	}
+
+	var statuses []string
+	sess.AttachClient("test", func(msg ServerMsg) error {
+		if msg.Type == "status" {
+			statuses = append(statuses, msg.Status)
+		}
+		return nil
+	})
+
+	if err := sess.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+	if err := sess.Close(); err != nil {
+		t.Fatalf("second Close: %v", err)
+	}
+	if len(statuses) != 1 || statuses[0] != "disconnected" {
+		t.Fatalf("status broadcasts = %v, want [disconnected]", statuses)
+	}
+}
+
 func TestVariableUpdateAppliesImmediatelyInLiveSession(t *testing.T) {
 	store := newTestStore(t)
 	v := vm.New(store, 1)
@@ -183,9 +274,15 @@ func newTestStore(t *testing.T) *storage.Store {
 
 type recordingConn struct {
 	bytes.Buffer
+	readErr error
 }
 
-func (c *recordingConn) Read(_ []byte) (int, error)         { return 0, io.EOF }
+func (c *recordingConn) Read(_ []byte) (int, error) {
+	if c.readErr != nil {
+		return 0, c.readErr
+	}
+	return 0, io.EOF
+}
 func (c *recordingConn) Close() error                       { return nil }
 func (c *recordingConn) LocalAddr() net.Addr                { return dummyAddr("local") }
 func (c *recordingConn) RemoteAddr() net.Addr               { return dummyAddr("remote") }
