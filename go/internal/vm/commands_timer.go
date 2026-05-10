@@ -187,25 +187,29 @@ func (v *VM) cmdTickAt(rest string) []Result {
 	var secondStr string
 	var command string
 
-	if _, err := strconv.Atoi(arg1); err == nil {
-		// arg1 is numeric, treat as #tickat {second} {command} for default ticker
+	// Substitute metadata args to allow variables in names/seconds
+	sArg1 := v.substituteVars(arg1)
+	sArg2 := v.substituteVars(arg2)
+
+	if _, err := strconv.Atoi(sArg1); err == nil {
+		// arg1 (substituted) is numeric, treat as #tickat {second} {command} for default ticker
 		name = "ticker"
-		secondStr = arg1
-		command = arg2
+		secondStr = sArg1
+		command = arg2 // Keep raw
 		if arg3 != "" {
 			return echoResults([]string{"#tickat: usage: #tickat [{name}] {second} {command}"})
 		}
 	} else {
 		// arg1 is name, arg2 is second, arg3 is command
-		if !isValidTimerName(arg1) {
-			return echoResults([]string{fmt.Sprintf("#tickat: invalid timer name %q", arg1)})
+		if !isValidTimerName(sArg1) {
+			return echoResults([]string{fmt.Sprintf("#tickat: invalid timer name %q", sArg1)})
 		}
 		if arg3 == "" {
 			return echoResults([]string{"#tickat: usage: #tickat [{name}] {second} {command}"})
 		}
-		name = arg1
-		secondStr = arg2
-		command = arg3
+		name = sArg1
+		secondStr = sArg2
+		command = arg3 // Keep raw
 	}
 
 	second, err := strconv.Atoi(secondStr)
@@ -348,11 +352,12 @@ func (v *VM) cmdTicker(rest string) []Result {
 		return echoResults([]string{"#ticker: usage: #ticker {name} {seconds} {command}"})
 	}
 
-	name := arg1
+	name := v.substituteVars(arg1)
 	if !isValidTimerName(name) {
 		return echoResults([]string{fmt.Sprintf("#ticker: invalid timer name %q", name)})
 	}
 
+	arg2 = v.substituteVars(arg2)
 	seconds, err := strconv.ParseFloat(arg2, 64)
 	if err != nil || seconds < 0 {
 		return echoResults([]string{fmt.Sprintf("#ticker: invalid non-negative seconds %q", arg2)})
@@ -366,7 +371,6 @@ func (v *VM) cmdTicker(rest string) []Result {
 
 	return nil
 }
-
 
 func (v *VM) cmdDelay(rest string) []Result {
 	if v.timerCtrl == nil {
@@ -383,8 +387,8 @@ func (v *VM) cmdDelay(rest string) []Result {
 
 	if arg3 != "" {
 		// #delay {id} {seconds} {command}
-		id = arg1
-		secondsStr = arg2
+		id = v.substituteVars(arg1)
+		secondsStr = v.substituteVars(arg2)
 		command = arg3
 		if strings.TrimSpace(remaining) != "" {
 			return echoResults([]string{"#delay: too many arguments, usage: #delay [{id}] {seconds} {command}"})
@@ -392,7 +396,7 @@ func (v *VM) cmdDelay(rest string) []Result {
 	} else if arg2 != "" {
 		// #delay {seconds} {command}
 		id = ""
-		secondsStr = arg1
+		secondsStr = v.substituteVars(arg1)
 		command = arg2
 	} else {
 		return echoResults([]string{"#delay: usage: #delay [{id}] {seconds} {command}"})

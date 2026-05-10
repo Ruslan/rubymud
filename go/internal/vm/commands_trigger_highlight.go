@@ -2,6 +2,7 @@ package vm
 
 import (
 	"fmt"
+	"rubymud/go/internal/storage"
 	"strings"
 )
 
@@ -23,8 +24,10 @@ func (v *VM) cmdAction(rest string) []Result {
 	}
 
 	pattern, afterPattern := splitBraceArg(rest)
+	pattern = v.substituteVars(pattern)
 	command, afterCommand := splitBraceArg(afterPattern)
 	group, afterGroup := splitBraceArg(afterCommand)
+	group = v.substituteVars(group)
 
 	isButton := false
 	remaining := strings.TrimSpace(afterGroup)
@@ -49,6 +52,14 @@ func (v *VM) cmdAction(rest string) []Result {
 			return echoResults([]string{fmt.Sprintf("#action: save error: %v", err)})
 		}
 		v.ensureFresh()
+	} else {
+		v.triggers = append(v.triggers, storage.TriggerRule{
+			Pattern:   pattern,
+			Command:   command,
+			IsButton:  isButton,
+			GroupName: group,
+			Enabled:   true,
+		})
 	}
 
 	label := ""

@@ -38,8 +38,11 @@ func (v *VM) evalStatement(stmt string, depth int) []Result {
 		return nil
 	}
 
-	if stmt == "#if" || strings.HasPrefix(stmt, "#if ") || strings.HasPrefix(stmt, "#if\t") || strings.HasPrefix(stmt, "#if{") {
-		return v.dispatchIf(stmt, depth)
+	if isCodeBearingCommand(stmt) {
+		if stmt == "#if" || strings.HasPrefix(stmt, "#if ") || strings.HasPrefix(stmt, "#if\t") || strings.HasPrefix(stmt, "#if{") {
+			return v.dispatchIf(stmt, depth)
+		}
+		return v.dispatchCommand(stmt, depth)
 	}
 
 	// 1. Variable substitution
@@ -93,8 +96,14 @@ func (v *VM) dispatchCommand(input string, depth int) []Result {
 		return result
 	}
 
-	keyword, args := splitFirstWord(cmd)
-	rest := strings.Join(args, " ")
+	var keyword, rest string
+	if idx := strings.IndexAny(cmd, " \t{"); idx != -1 {
+		keyword = cmd[:idx]
+		rest = strings.TrimSpace(cmd[idx:])
+	} else {
+		keyword = cmd
+		rest = ""
+	}
 
 	switch keyword {
 	case "alias", "ali":
@@ -214,4 +223,13 @@ func echoResults(lines []string) []Result {
 		results = append(results, Result{Text: line, Kind: ResultEcho})
 	}
 	return results
+}
+func isCodeBearingCommand(stmt string) bool {
+	cmds := []string{"#if", "#alias", "#ali", "#action", "#act", "#hotkey", "#hot", "#tickat", "#delay", "#ticker"}
+	for _, c := range cmds {
+		if stmt == c || strings.HasPrefix(stmt, c+" ") || strings.HasPrefix(stmt, c+"\t") || strings.HasPrefix(stmt, c+"{") {
+			return true
+		}
+	}
+	return false
 }

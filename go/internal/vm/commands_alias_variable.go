@@ -20,6 +20,7 @@ func (v *VM) cmdAlias(rest string) []Result {
 	}
 
 	name, afterName := splitBraceArg(rest)
+	name = v.substituteVars(name)
 	template, _ := splitBraceArg(strings.TrimSpace(afterName))
 	if name == "" {
 		return echoResults([]string{"#alias: usage: #alias {name} {template}"})
@@ -121,6 +122,7 @@ func (v *VM) cmdUnvariable(rest string) []Result {
 
 func (v *VM) cmdHotkey(rest string) []Result {
 	shortcut, afterShortcut := splitBraceArg(strings.TrimSpace(rest))
+	shortcut = v.substituteVars(shortcut)
 	command, _ := splitBraceArg(strings.TrimSpace(afterShortcut))
 	if shortcut == "" || command == "" {
 		return echoResults([]string{"#hotkey: usage: #hotkey {shortcut} {command}"})
