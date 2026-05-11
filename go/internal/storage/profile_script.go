@@ -18,6 +18,7 @@ type ProfileScript struct {
 	Description       string
 	Aliases           []AliasRule
 	Triggers          []TriggerRule
+	Substitutes       []SubstituteRule
 	Highlights        []HighlightRule
 	Hotkeys           []HotkeyRule
 	DeclaredVariables []ProfileVariable
@@ -146,6 +147,32 @@ func (s *Store) ExportProfileScript(profileID int64) (string, error) {
 		sb.WriteString("\n")
 	}
 
+	substitutes, _ := s.ListSubstitutes(profileID)
+	if len(substitutes) > 0 {
+		for _, sub := range substitutes {
+			meta := make(map[string]any)
+			if sub.Position > 0 {
+				meta["position"] = sub.Position
+			}
+			if sub.GroupName != "default" && sub.GroupName != "" {
+				meta["group_name"] = sub.GroupName
+			}
+			if !sub.Enabled {
+				meta["enabled"] = false
+			}
+			if len(meta) > 0 {
+				mj, _ := json.Marshal(meta)
+				sb.WriteString(fmt.Sprintf("#nop rubymud:rule %s\n", string(mj)))
+			}
+			if sub.IsGag {
+				sb.WriteString(fmt.Sprintf("#gag {%s}\n", sub.Pattern))
+			} else {
+				sb.WriteString(fmt.Sprintf("#sub {%s} {%s}\n", sub.Pattern, sub.Replacement))
+			}
+		}
+		sb.WriteString("\n")
+	}
+
 	highlights, _ := s.ListHighlights(profileID)
 	if len(highlights) > 0 {
 		for _, h := range highlights {
@@ -242,6 +269,7 @@ func ParseProfileScript(text string) (*ProfileScript, error) {
 
 	aliasPos := 1
 	triggerPos := 1
+	subPos := 1
 	hlPos := 1
 	hkPos := 1
 	varPos := 1
@@ -355,6 +383,72 @@ func ParseProfileScript(text string) (*ProfileScript, error) {
 					TargetBuffer: targetBuffer, BufferAction: bufferAction,
 				})
 				triggerPos++
+			}
+			pendingMeta = nil
+		} else if strings.HasPrefix(line, "#sub ") || strings.HasPrefix(line, "#substitute ") {
+			rest := strings.TrimSpace(strings.TrimPrefix(line, "#sub "))
+			if strings.HasPrefix(line, "#substitute ") {
+				rest = strings.TrimSpace(strings.TrimPrefix(line, "#substitute "))
+			}
+			pattern, rest := splitBraceArg(rest)
+			replacement, rest := splitBraceArg(rest)
+
+			group := "default"
+			enabled := true
+			position := subPos
+			legacyGroup, _ := splitBraceArg(rest)
+			if legacyGroup != "" {
+				group = legacyGroup
+			}
+			if pendingMeta != nil {
+				if g, ok := pendingMeta["group_name"].(string); ok && g != "" {
+					group = g
+				}
+				if b, ok := pendingMeta["enabled"].(bool); ok {
+					enabled = b
+				}
+				if p, ok := pendingMeta["position"].(float64); ok && p > 0 {
+					position = int(p)
+				}
+			}
+
+			if pattern != "" {
+				ps.Substitutes = append(ps.Substitutes, SubstituteRule{
+					Position: position, Pattern: pattern, Replacement: replacement,
+					Enabled: enabled, GroupName: group,
+				})
+				subPos++
+			}
+			pendingMeta = nil
+		} else if strings.HasPrefix(line, "#gag ") {
+			rest := strings.TrimSpace(strings.TrimPrefix(line, "#gag "))
+			pattern, rest := splitBraceArg(rest)
+
+			group := "default"
+			enabled := true
+			position := subPos
+			legacyGroup, _ := splitBraceArg(rest)
+			if legacyGroup != "" {
+				group = legacyGroup
+			}
+			if pendingMeta != nil {
+				if g, ok := pendingMeta["group_name"].(string); ok && g != "" {
+					group = g
+				}
+				if b, ok := pendingMeta["enabled"].(bool); ok {
+					enabled = b
+				}
+				if p, ok := pendingMeta["position"].(float64); ok && p > 0 {
+					position = int(p)
+				}
+			}
+
+			if pattern != "" {
+				ps.Substitutes = append(ps.Substitutes, SubstituteRule{
+					Position: position, Pattern: pattern, Replacement: "", IsGag: true,
+					Enabled: enabled, GroupName: group,
+				})
+				subPos++
 			}
 			pendingMeta = nil
 		} else if strings.HasPrefix(line, "#highlight ") {
@@ -587,6 +681,9 @@ func (s *Store) ImportProfileScript(ps *ProfileScript) (Profile, error) {
 		if err := tx.Where("profile_id = ?", p.ID).Delete(&HighlightRule{}).Error; err != nil {
 			return Profile{}, err
 		}
+		if err := tx.Where("profile_id = ?", p.ID).Delete(&SubstituteRule{}).Error; err != nil {
+			return Profile{}, err
+		}
 		if err := tx.Where("profile_id = ?", p.ID).Delete(&HotkeyRule{}).Error; err != nil {
 			return Profile{}, err
 		}
@@ -626,6 +723,16 @@ func (s *Store) ImportProfileScript(ps *ProfileScript) (Profile, error) {
 		h.ProfileID = p.ID
 		h.UpdatedAt = nowSQLiteTime()
 		if err := tx.Create(&h).Error; err != nil {
+			return Profile{}, err
+		}
+	}
+	for _, sub := range ps.Substitutes {
+		sub.ProfileID = p.ID
+		sub.UpdatedAt = nowSQLiteTime()
+		if sub.GroupName == "" {
+			sub.GroupName = "default"
+		}
+		if err := tx.Create(&sub).Error; err != nil {
 			return Profile{}, err
 		}
 	}

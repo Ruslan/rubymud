@@ -132,7 +132,7 @@ func newRuntimeTestStore(t *testing.T) *storage.Store {
 	t.Cleanup(func() { _ = sqlDB.Close() })
 
 	if err := db.AutoMigrate(
-		&storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{},
+		&storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{}, &storage.SubstituteRule{},
 		&storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{}, &storage.LogOverlay{},
 		&storage.ProfileVariable{},
 	); err != nil {
@@ -145,5 +145,3 @@ func newRuntimeTestStore(t *testing.T) *storage.Store {
 
 	return storage.NewTestStore(db)
 }
-
-

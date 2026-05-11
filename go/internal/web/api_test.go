@@ -149,6 +149,75 @@ func TestAliasesAPI(t *testing.T) {
 	}
 }
 
+func TestSubstitutesAPI(t *testing.T) {
+	s, _ := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	url := fmt.Sprintf("%s/api/profiles/1/subs", ts.URL)
+	payload, _ := json.Marshal(map[string]any{
+		"pattern":     "foo (.*)",
+		"replacement": "bar %1",
+		"enabled":     true,
+		"group_name":  "test",
+	})
+	req, err := newAuthenticatedRequest(http.MethodPost, url, bytes.NewBuffer(payload), s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(POST %s): %v", url, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("POST %s status = %d, want 201", url, resp.StatusCode)
+	}
+
+	req, err = newAuthenticatedRequest(http.MethodGet, url, nil, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(GET %s): %v", url, err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	var subs []storage.SubstituteRule
+	json.NewDecoder(resp.Body).Decode(&subs)
+	if len(subs) != 1 || subs[0].Pattern != "foo (.*)" || subs[0].Replacement != "bar %1" {
+		t.Fatalf("subs = %+v, want created rule", subs)
+	}
+
+	subID := subs[0].ID
+	subs[0].IsGag = true
+	subs[0].Replacement = ""
+	payload, _ = json.Marshal(subs[0])
+	req, err = newAuthenticatedRequest(http.MethodPut, fmt.Sprintf("%s/%d", url, subID), bytes.NewBuffer(payload), s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(PUT %s/%d): %v", url, subID, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT %s/%d: %v", url, subID, err)
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("PUT status = %d, want 204", resp.StatusCode)
+	}
+
+	req, err = newAuthenticatedRequest(http.MethodDelete, fmt.Sprintf("%s/%d", url, subID), nil, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(DELETE %s/%d): %v", url, subID, err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE %s/%d: %v", url, subID, err)
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE status = %d, want 204", resp.StatusCode)
+	}
+}
+
 func setupTestServer(t *testing.T) (*Server, *session.Session) {
 	dbName := uuid.New().String()
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", dbName)
@@ -162,6 +231,7 @@ func setupTestServer(t *testing.T) (*Server, *session.Session) {
 	db.AutoMigrate(
 		&storage.AppSetting{}, &storage.SessionRecord{}, &storage.Variable{},
 		&storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{},
+		&storage.SubstituteRule{},
 		&storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{}, &storage.ProfileVariable{},
 		&storage.LogRecord{}, &storage.LogOverlay{}, &storage.HistoryEntry{},
 		&storage.TimerRecord{}, &storage.TimerSubscriptionRecord{},
@@ -170,7 +240,7 @@ func setupTestServer(t *testing.T) (*Server, *session.Session) {
 
 	store := storage.NewTestStore(db)
 	store.CreateProfile("Default", "")
-	
+
 	// Ensure a session exists
 	record, err := store.EnsureDefaultSession("localhost", 1234)
 	if err != nil {
@@ -506,4 +576,3 @@ func TestColorsAPI(t *testing.T) {
 		t.Error("color 'red' not found in response")
 	}
 }
-

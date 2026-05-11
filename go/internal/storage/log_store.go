@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"gorm.io/gorm"
 )
@@ -17,6 +18,10 @@ func (o *LogOverlay) TableName() string {
 }
 
 func (s *Store) AppendLogEntry(sessionID int64, buffer, rawText, plainText string) (int64, error) {
+	return s.AppendLogEntryWithOverlays(sessionID, buffer, rawText, plainText, nil)
+}
+
+func (s *Store) AppendLogEntryWithOverlays(sessionID int64, buffer, rawText, plainText string, overlays []LogOverlay) (int64, error) {
 	if buffer == "" {
 		buffer = "main"
 	}
@@ -30,9 +35,26 @@ func (s *Store) AppendLogEntry(sessionID int64, buffer, rawText, plainText strin
 		CreatedAt:  nowSQLiteTime(),
 		ReceivedAt: nowSQLiteTime(),
 	}
-	err := s.db.Create(&entry).Error
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Create(&entry).Error; err != nil {
+			return err
+		}
+		for _, overlay := range overlays {
+			overlay.ID = 0
+			overlay.LogEntryID = entry.ID
+			if overlay.CreatedAt.Time.IsZero() {
+				overlay.CreatedAt = nowSQLiteTime()
+			}
+			if err := tx.Create(&overlay).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 	return entry.ID, err
 }
+
+const visibleLogEntrySQL = "NOT EXISTS (SELECT 1 FROM log_overlays gag WHERE gag.log_entry_id = log_entries.id AND gag.overlay_type = 'gag')"
 
 func (s *Store) LogEntriesForBuffer(sessionID int64, buffer string, limit int) ([]LogEntry, error) {
 	if buffer == "" {
@@ -40,6 +62,7 @@ func (s *Store) LogEntriesForBuffer(sessionID int64, buffer string, limit int) (
 	}
 	var records []LogRecord
 	err := s.db.Where("session_id = ? AND window_name = ?", sessionID, buffer).
+		Where(visibleLogEntrySQL).
 		Order("created_at DESC, id DESC").
 		Limit(limit).
 		Find(&records).Error
@@ -74,7 +97,7 @@ func (s *Store) RecentLogs(sessionID int64, limit int) ([]LogEntry, error) {
 
 func (s *Store) RecentLogsPerBuffer(sessionID int64, limit int) (map[string][]LogEntry, error) {
 	var distinctBuffers []string
-	if err := s.db.Model(&LogRecord{}).Where("session_id = ?", sessionID).Distinct("window_name").Pluck("window_name", &distinctBuffers).Error; err != nil {
+	if err := s.db.Model(&LogRecord{}).Where("session_id = ?", sessionID).Where(visibleLogEntrySQL).Distinct("window_name").Pluck("window_name", &distinctBuffers).Error; err != nil {
 		return nil, err
 	}
 
@@ -100,6 +123,7 @@ func (s *Store) LatestLogID(sessionID int64) (int64, error) {
 func (s *Store) LogsSinceID(sessionID, afterID int64, limit int) ([]LogEntry, error) {
 	var records []LogRecord
 	err := s.db.Where("session_id = ? AND id > ?", sessionID, afterID).
+		Where(visibleLogEntrySQL).
 		Order("id ASC").
 		Limit(limit).
 		Find(&records).Error
@@ -125,6 +149,7 @@ func (s *Store) LogsSinceID(sessionID, afterID int64, limit int) ([]LogEntry, er
 func (s *Store) LogRangeDetailed(sessionID, beforeID int64, limit int) ([]LogEntry, error) {
 	var records []LogRecord
 	err := s.db.Where("session_id = ? AND id < ?", sessionID, beforeID).
+		Where(visibleLogEntrySQL).
 		Order("id DESC").
 		Limit(limit).
 		Find(&records).Error
@@ -176,7 +201,7 @@ func (s *Store) AppendCommandHintToLatestLogEntry(sessionID int64, command strin
 	}
 
 	var lastEntry LogRecord
-	err := s.db.Where("session_id = ?", sessionID).Order("created_at DESC, id DESC").First(&lastEntry).Error
+	err := s.db.Where("session_id = ?", sessionID).Where(visibleLogEntrySQL).Order("created_at DESC, id DESC").First(&lastEntry).Error
 	if err == gorm.ErrRecordNotFound {
 		return nil
 	}
@@ -227,7 +252,7 @@ func (s *Store) loadOverlays(entries []LogEntry) error {
 	}
 
 	var overlays []LogOverlay
-	err := s.db.Where("overlay_type IN ('command_hint', 'button') AND log_entry_id IN ?", ids).
+	err := s.db.Where("overlay_type IN ('command_hint', 'button', 'substitution', 'gag') AND log_entry_id IN ?", ids).
 		Order("id ASC").
 		Find(&overlays).Error
 	if err != nil {
@@ -239,6 +264,7 @@ func (s *Store) loadOverlays(entries []LogEntry) error {
 		if !ok {
 			continue
 		}
+		entries[index].Overlays = append(entries[index].Overlays, o)
 
 		switch o.OverlayType {
 		case "command_hint":
@@ -260,6 +286,13 @@ func (s *Store) loadOverlays(entries []LogEntry) error {
 		}
 	}
 
+	for i := range entries {
+		displayRaw, displayPlain, hidden := ReplayAppliedOverlays(entries[i].RawText, entries[i].PlainText, entries[i].Overlays)
+		entries[i].DisplayRaw = displayRaw
+		entries[i].DisplayPlain = displayPlain
+		entries[i].Hidden = hidden
+	}
+
 	return nil
 }
 
@@ -268,7 +301,7 @@ func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines i
 
 	// Match log entries by MUD output text.
 	var textMatchIDs []int64
-	db := s.db.Model(&LogRecord{}).Where("session_id = ? AND plain_text LIKE ?", sessionID, like)
+	db := s.db.Model(&LogRecord{}).Where("session_id = ? AND plain_text LIKE ?", sessionID, like).Where(visibleLogEntrySQL)
 	if beforeID > 0 {
 		db = db.Where("id < ?", beforeID)
 	}
@@ -280,7 +313,7 @@ func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines i
 	var cmdMatchIDs []int64
 	cmdDB := s.db.Model(&LogOverlay{}).
 		Where("overlay_type = 'command_hint' AND payload_json LIKE ?", like).
-		Where("log_entry_id IN (SELECT id FROM log_entries WHERE session_id = ?)", sessionID)
+		Where("log_entry_id IN (SELECT id FROM log_entries WHERE session_id = ? AND "+visibleLogEntrySQL+")", sessionID)
 	if beforeID > 0 {
 		cmdDB = cmdDB.Where("log_entry_id < ?", beforeID)
 	}
@@ -305,12 +338,12 @@ func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines i
 	for _, mid := range matchingIDs {
 		allIDsMap[mid] = true
 		var beforeIDs []int64
-		s.db.Model(&LogRecord{}).Where("session_id = ? AND id < ?", sessionID, mid).Order("id DESC").Limit(contextLines).Pluck("id", &beforeIDs)
+		s.db.Model(&LogRecord{}).Where("session_id = ? AND id < ?", sessionID, mid).Where(visibleLogEntrySQL).Order("id DESC").Limit(contextLines).Pluck("id", &beforeIDs)
 		for _, id := range beforeIDs {
 			allIDsMap[id] = true
 		}
 		var afterIDs []int64
-		s.db.Model(&LogRecord{}).Where("session_id = ? AND id > ?", sessionID, mid).Order("id ASC").Limit(contextLines).Pluck("id", &afterIDs)
+		s.db.Model(&LogRecord{}).Where("session_id = ? AND id > ?", sessionID, mid).Where(visibleLogEntrySQL).Order("id ASC").Limit(contextLines).Pluck("id", &afterIDs)
 		for _, id := range afterIDs {
 			allIDsMap[id] = true
 		}
@@ -323,7 +356,7 @@ func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines i
 	sort.Slice(allIDs, func(i, j int) bool { return allIDs[i] < allIDs[j] })
 
 	var records []LogRecord
-	if err := s.db.Where("id IN ?", allIDs).Order("id ASC").Find(&records).Error; err != nil {
+	if err := s.db.Where("id IN ?", allIDs).Where(visibleLogEntrySQL).Order("id ASC").Find(&records).Error; err != nil {
 		return nil, err
 	}
 
@@ -355,7 +388,7 @@ func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines i
 	for i := 1; i < len(records); i++ {
 		if records[i].ID > records[i-1].ID+1 {
 			var count int64
-			s.db.Model(&LogRecord{}).Where("session_id = ? AND id > ? AND id < ?", sessionID, records[i-1].ID, records[i].ID).Count(&count)
+			s.db.Model(&LogRecord{}).Where("session_id = ? AND id > ? AND id < ?", sessionID, records[i-1].ID, records[i].ID).Where(visibleLogEntrySQL).Count(&count)
 			if count > 0 {
 				groups = append(groups, currentGroup)
 				currentGroup = []LogEntry{entryMap[records[i].ID]}
@@ -367,4 +400,96 @@ func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines i
 	groups = append(groups, currentGroup)
 
 	return groups, nil
+}
+
+type substitutionOverlayPayload struct {
+	ReplacementRaw   string `json:"replacement_raw"`
+	ReplacementPlain string `json:"replacement_plain"`
+	RuleID           int64  `json:"rule_id"`
+	PatternTemplate  string `json:"pattern_template"`
+	EffectivePattern string `json:"effective_pattern"`
+}
+
+func ReplayAppliedOverlays(rawText, plainText string, overlays []LogOverlay) (string, string, bool) {
+	for _, overlay := range overlays {
+		if overlay.OverlayType == "gag" {
+			return rawText, plainText, true
+		}
+	}
+
+	displayRaw := rawText
+	displayPlain := plainText
+	subs := make([]LogOverlay, 0, len(overlays))
+	for _, overlay := range overlays {
+		if overlay.OverlayType == "substitution" {
+			subs = append(subs, overlay)
+		}
+	}
+	sort.SliceStable(subs, func(i, j int) bool {
+		if subs[i].Layer == subs[j].Layer {
+			return subs[i].ID < subs[j].ID
+		}
+		return subs[i].Layer < subs[j].Layer
+	})
+
+	for _, overlay := range subs {
+		if overlay.StartOffset == nil || overlay.EndOffset == nil || *overlay.StartOffset == *overlay.EndOffset {
+			continue
+		}
+		if *overlay.StartOffset < 0 || *overlay.EndOffset > len(displayPlain) || *overlay.StartOffset > *overlay.EndOffset {
+			continue
+		}
+		var payload substitutionOverlayPayload
+		if err := json.Unmarshal([]byte(overlay.PayloadJSON), &payload); err != nil {
+			continue
+		}
+		rawStart, rawEnd, ok := plainRangeToRawRange(displayRaw, *overlay.StartOffset, *overlay.EndOffset)
+		if !ok || rawStart < 0 || rawEnd > len(displayRaw) || rawStart > rawEnd {
+			continue
+		}
+		displayRaw = displayRaw[:rawStart] + payload.ReplacementRaw + displayRaw[rawEnd:]
+		displayPlain = displayPlain[:*overlay.StartOffset] + payload.ReplacementPlain + displayPlain[*overlay.EndOffset:]
+	}
+
+	return displayRaw, displayPlain, false
+}
+
+func plainRangeToRawRange(raw string, startPlain, endPlain int) (int, int, bool) {
+	plainOffset := 0
+	rawStart := -1
+	rawEnd := -1
+	inEscape := false
+
+	for i := 0; i < len(raw); {
+		if !inEscape && raw[i] == 0x1b {
+			inEscape = true
+			i++
+			continue
+		}
+		if inEscape {
+			if (raw[i] >= 'a' && raw[i] <= 'z') || (raw[i] >= 'A' && raw[i] <= 'Z') {
+				inEscape = false
+			}
+			i++
+			continue
+		}
+		if plainOffset == startPlain && rawStart == -1 {
+			rawStart = i
+		}
+		_, size := utf8.DecodeRuneInString(raw[i:])
+		if size <= 0 {
+			return 0, 0, false
+		}
+		i += size
+		plainOffset += size
+		if plainOffset == endPlain {
+			rawEnd = i
+			break
+		}
+	}
+
+	if startPlain == endPlain || rawStart == -1 || rawEnd == -1 {
+		return 0, 0, false
+	}
+	return rawStart, rawEnd, true
 }

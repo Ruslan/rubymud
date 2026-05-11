@@ -30,6 +30,44 @@ func newLogStoreTestStore(t *testing.T) *Store {
 	return &Store{db: db}
 }
 
+func TestAppendLogEntryWithOverlaysFiltersGagAndIsAtomic(t *testing.T) {
+	s := newLogStoreTestStore(t)
+	sessionID := int64(1)
+
+	_, err := s.AppendLogEntryWithOverlays(sessionID, "main", "spam", "spam", []LogOverlay{{
+		OverlayType: "gag",
+		PayloadJSON: `{"rule_id":1}`,
+		SourceType:  "substitute_rule",
+		SourceID:    "1",
+	}})
+	if err != nil {
+		t.Fatalf("AppendLogEntryWithOverlays gag: %v", err)
+	}
+
+	var overlayCount int64
+	if err := s.db.Model(&LogOverlay{}).Where("overlay_type = ?", "gag").Count(&overlayCount).Error; err != nil {
+		t.Fatalf("count overlays: %v", err)
+	}
+	if overlayCount != 1 {
+		t.Fatalf("gag overlays = %d, want 1", overlayCount)
+	}
+
+	visible, err := s.RecentLogs(sessionID, 10)
+	if err != nil {
+		t.Fatalf("RecentLogs: %v", err)
+	}
+	if len(visible) != 0 {
+		t.Fatalf("visible logs = %+v, want none", visible)
+	}
+	groups, err := s.SearchLogsDetailed(sessionID, "spam", 1, 9223372036854775807)
+	if err != nil {
+		t.Fatalf("SearchLogsDetailed: %v", err)
+	}
+	if len(groups) != 0 {
+		t.Fatalf("search groups = %+v, want none", groups)
+	}
+}
+
 func TestSearchLogsDetailed_OverlappingContext(t *testing.T) {
 	s := newLogStoreTestStore(t)
 	sessionID := int64(1)
@@ -43,11 +81,11 @@ func TestSearchLogsDetailed_OverlappingContext(t *testing.T) {
 		s.AppendLogEntry(sessionID, "main", text, text)
 	}
 
-	// Search with context 2. 
+	// Search with context 2.
 	// Match at 5 should get [3, 4, 5, 6, 7]
 	// Match at 7 should get [5, 6, 7, 8, 9]
 	// Since they overlap, they should be merged into one group [3, 4, 5, 6, 7, 8, 9]
-	
+
 	groups, err := s.SearchLogsDetailed(sessionID, "[MATCH]", 2, 9223372036854775807)
 	if err != nil {
 		t.Fatalf("SearchLogsDetailed: %v", err)

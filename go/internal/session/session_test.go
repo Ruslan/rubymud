@@ -260,6 +260,7 @@ func newTestStore(t *testing.T) *storage.Store {
 	err = db.AutoMigrate(
 		&storage.AppSetting{}, &storage.SessionRecord{}, &storage.Variable{},
 		&storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{},
+		&storage.SubstituteRule{},
 		&storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{}, &storage.ProfileVariable{},
 		&storage.LogRecord{}, &storage.LogOverlay{}, &storage.HistoryEntry{},
 		&storage.TimerRecord{}, &storage.TimerSubscriptionRecord{},

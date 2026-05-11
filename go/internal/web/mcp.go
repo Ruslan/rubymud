@@ -533,8 +533,8 @@ func formatMcpGroup(entries []storage.LogEntry, query string) string {
 	var sb strings.Builder
 	q := strings.ToLower(query)
 	for _, e := range entries {
-		text := stripAnsi(e.PlainText)
-		matched := q != "" && strings.Contains(strings.ToLower(text), q)
+		text := stripAnsi(e.DisplayPlainText())
+		matched := q != "" && strings.Contains(strings.ToLower(stripAnsi(e.PlainText)), q)
 		if matched {
 			sb.WriteString("*** ")
 		}

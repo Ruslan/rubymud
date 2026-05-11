@@ -63,8 +63,12 @@ type LogOverlay struct {
 	ID          int64      `gorm:"primaryKey"`
 	LogEntryID  int64      `gorm:"index" json:"log_entry_id"`
 	OverlayType string     `gorm:"index" json:"overlay_type"`
+	Layer       int        `json:"layer"`
+	StartOffset *int       `json:"start_offset"`
+	EndOffset   *int       `json:"end_offset"`
 	PayloadJSON string     `json:"payload_json"`
 	SourceType  string     `json:"source_type"`
+	SourceID    string     `json:"source_id"`
 	CreatedAt   SQLiteTime `json:"created_at"`
 }
 
@@ -74,13 +78,31 @@ type ButtonOverlay struct {
 }
 
 type LogEntry struct {
-	ID        int64
-	Buffer    string
-	RawText   string
-	PlainText string
-	CreatedAt SQLiteTime
-	Commands  []string
-	Buttons   []ButtonOverlay
+	ID           int64
+	Buffer       string
+	RawText      string
+	PlainText    string
+	DisplayRaw   string
+	DisplayPlain string
+	Hidden       bool
+	CreatedAt    SQLiteTime
+	Commands     []string
+	Buttons      []ButtonOverlay
+	Overlays     []LogOverlay
+}
+
+func (e LogEntry) DisplayRawText() string {
+	if e.DisplayRaw != "" || e.DisplayPlain != "" || len(e.Overlays) > 0 {
+		return e.DisplayRaw
+	}
+	return e.RawText
+}
+
+func (e LogEntry) DisplayPlainText() string {
+	if e.DisplayRaw != "" || e.DisplayPlain != "" || len(e.Overlays) > 0 {
+		return e.DisplayPlain
+	}
+	return e.PlainText
 }
 
 type commandOverlayPayload struct {

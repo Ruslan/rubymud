@@ -59,14 +59,15 @@ type TimerControl interface {
 }
 
 type VM struct {
-	store      *storage.Store
-	sessionID  int64
-	aliases    []storage.AliasRule
-	triggers   []storage.TriggerRule
-	highlights []storage.HighlightRule
-	variables  map[string]string
-	varPattern *regexp.Regexp
-	ttsFn      func(string)
-	ttsCustom  bool
-	timerCtrl  TimerControl
+	store       *storage.Store
+	sessionID   int64
+	aliases     []storage.AliasRule
+	triggers    []storage.TriggerRule
+	highlights  []storage.HighlightRule
+	substitutes []storage.SubstituteRule
+	variables   map[string]string
+	varPattern  *regexp.Regexp
+	ttsFn       func(string)
+	ttsCustom   bool
+	timerCtrl   TimerControl
 }

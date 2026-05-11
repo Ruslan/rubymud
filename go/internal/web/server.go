@@ -181,6 +181,14 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 						r.Delete("/", s.deleteProfileHighlight)
 					})
 				})
+				r.Route("/subs", func(r chi.Router) {
+					r.Get("/", s.listProfileSubs)
+					r.Post("/", s.createProfileSub)
+					r.Route("/{id}", func(r chi.Router) {
+						r.Put("/", s.updateProfileSub)
+						r.Delete("/", s.deleteProfileSub)
+					})
+				})
 				r.Route("/hotkeys", func(r chi.Router) {
 					r.Get("/", s.listProfileHotkeys)
 					r.Post("/", s.createProfileHotkey)
@@ -916,6 +924,84 @@ func (s *Server) deleteProfileHighlight(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// Profile Substitutions
+
+func (s *Server) listProfileSubs(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	subs, err := s.store.ListSubstitutes(pid)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(subs)
+}
+
+func (s *Server) createProfileSub(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var sub storage.SubstituteRule
+	if err := json.NewDecoder(r.Body).Decode(&sub); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	sub.ProfileID = pid
+	if err := s.store.CreateSubstitute(sub); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.notifyProfileChanged(pid, "subs")
+	w.WriteHeader(http.StatusCreated)
+}
+
+func (s *Server) updateProfileSub(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	id, _ := strconv.ParseInt(idStr, 10, 64)
+
+	var sub storage.SubstituteRule
+	if err := json.NewDecoder(r.Body).Decode(&sub); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	sub.ID = id
+	sub.ProfileID = pid
+	if err := s.store.UpdateSubstitute(sub); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.notifyProfileChanged(pid, "subs")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) deleteProfileSub(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	idStr := chi.URLParam(r, "id")
+	id, _ := strconv.ParseInt(idStr, 10, 64)
+
+	if err := s.store.DeleteSubstituteByID(id, pid); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	s.notifyProfileChanged(pid, "subs")
+	w.WriteHeader(http.StatusNoContent)
+}
+
 // Profile Hotkeys
 
 func (s *Server) listProfileHotkeys(w http.ResponseWriter, r *http.Request) {
@@ -1032,6 +1118,7 @@ func (s *Server) toggleProfileGroup(w http.ResponseWriter, r *http.Request) {
 	s.notifyProfileChanged(pid, "aliases")
 	s.notifyProfileChanged(pid, "triggers")
 	s.notifyProfileChanged(pid, "highlights")
+	s.notifyProfileChanged(pid, "subs")
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1290,7 +1377,7 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 	for bufName, logs := range logsPerBuffer {
 		entries := make([]session.ClientLogEntry, 0, len(logs))
 		for _, entry := range logs {
-			cle := session.ClientLogEntry{ID: entry.ID, Text: sess.HighlightText(entry.RawText), Buffer: bufName, Commands: entry.Commands}
+			cle := session.ClientLogEntry{ID: entry.ID, Text: sess.RenderLogEntry(entry), Buffer: bufName, Commands: entry.Commands}
 			for _, b := range entry.Buttons {
 				cle.Buttons = append(cle.Buttons, session.ButtonOverlay{Label: b.Label, Command: b.Command})
 			}

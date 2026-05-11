@@ -23,7 +23,7 @@ func newProfileRuntimeStore(t *testing.T) *storage.Store {
 		t.Fatalf("gorm.Open: %v", err)
 	}
 	if err := db.AutoMigrate(
-		&storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{},
+		&storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{}, &storage.SubstituteRule{},
 		&storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{}, &storage.LogOverlay{},
 		&storage.ProfileVariable{},
 	); err != nil {
@@ -36,22 +36,22 @@ func newProfileRuntimeStore(t *testing.T) *storage.Store {
 
 func TestVMMergesProfilesCorrectly(t *testing.T) {
 	store := newProfileRuntimeStore(t)
-	
+
 	// Create profiles
 	pBase, _ := store.CreateProfile("Base", "")
 	pUser, _ := store.CreateProfile("User", "")
-	
+
 	// Assign to session 1. User has higher order_index = higher priority.
 	store.AddProfileToSession(1, pBase.ID, 0)
 	store.AddProfileToSession(1, pUser.ID, 10)
-	
+
 	// Add aliases
 	store.SaveAlias(pBase.ID, "hello", "say hello", true, "")
 	store.SaveAlias(pBase.ID, "bye", "say bye", true, "")
-	
+
 	store.SaveAlias(pUser.ID, "hello", "shout hello", true, "") // Overrides Base "hello"
 	store.SaveAlias(pUser.ID, "dance", "emote dances", true, "")
-	
+
 	// Add triggers
 	store.SaveTrigger(pBase.ID, "Base trigger", "smile", false, "")
 	store.SaveTrigger(pUser.ID, "User trigger", "nod", false, "")
@@ -60,26 +60,26 @@ func TestVMMergesProfilesCorrectly(t *testing.T) {
 	if err := v.Reload(); err != nil {
 		t.Fatalf("Reload failed: %v", err)
 	}
-	
+
 	// Aliases test (deduplication & override)
 	// We expect User's "hello", User's "dance", and Base's "bye"
 	aliases := v.Aliases()
 	if len(aliases) != 3 {
 		t.Fatalf("Expected 3 merged aliases, got %d", len(aliases))
 	}
-	
+
 	helloAlias := findAlias(aliases, "hello")
 	if helloAlias.Template != "shout hello" {
 		t.Errorf("Expected 'hello' to resolve to 'shout hello', got '%s'", helloAlias.Template)
 	}
-	
+
 	// Triggers test (ordered appending)
 	// Should be User trigger first, then Base trigger
 	triggers := v.Triggers()
 	if len(triggers) != 2 {
 		t.Fatalf("Expected 2 merged triggers, got %d", len(triggers))
 	}
-	
+
 	if triggers[0].Command != "nod" {
 		t.Errorf("Expected highest priority trigger to be 'nod', got '%s'", triggers[0].Command)
 	}

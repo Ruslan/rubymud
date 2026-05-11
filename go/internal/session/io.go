@@ -115,6 +115,13 @@ func (s *Session) processLine(line string) {
 	var effects []vm.Effect
 	var routing vm.RoutingInfo
 
+	if gagOverlay, gagged := s.vm.CheckGag(plainText); gagged {
+		if _, err := s.store.AppendLogEntryWithOverlays(s.sessionID, "main", processed, plainText, []storage.LogOverlay{gagOverlay}); err != nil {
+			log.Printf("append gag log entry failed: %v", err)
+		}
+		return
+	}
+
 	// Only match triggers if the line is not blank
 	if processed != "" {
 		effects, routing = s.vm.MatchTriggers(plainText)
@@ -122,7 +129,8 @@ func (s *Session) processLine(line string) {
 		routing.TargetBuffer = "main" // Default to main for blank lines
 	}
 
-	id, err := s.store.AppendLogEntry(s.sessionID, routing.TargetBuffer, processed, plainText)
+	displayRaw, displayPlain, subOverlays := s.vm.ApplySubsAndCollectOverlays(processed, plainText)
+	id, err := s.store.AppendLogEntryWithOverlays(s.sessionID, routing.TargetBuffer, processed, plainText, subOverlays)
 	if err != nil {
 		log.Printf("append log entry failed: %v", err)
 		return
@@ -136,16 +144,16 @@ func (s *Session) processLine(line string) {
 
 	buttons := s.vm.ApplyEffects(effects, id, routing.TargetBuffer, s.sendTriggerCommand, s.BroadcastResult)
 
-	entry := storage.LogEntry{ID: id, Buffer: routing.TargetBuffer, RawText: processed, PlainText: plainText}
+	entry := storage.LogEntry{ID: id, Buffer: routing.TargetBuffer, RawText: processed, PlainText: plainText, DisplayRaw: displayRaw, DisplayPlain: displayPlain, Overlays: subOverlays}
 	for _, b := range buttons {
 		entry.Buttons = append(entry.Buttons, storage.ButtonOverlay{Label: b.Label, Command: b.Command})
 	}
 
-	highlighted := s.vm.ApplyHighlights(processed)
+	highlighted := s.vm.ApplyHighlights(displayRaw)
 	s.broadcastEntryWithText(entry, highlighted)
 
 	for _, copyBuffer := range routing.CopyBuffers {
-		copyID, err := s.store.AppendLogEntry(s.sessionID, copyBuffer, processed, plainText)
+		copyID, err := s.store.AppendLogEntryWithOverlays(s.sessionID, copyBuffer, processed, plainText, cloneLogOverlays(subOverlays))
 		if err == nil {
 			for _, b := range entry.Buttons {
 				_ = s.store.AppendButtonOverlay(copyID, b.Label, b.Command)
@@ -165,6 +173,24 @@ func (s *Session) processLine(line string) {
 			s.broadcastEntryWithText(echoEntry, s.vm.ApplyHighlights(echo.Text))
 		}
 	}
+}
+
+func cloneLogOverlays(overlays []storage.LogOverlay) []storage.LogOverlay {
+	cloned := make([]storage.LogOverlay, len(overlays))
+	for i, overlay := range overlays {
+		cloned[i] = overlay
+		cloned[i].ID = 0
+		cloned[i].LogEntryID = 0
+		if overlay.StartOffset != nil {
+			v := *overlay.StartOffset
+			cloned[i].StartOffset = &v
+		}
+		if overlay.EndOffset != nil {
+			v := *overlay.EndOffset
+			cloned[i].EndOffset = &v
+		}
+	}
+	return cloned
 }
 
 func normalizeLine(line string) string {

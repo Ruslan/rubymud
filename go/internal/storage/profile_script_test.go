@@ -65,6 +65,10 @@ func TestImportProfileScript_DeepIntegration(t *testing.T) {
 
 #nop rubymud:rule {"is_button":true,"stop_after_match":true,"target_buffer":"chat","buffer_action":"copy"}
 #action {^You see (.*)$} {#woutput {chat} {%1}}
+
+#nop rubymud:rule {"group_name":"Sub group","position":1}
+#sub {$target1} {[F1] $target1}
+#gag {^spam$}
 `
 
 	// 2. Parse it
@@ -116,13 +120,25 @@ func TestImportProfileScript_DeepIntegration(t *testing.T) {
 		t.Errorf("Trigger flags mismatch: %+v", t1)
 	}
 
+	// Check Substitutions
+	subs, _ := s.ListSubstitutes(p.ID)
+	if len(subs) != 2 {
+		t.Fatalf("Expected 2 substitute rules in DB, got %d", len(subs))
+	}
+	if subs[0].Pattern != "$target1" || subs[0].Replacement != "[F1] $target1" || subs[0].GroupName != "Sub group" || subs[0].IsGag {
+		t.Errorf("Substitute rule mismatch: %+v", subs[0])
+	}
+	if !subs[1].IsGag || subs[1].Pattern != "^spam$" {
+		t.Errorf("Gag rule mismatch: %+v", subs[1])
+	}
+
 	// 5. Export back and verify round-trip
 	exported, err := s.ExportProfileScript(p.ID)
 	if err != nil {
 		t.Fatalf("ExportProfileScript: %v", err)
 	}
 
-	if !strings.Contains(exported, "test_template") || !strings.Contains(exported, "bold_red") {
+	if !strings.Contains(exported, "test_template") || !strings.Contains(exported, "bold_red") || !strings.Contains(exported, "#sub {$target1} {[F1] $target1}") || !strings.Contains(exported, "#gag {^spam$}") {
 		t.Errorf("Exported script missing data: %s", exported)
 	}
 
@@ -130,6 +146,9 @@ func TestImportProfileScript_DeepIntegration(t *testing.T) {
 	ps2, _ := ParseProfileScript(exported)
 	if len(ps2.Highlights) != 2 || ps2.Highlights[0].Bold != true {
 		t.Errorf("Exported highlight styles mismatch")
+	}
+	if len(ps2.Substitutes) != 2 || ps2.Substitutes[0].Pattern != "$target1" || !ps2.Substitutes[1].IsGag {
+		t.Errorf("Exported substitute rules mismatch: %+v", ps2.Substitutes)
 	}
 }
 

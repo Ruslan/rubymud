@@ -45,7 +45,7 @@ func setupMcpTestServer(t *testing.T) (*Server, *session.Session) {
 		t.Fatalf("gorm.Open: %v", err)
 	}
 
-	db.AutoMigrate(&storage.AppSetting{}, &storage.SessionRecord{}, &storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{}, &storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{}, &storage.ProfileVariable{}, &storage.LogRecord{}, &storage.LogOverlay{}, &storage.HistoryEntry{})
+	db.AutoMigrate(&storage.AppSetting{}, &storage.SessionRecord{}, &storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{}, &storage.SubstituteRule{}, &storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{}, &storage.ProfileVariable{}, &storage.LogRecord{}, &storage.LogOverlay{}, &storage.HistoryEntry{})
 
 	store := storage.NewTestStore(db)
 	store.CreateProfile("Default", "")
@@ -219,4 +219,3 @@ func TestMCPSearch(t *testing.T) {
 		t.Errorf("search result missing context after: %q", text)
 	}
 }
-

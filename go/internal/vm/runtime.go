@@ -109,6 +109,20 @@ func (v *VM) Reload() error {
 	}
 	v.highlights = mergedHighlights
 
+	allSubstitutes, err := v.store.LoadSubstitutesForProfiles(profileIDs)
+	if err != nil {
+		return err
+	}
+	substitutesByProfile := make(map[int64][]storage.SubstituteRule)
+	for _, sub := range allSubstitutes {
+		substitutesByProfile[sub.ProfileID] = append(substitutesByProfile[sub.ProfileID], sub)
+	}
+	var mergedSubstitutes []storage.SubstituteRule
+	for _, pid := range profileIDs {
+		mergedSubstitutes = append(mergedSubstitutes, substitutesByProfile[pid]...)
+	}
+	v.substitutes = mergedSubstitutes
+
 	return nil
 }
 
@@ -122,7 +136,8 @@ func (v *VM) ensureFresh() {
 	}
 }
 
-func (v *VM) Aliases() []storage.AliasRule        { return v.aliases }
-func (v *VM) Variables() map[string]string        { return v.variables }
-func (v *VM) Triggers() []storage.TriggerRule     { return v.triggers }
-func (v *VM) Highlights() []storage.HighlightRule { return v.highlights }
+func (v *VM) Aliases() []storage.AliasRule          { return v.aliases }
+func (v *VM) Variables() map[string]string          { return v.variables }
+func (v *VM) Triggers() []storage.TriggerRule       { return v.triggers }
+func (v *VM) Highlights() []storage.HighlightRule   { return v.highlights }
+func (v *VM) Substitutes() []storage.SubstituteRule { return v.substitutes }

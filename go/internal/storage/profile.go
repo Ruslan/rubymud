@@ -59,6 +59,9 @@ func (s *Store) DeleteProfile(id int64) error {
 		if err := tx.Where("profile_id = ?", id).Delete(&HighlightRule{}).Error; err != nil {
 			return err
 		}
+		if err := tx.Where("profile_id = ?", id).Delete(&SubstituteRule{}).Error; err != nil {
+			return err
+		}
 		if err := tx.Where("profile_id = ?", id).Delete(&HotkeyRule{}).Error; err != nil {
 			return err
 		}

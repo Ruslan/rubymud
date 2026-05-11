@@ -717,6 +717,10 @@ func (s *Session) HighlightText(text string) string {
 	return s.vm.ApplyHighlights(text)
 }
 
+func (s *Session) RenderLogEntry(entry storage.LogEntry) string {
+	return s.HighlightText(entry.DisplayRawText())
+}
+
 func (s *Session) BroadcastResult(res vm.Result) {
 	if res.Kind != vm.ResultEcho || res.IsInternal {
 		return

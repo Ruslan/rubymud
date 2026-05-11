@@ -60,6 +60,16 @@
     group_name: string;
   }
 
+  interface Substitute {
+    id?: number;
+    position?: number;
+    pattern: string;
+    replacement: string;
+    is_gag: boolean;
+    enabled: boolean;
+    group_name: string;
+  }
+
   interface Hotkey {
     id?: number;
     position?: number;
@@ -150,6 +160,7 @@
     { id: 'declared_variables', label: 'Declared Vars' },
     { id: 'aliases', label: 'Aliases' },
     { id: 'triggers', label: 'Triggers' },
+    { id: 'subs', label: 'Substitutions' },
     { id: 'highlights', label: 'Highlights' },
     { id: 'hotkeys', label: 'Hotkeys' },
     { id: 'groups', label: 'Groups' },
@@ -193,6 +204,12 @@
   let highlights: Highlight[] = [];
   const defaultHighlight = (): Highlight => ({ pattern: '', fg: '', bg: '', bold: false, faint: false, italic: false, underline: false, strikethrough: false, blink: false, reverse: false, enabled: true, group_name: '' });
   let highlightEditor: Highlight = defaultHighlight();
+
+  // Substitutions State
+  let subs: Substitute[] = [];
+  const defaultSub = (): Substitute => ({ pattern: '', replacement: '', is_gag: false, enabled: true, group_name: '' });
+  let subEditor: Substitute = defaultSub();
+  let subPreviewText = 'foo bar';
 
   // Hotkeys State
   let hotkeys: Hotkey[] = [];
@@ -342,12 +359,13 @@
       } else if (currentTab === 'history' && selectedSessionID) {
         const histRes = await fetch(`/api/sessions/${selectedSessionID}/history`, { headers });
         historyEntries = await histRes.json() || [];
-      } else if (['aliases', 'triggers', 'highlights', 'hotkeys', 'groups', 'declared_variables'].includes(currentTab) && selectedProfileID) {
+      } else if (['aliases', 'triggers', 'subs', 'highlights', 'hotkeys', 'groups', 'declared_variables'].includes(currentTab) && selectedProfileID) {
         const endpoint = currentTab === 'declared_variables' ? 'variables' : currentTab;
         const res = await fetch(`/api/profiles/${selectedProfileID}/${endpoint}`, { headers });
         const data = await res.json() || [];
         if (currentTab === 'aliases') aliases = data;
         else if (currentTab === 'triggers') triggers = data;
+        else if (currentTab === 'subs') subs = data;
         else if (currentTab === 'highlights') highlights = data;
         else if (currentTab === 'hotkeys') hotkeys = data;
         else if (currentTab === 'groups') groups = data;
@@ -370,7 +388,7 @@
     
     if (domain === 'variables' && selectedSessionID) {
       url = `/api/sessions/${selectedSessionID}/variables`;
-    } else if (['aliases', 'triggers', 'highlights', 'hotkeys', 'declared_variables'].includes(domain) && selectedProfileID) {
+    } else if (['aliases', 'triggers', 'subs', 'highlights', 'hotkeys', 'declared_variables'].includes(domain) && selectedProfileID) {
       const endpoint = domain === 'declared_variables' ? 'variables' : domain;
       url = `/api/profiles/${selectedProfileID}/${endpoint}`;
       if (isUpdate) url += `/${item.id}`;
@@ -398,6 +416,7 @@
     if (domain === 'variables') return !newVarKey.trim() ? 'Variable key is required.' : '';
     if (domain === 'aliases') return !item.name?.trim() ? 'Alias name is required.' : (!item.template?.trim() ? 'Alias template is required.' : '');
     if (domain === 'triggers') return !item.pattern?.trim() ? 'Trigger pattern is required.' : (!item.command?.trim() ? 'Trigger command is required.' : '');
+    if (domain === 'subs') return !item.pattern?.trim() ? 'Substitution pattern is required.' : '';
     if (domain === 'highlights') return !item.pattern?.trim() ? 'Highlight pattern is required.' : '';
     if (domain === 'hotkeys') return !item.shortcut?.trim() ? 'Shortcut is required.' : (!item.command?.trim() ? 'Command is required.' : '');
     if (domain === 'declared_variables') return !item.name?.trim() ? 'Variable name is required.' : '';
@@ -415,7 +434,7 @@
         url = `/api/sessions/${selectedSessionID}/variables/${encodeURIComponent(String(id))}`;
     } else if (domain === 'history' && selectedSessionID) {
         url = `/api/sessions/${selectedSessionID}/history/${id}`;
-    } else if (['aliases', 'triggers', 'highlights', 'hotkeys', 'declared_variables'].includes(domain) && selectedProfileID) {
+    } else if (['aliases', 'triggers', 'subs', 'highlights', 'hotkeys', 'declared_variables'].includes(domain) && selectedProfileID) {
         const endpoint = domain === 'declared_variables' ? 'variables' : domain;
         url = `/api/profiles/${selectedProfileID}/${endpoint}/${id}`;
     }
@@ -423,7 +442,7 @@
     await fetchData();
   }
 
-  async function toggleItem(domain: 'aliases' | 'triggers' | 'highlights', item: any, enabled: boolean) {
+  async function toggleItem(domain: 'aliases' | 'triggers' | 'subs' | 'highlights', item: any, enabled: boolean) {
     if (!selectedProfileID) return;
     formError = '';
     // @ts-ignore
@@ -548,6 +567,7 @@
     let list: any[] = [];
     if (domain === 'aliases') list = aliases;
     else if (domain === 'triggers') list = triggers;
+    else if (domain === 'subs') list = subs;
     else if (domain === 'highlights') list = highlights;
     else if (domain === 'hotkeys') list = hotkeys;
     else if (domain === 'declared_variables') list = profileVariables;
@@ -594,8 +614,26 @@
     const normalized = groupName || 'default';
     if (domain === 'aliases') return aliases.filter((item) => (item.group_name || 'default') === normalized).length;
     if (domain === 'triggers') return triggers.filter((item) => (item.group_name || 'default') === normalized).length;
+    if (domain === 'subs') return subs.filter((item) => (item.group_name || 'default') === normalized).length;
     if (domain === 'highlights') return highlights.filter((item) => (item.group_name || 'default') === normalized).length;
     return 0;
+  }
+
+  function previewSubstitution(rule: Substitute): string {
+    if (!rule.pattern.trim()) return subPreviewText;
+    try {
+      const re = new RegExp(rule.pattern, 'g');
+      if (!re.test(subPreviewText)) return subPreviewText;
+      re.lastIndex = 0;
+      if (rule.is_gag) return '(gagged)';
+      return subPreviewText.replace(re, (...args: any[]) => {
+        const maybeGroups = args[args.length - 1];
+        const captures = typeof maybeGroups === 'object' ? args.slice(0, -3) : args.slice(0, -2);
+        return rule.replacement.replace(/%(\d+)/g, (_match, index) => captures[Number(index)] ?? '');
+      });
+    } catch (_e) {
+      return '(invalid regex)';
+    }
   }
 
   $: {
@@ -655,7 +693,7 @@
         </div>
     {/if}
     
-    {#if ['aliases', 'triggers', 'highlights', 'groups', 'hotkeys', 'declared_variables'].includes(currentTab)}
+    {#if ['aliases', 'triggers', 'subs', 'highlights', 'groups', 'hotkeys', 'declared_variables'].includes(currentTab)}
         <div class="selector-box">
             <label for="profile-selector">Configuring Profile:</label>
             <select id="profile-selector" bind:value={selectedProfileID}>
@@ -827,6 +865,60 @@
               <td class="actions-cell">
                 <button class="btn-link" on:click={() => triggerEditor = { ...t }}>Edit</button>
                 <button class="btn-link btn-danger" on:click={() => deleteItem('triggers', t.id!)}>Delete</button>
+              </td>
+            </tr>
+          {/each}
+        </tbody>
+      </table>
+
+    {:else if currentTab === 'subs'}
+      <header class="content-header"><h2>Substitutions</h2><p class="description">Display substitutions and gags for profile {currentProfile?.name}.</p></header>
+      <div class="editor-box">
+        {#if formError}<div class="form-error">{formError}</div>{/if}
+        <div class="form-grid">
+          <div class="form-row">
+            <input type="text" bind:value={subEditor.pattern} placeholder="Pattern (Regex, $vars literal)" required />
+            <input type="text" bind:value={subEditor.replacement} placeholder="Replacement (%0, %1, $vars)" disabled={subEditor.is_gag} />
+          </div>
+          <div class="form-row">
+            <input type="text" bind:value={subEditor.group_name} placeholder="Group Name" />
+            <input type="text" bind:value={subPreviewText} placeholder="Preview sample" />
+          </div>
+          <div class="form-row options-row">
+            <label class="checkbox-label"><input type="checkbox" bind:checked={subEditor.enabled} /> Enabled</label>
+            <label class="checkbox-label"><input type="checkbox" bind:checked={subEditor.is_gag} /> Gag</label>
+            <span class="sub-preview">Preview: {previewSubstitution(subEditor)}</span>
+            <button class="btn-primary" on:click={() => saveItem('subs', subEditor, () => subEditor = defaultSub())}>
+              {subEditor.id ? 'Update' : 'Add'}
+            </button>
+          </div>
+        </div>
+      </div>
+      <table class="data-table">
+        <thead><tr><th style="width: 60px">Order</th><th style="width: 92px">Status</th><th>Pattern</th><th>Replacement</th><th>Group</th><th>Preview</th><th style="width: 140px">Actions</th></tr></thead>
+        <tbody>
+          {#each subs as sub, i}
+            <tr class:gag-row={sub.is_gag}>
+              <td class="order-cell">
+                 <button class="btn-icon" disabled={i === 0} on:click={() => moveRule('subs', sub, -1)}>▲</button>
+                 <button class="btn-icon" disabled={i === subs.length - 1} on:click={() => moveRule('subs', sub, 1)}>▼</button>
+              </td>
+              <td class="flags-cell">
+                <div class="flags-wrapper">
+                  <label class="toggle-label" title="Enabled">
+                    <input type="checkbox" checked={sub.enabled} on:change={(event) => toggleItem('subs', sub, (event.currentTarget as HTMLInputElement).checked)} />
+                    <span class={sub.enabled ? 'flag-on' : 'flag-off'}>●</span>
+                  </label>
+                  {#if sub.is_gag}<span class="flag-icon" title="Gag">GAG</span>{/if}
+                </div>
+              </td>
+              <td class="key-cell">{sub.pattern}</td>
+              <td class="value-cell">{sub.is_gag ? '(hidden)' : sub.replacement}</td>
+              <td class="dim-cell">{sub.group_name || '-'}</td>
+              <td class="value-cell">{previewSubstitution(sub)}</td>
+              <td class="actions-cell">
+                <button class="btn-link" on:click={() => subEditor = { ...sub }}>Edit</button>
+                <button class="btn-link btn-danger" on:click={() => deleteItem('subs', sub.id!)}>Delete</button>
               </td>
             </tr>
           {/each}
@@ -1260,6 +1352,8 @@
   .flag-on { color: #2ecc71; }
   .flag-off { color: #444; }
   .flag-icon { filter: grayscale(0.5); font-size: 0.9rem; }
+  .sub-preview { color: #9ba3af; font-family: monospace; font-size: 0.85rem; flex: 1; min-width: 180px; }
+  .gag-row { background: rgba(231, 76, 60, 0.06); }
   .color-preview { display: flex; align-items: center; gap: 4px; }
   .color-chip { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #444; }
   .actions-cell { white-space: nowrap; }

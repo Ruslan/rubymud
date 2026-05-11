@@ -122,6 +122,12 @@ func (v *VM) dispatchCommand(input string, depth int) []Result {
 		return v.cmdHighlight(rest, depth)
 	case "unhighlight", "unhigh":
 		return v.cmdUnhighlight(rest, depth)
+	case "sub", "substitute":
+		return v.cmdSubstitute(rest, depth)
+	case "gag":
+		return v.cmdGag(rest, depth)
+	case "unsub":
+		return v.cmdUnsub(rest, depth)
 	case "hotkey", "hot":
 		return v.cmdHotkey(rest, depth)
 	case "tickon":
@@ -225,7 +231,7 @@ func echoResults(lines []string, depth int) []Result {
 	return results
 }
 func isCodeBearingCommand(stmt string) bool {
-	cmds := []string{"#if", "#alias", "#ali", "#action", "#act", "#hotkey", "#hot", "#tickat", "#delay", "#ticker"}
+	cmds := []string{"#if", "#alias", "#ali", "#action", "#act", "#hotkey", "#hot", "#tickat", "#delay", "#ticker", "#sub", "#substitute", "#gag", "#unsub"}
 	for _, c := range cmds {
 		if stmt == c || strings.HasPrefix(stmt, c+" ") || strings.HasPrefix(stmt, c+"\t") || strings.HasPrefix(stmt, c+"{") {
 			return true
