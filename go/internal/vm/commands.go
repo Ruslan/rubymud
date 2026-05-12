@@ -159,6 +159,7 @@ func (v *VM) dispatchCommand(input string, depth int) []Result {
 		if text == "" {
 			text = rest // Fallback if no braces
 		}
+		text = renderLocalMarkup(text)
 		return []Result{{Text: text, Kind: ResultEcho, TargetBuffer: "main", IsInternal: false, Depth: depth}}
 	case "woutput":
 		buffer, afterBuffer := splitBraceArg(rest)
@@ -166,6 +167,7 @@ func (v *VM) dispatchCommand(input string, depth int) []Result {
 		if text == "" {
 			text = strings.TrimSpace(afterBuffer) // Fallback
 		}
+		text = renderLocalMarkup(text)
 		return []Result{{Text: text, Kind: ResultEcho, TargetBuffer: buffer, IsInternal: false, Depth: depth}}
 	}
 
