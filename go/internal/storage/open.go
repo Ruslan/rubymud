@@ -22,6 +22,17 @@ func Open(path string) (*Store, error) {
 		return nil, err
 	}
 
+	// Optimize SQLite performance
+	if err := db.Exec("PRAGMA journal_mode=WAL;").Error; err != nil {
+		return nil, fmt.Errorf("failed to enable WAL: %w", err)
+	}
+	if err := db.Exec("PRAGMA synchronous=NORMAL;").Error; err != nil {
+		return nil, fmt.Errorf("failed to set synchronous=NORMAL: %w", err)
+	}
+	if err := db.Exec("PRAGMA foreign_keys=ON;").Error; err != nil {
+		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
+	}
+
 	// Run embedded migrations with version tracking
 	if err := runMigrations(db); err != nil {
 		return nil, fmt.Errorf("migrations failed: %w", err)
