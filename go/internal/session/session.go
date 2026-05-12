@@ -63,6 +63,8 @@ type Session struct {
 	mccpActive            atomic.Bool
 	mccpCompressedBytes   atomic.Uint64
 	mccpDecompressedBytes atomic.Uint64
+
+	lastCommandAt time.Time
 }
 
 func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM, initCmds string, mccpOn bool) (*Session, error) {

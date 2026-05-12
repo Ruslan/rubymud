@@ -3,6 +3,7 @@ package session
 import (
 	"log"
 	"strings"
+	"time"
 
 	"rubymud/go/internal/storage"
 	"rubymud/go/internal/vm"
@@ -89,6 +90,9 @@ func (s *Session) SendCommand(command string, source string) error {
 		if _, err := s.conn.Write([]byte(cmd + "\n")); err != nil {
 			return err
 		}
+		s.mu.Lock()
+		s.lastCommandAt = time.Now()
+		s.mu.Unlock()
 	}
 
 	if shouldBroadcastVariables {

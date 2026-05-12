@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"strings"
+	"time"
 
 	"rubymud/go/internal/storage"
 	"rubymud/go/internal/vm"
@@ -109,6 +110,14 @@ func processBufferedLines(buf *bytes.Buffer, h lineHandler) {
 }
 
 func (s *Session) processLine(line string) {
+	s.mu.Lock()
+	if !s.lastCommandAt.IsZero() {
+		ping := time.Since(s.lastCommandAt)
+		log.Printf("[ping] %v", ping)
+		s.lastCommandAt = time.Time{} // Reset
+	}
+	s.mu.Unlock()
+
 	processed := normalizeLine(line)
 
 	plainText := stripANSI(processed)

@@ -217,6 +217,7 @@ const state = {
 };
 
 let configuredHotkeys: Hotkey[] = [];
+let lastInputAt: number | null = null;
 
 // Auto-buttons logic (Alt+0..9)
 const autoButtons: (() => void)[] = new Array(10);
@@ -360,6 +361,7 @@ function sendCommand(value: string, source = 'input'): boolean {
     return false;
   }
 
+  lastInputAt = performance.now();
   sendSocketCommand(socket, value, source);
   return true;
 }
@@ -489,6 +491,14 @@ function attachSocketHandlers(target: WebSocket) {
       logBoot('restore end');
       state.restoreInProgress = false;
       renderer.scrollOutputToBottom();
+    }
+
+    if (message.type === 'output' || message.type === 'variables') {
+      if (lastInputAt !== null) {
+        const delta = Math.round(performance.now() - lastInputAt);
+        console.log(`[ping] ${delta}ms`);
+        lastInputAt = null;
+      }
     }
 
     if (message.type === 'output') {
