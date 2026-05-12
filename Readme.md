@@ -85,6 +85,48 @@ This will:
 
 Open `http://localhost:8080` in your browser.
 
+## Docker
+
+You can also run the application using Docker. A multi-stage `Dockerfile` is provided which builds the Go backend and Node.js frontend into a lightweight Alpine image.
+
+To build the Docker image:
+
+```bash
+make docker-build
+```
+
+To run the container with the default settings (exposing port 8080 and mounting the local `./data` folder to persist your database and profiles):
+
+```bash
+make docker-run
+```
+
+Alternatively, you can run the container manually and pass environment variables to configure it:
+
+```bash
+docker run -it --rm \
+  -p 8080:8080 \
+  -v "$(pwd)/data:/data" \
+  -e MUD_HOST="rmud.org:4000" \
+  rubymud
+```
+
+### Docker Volumes
+
+It is important to map the `/data` volume to a local folder (as shown with `-v "$(pwd)/data:/data"`) so that your local SQLite database (`mudhost.db`) and `.tt` profiles in `data/config/` are not lost when the container stops.
+
+#### Using an Existing Database
+
+If you already have an existing database file (for example, you downloaded a ready `mudhost.db`), you should place it inside your mapped local directory before starting the container:
+
+```bash
+# Example layout on your host machine:
+data/
+  mudhost.db
+```
+
+When the container starts, it will automatically find and use the `./data/mudhost.db` file instead of creating a new empty one.
+
 ## Building
 
 Build the frontend assets and the Go binary:

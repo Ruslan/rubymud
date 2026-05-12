@@ -6,7 +6,7 @@ MUD ?= 127.0.0.1:4000
 LISTEN ?= :8080
 DB_PATH ?= data/mudhost.db
 
-.PHONY: help run build go-build test tidy db-init db-schema ui
+.PHONY: help run build go-build test tidy db-init db-schema ui docker-build docker-run
 
 help:
 	@printf "Targets:\n"
@@ -18,6 +18,8 @@ help:
 	@printf "  make tidy                                Run go mod tidy\n"
 	@printf "  make db-init                             Initialize or update database schema\n"
 	@printf "  make db-schema                           Print mudhost.db schema\n"
+	@printf "  make docker-build                        Build Docker image\n"
+	@printf "  make docker-run                          Run Docker container\n"
 
 .PHONY: ui-install
 
@@ -48,3 +50,9 @@ db-init: go-build
 
 db-schema:
 	sqlite3 "$(DB_PATH)" ".schema"
+
+docker-build:
+	docker build -t rubymud .
+
+docker-run: docker-build
+	docker run -it --rm -p 8080:8080 -v "$(PWD)/data:/data" rubymud
