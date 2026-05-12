@@ -42,6 +42,9 @@ jobs:
 
           GOOS=darwin GOARCH=arm64 \
             go build -o dist/mudhost-mac-arm ./cmd/mudhost
+
+          GOOS=linux GOARCH=amd64 \
+            go build -o dist/mudhost-linux-amd64 ./cmd/mudhost
         working-directory: go
 
       - name: Create release
@@ -51,4 +54,5 @@ jobs:
             go/dist/mudhost.exe
             go/dist/mudhost-mac-intel
             go/dist/mudhost-mac-arm
+            go/dist/mudhost-linux-amd64
           generate_release_notes: true
