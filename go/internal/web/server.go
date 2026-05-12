@@ -734,7 +734,11 @@ func (s *Server) updateProfileAlias(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idStr := chi.URLParam(r, "id")
-	id, _ := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid alias id", http.StatusBadRequest)
+		return
+	}
 
 	var a storage.AliasRule
 	if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
@@ -758,7 +762,11 @@ func (s *Server) deleteProfileAlias(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idStr := chi.URLParam(r, "id")
-	id, _ := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid alias id", http.StatusBadRequest)
+		return
+	}
 
 	if err := s.store.DeleteAliasByID(id, pid); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -812,7 +820,11 @@ func (s *Server) updateProfileTrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idStr := chi.URLParam(r, "id")
-	id, _ := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid trigger id", http.StatusBadRequest)
+		return
+	}
 
 	var t storage.TriggerRule
 	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
@@ -836,7 +848,11 @@ func (s *Server) deleteProfileTrigger(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idStr := chi.URLParam(r, "id")
-	id, _ := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid trigger id", http.StatusBadRequest)
+		return
+	}
 
 	if err := s.store.DeleteTriggerByID(id, pid); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -890,7 +906,11 @@ func (s *Server) updateProfileHighlight(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	idStr := chi.URLParam(r, "id")
-	id, _ := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid highlight id", http.StatusBadRequest)
+		return
+	}
 
 	var h storage.HighlightRule
 	if err := json.NewDecoder(r.Body).Decode(&h); err != nil {
@@ -914,7 +934,11 @@ func (s *Server) deleteProfileHighlight(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	idStr := chi.URLParam(r, "id")
-	id, _ := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid highlight id", http.StatusBadRequest)
+		return
+	}
 
 	if err := s.store.DeleteHighlightByID(id, pid); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -968,7 +992,11 @@ func (s *Server) updateProfileSub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idStr := chi.URLParam(r, "id")
-	id, _ := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid sub id", http.StatusBadRequest)
+		return
+	}
 
 	var sub storage.SubstituteRule
 	if err := json.NewDecoder(r.Body).Decode(&sub); err != nil {
@@ -992,7 +1020,11 @@ func (s *Server) deleteProfileSub(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idStr := chi.URLParam(r, "id")
-	id, _ := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid sub id", http.StatusBadRequest)
+		return
+	}
 
 	if err := s.store.DeleteSubstituteByID(id, pid); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1046,7 +1078,11 @@ func (s *Server) updateProfileHotkey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idStr := chi.URLParam(r, "id")
-	id, _ := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid hotkey id", http.StatusBadRequest)
+		return
+	}
 
 	var h storage.HotkeyRule
 	if err := json.NewDecoder(r.Body).Decode(&h); err != nil {
@@ -1070,7 +1106,11 @@ func (s *Server) deleteProfileHotkey(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idStr := chi.URLParam(r, "id")
-	id, _ := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid hotkey id", http.StatusBadRequest)
+		return
+	}
 
 	if err := s.store.DeleteHotkeyByID(id, pid); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1466,7 +1506,11 @@ func (s *Server) updateProfileVariable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idStr := chi.URLParam(r, "id")
-	id, _ := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid variable id", http.StatusBadRequest)
+		return
+	}
 
 	var v storage.ProfileVariable
 	if err := json.NewDecoder(r.Body).Decode(&v); err != nil {
@@ -1490,7 +1534,11 @@ func (s *Server) deleteProfileVariable(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	idStr := chi.URLParam(r, "id")
-	id, _ := strconv.ParseInt(idStr, 10, 64)
+	id, err := strconv.ParseInt(idStr, 10, 64)
+	if err != nil {
+		http.Error(w, "invalid variable id", http.StatusBadRequest)
+		return
+	}
 
 	if err := s.store.DeleteProfileVariable(id, pid); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)

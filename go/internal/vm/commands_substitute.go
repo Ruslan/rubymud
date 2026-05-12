@@ -51,7 +51,11 @@ func (v *VM) cmdSubstitute(rest string, depth int) []Result {
 		})
 	}
 
-	return echoResults([]string{fmt.Sprintf("#sub {%s} {%s} {%s}", pattern, replacement, group)}, depth)
+	msg := fmt.Sprintf("#sub {%s} {%s}", pattern, replacement)
+	if group != "default" {
+		msg = fmt.Sprintf("#sub {%s} {%s} {%s}", pattern, replacement, group)
+	}
+	return echoResults([]string{msg}, depth)
 }
 
 func (v *VM) cmdGag(rest string, depth int) []Result {
@@ -83,7 +87,11 @@ func (v *VM) cmdGag(rest string, depth int) []Result {
 		})
 	}
 
-	return echoResults([]string{fmt.Sprintf("#gag {%s} {%s}", pattern, group)}, depth)
+	msg := fmt.Sprintf("#gag {%s}", pattern)
+	if group != "default" {
+		msg = fmt.Sprintf("#gag {%s} {%s}", pattern, group)
+	}
+	return echoResults([]string{msg}, depth)
 }
 
 func (v *VM) cmdUnsub(rest string, depth int) []Result {

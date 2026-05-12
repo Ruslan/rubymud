@@ -576,3 +576,31 @@ func TestColorsAPI(t *testing.T) {
 		t.Error("color 'red' not found in response")
 	}
 }
+
+func TestAPIInvalidIDHandling(t *testing.T) {
+	s, _ := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	// Test with a string that is not a number
+	url := fmt.Sprintf("%s/api/profiles/1/subs/notanumber", ts.URL)
+	req, _ := newAuthenticatedRequest(http.MethodPut, url, bytes.NewBufferString("{}"), s.apiToken)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT %s: %v", url, err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("PUT status = %d, want 400", resp.StatusCode)
+	}
+
+	// Test DELETE
+	req, _ = newAuthenticatedRequest(http.MethodDelete, url, nil, s.apiToken)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE %s: %v", url, err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("DELETE status = %d, want 400", resp.StatusCode)
+	}
+}
