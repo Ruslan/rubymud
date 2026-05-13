@@ -5,31 +5,29 @@ import (
 	"regexp"
 )
 
+var triggerCaptureRef = regexp.MustCompile(`%(\d+)`)
+
 func (v *VM) MatchTriggers(plainText string) ([]Effect, RoutingInfo) {
 	v.ensureFresh()
 
 	var effects []Effect
 	routing := RoutingInfo{TargetBuffer: "main"}
 
-	for i := range v.triggers {
-		t := &v.triggers[i]
-		if !t.Enabled {
+	for _, ct := range v.compiledTriggers {
+		if !ct.rule.Enabled {
+			continue
+		}
+		if ct.re == nil {
 			continue
 		}
 
-		re, err := regexp.Compile(t.Pattern)
-		if err != nil {
-			log.Printf("trigger pattern compile error %q: %v", t.Pattern, err)
-			continue
-		}
-
-		matches := re.FindStringSubmatch(plainText)
+		matches := ct.re.FindStringSubmatch(plainText)
 		if matches == nil {
 			continue
 		}
 
-		cmd := expandTriggerCommand(t.Command, matches)
-		if t.IsButton {
+		cmd := expandTriggerCommand(ct.rule.Command, matches)
+		if ct.rule.IsButton {
 			label := cmd
 			runes := []rune(label)
 			if len(runes) > 40 {
@@ -40,20 +38,20 @@ func (v *VM) MatchTriggers(plainText string) ([]Effect, RoutingInfo) {
 			effects = append(effects, Effect{Type: "send", Command: cmd})
 		}
 
-		if t.TargetBuffer != "" {
-			switch t.BufferAction {
+		if ct.rule.TargetBuffer != "" {
+			switch ct.rule.BufferAction {
 			case "move":
 				if routing.TargetBuffer == "main" {
-					routing.TargetBuffer = t.TargetBuffer
+					routing.TargetBuffer = ct.rule.TargetBuffer
 				}
 			case "copy":
-				routing.CopyBuffers = append(routing.CopyBuffers, t.TargetBuffer)
+				routing.CopyBuffers = append(routing.CopyBuffers, ct.rule.TargetBuffer)
 			case "echo":
-				routing.Echoes = append(routing.Echoes, EchoAction{TargetBuffer: t.TargetBuffer, Text: cmd})
+				routing.Echoes = append(routing.Echoes, EchoAction{TargetBuffer: ct.rule.TargetBuffer, Text: cmd})
 			}
 		}
 
-		if t.StopAfterMatch {
+		if ct.rule.StopAfterMatch {
 			break
 		}
 	}
@@ -62,8 +60,7 @@ func (v *VM) MatchTriggers(plainText string) ([]Effect, RoutingInfo) {
 }
 
 func expandTriggerCommand(template string, matches []string) string {
-	r := regexp.MustCompile(`%(\d+)`)
-	return r.ReplaceAllStringFunc(template, func(match string) string {
+	return triggerCaptureRef.ReplaceAllStringFunc(template, func(match string) string {
 		idx := 0
 		for _, c := range match[1:] {
 			idx = idx*10 + int(c-'0')

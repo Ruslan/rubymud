@@ -25,6 +25,20 @@ type gagPayload struct {
 	EffectivePattern string `json:"effective_pattern"`
 }
 
+func (v *VM) compileEffectivePattern(template, effective string) *regexp.Regexp {
+	if re, ok := v.effectivePatternCache[effective]; ok {
+		return re
+	}
+	re, err := regexp.Compile(effective)
+	if err != nil {
+		log.Printf("pattern compile error template=%q effective=%q: %v", template, effective, err)
+		v.effectivePatternCache[effective] = nil
+		return nil
+	}
+	v.effectivePatternCache[effective] = re
+	return re
+}
+
 func (v *VM) CheckGag(plainText string) (storage.LogOverlay, bool) {
 	v.ensureFresh()
 	for i := range v.substitutes {
@@ -33,9 +47,8 @@ func (v *VM) CheckGag(plainText string) (storage.LogOverlay, bool) {
 			continue
 		}
 		effectivePattern := v.substitutePatternVars(rule.Pattern)
-		re, err := regexp.Compile(effectivePattern)
-		if err != nil {
-			log.Printf("gag pattern compile error %q: %v", rule.Pattern, err)
+		re := v.compileEffectivePattern(rule.Pattern, effectivePattern)
+		if re == nil {
 			continue
 		}
 		matches := re.FindAllStringIndex(plainText, -1)
@@ -73,9 +86,8 @@ func (v *VM) ApplySubsAndCollectOverlays(rawText, plainText string) (string, str
 			continue
 		}
 		effectivePattern := v.substitutePatternVars(rule.Pattern)
-		re, err := regexp.Compile(effectivePattern)
-		if err != nil {
-			log.Printf("substitute pattern compile error %q: %v", rule.Pattern, err)
+		re := v.compileEffectivePattern(rule.Pattern, effectivePattern)
+		if re == nil {
 			continue
 		}
 		matches := re.FindAllStringSubmatchIndex(displayPlain, -1)

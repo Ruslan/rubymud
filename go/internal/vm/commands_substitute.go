@@ -41,6 +41,7 @@ func (v *VM) cmdSubstitute(rest string, depth int) []Result {
 		if err := v.store.SaveSubstitute(pid, pattern, replacement, false, group); err != nil {
 			return echoResults([]string{fmt.Sprintf("#sub: save error: %v", err)}, depth)
 		}
+		v.rulesVersion++
 		v.ensureFresh()
 	} else {
 		v.substitutes = append(v.substitutes, storage.SubstituteRule{
@@ -49,6 +50,7 @@ func (v *VM) cmdSubstitute(rest string, depth int) []Result {
 			Enabled:     true,
 			GroupName:   group,
 		})
+		v.rulesVersion++
 	}
 
 	msg := fmt.Sprintf("#sub {%s} {%s}", pattern, replacement)
@@ -77,6 +79,7 @@ func (v *VM) cmdGag(rest string, depth int) []Result {
 		if err := v.store.SaveSubstitute(pid, pattern, "", true, group); err != nil {
 			return echoResults([]string{fmt.Sprintf("#gag: save error: %v", err)}, depth)
 		}
+		v.rulesVersion++
 		v.ensureFresh()
 	} else {
 		v.substitutes = append(v.substitutes, storage.SubstituteRule{
@@ -85,6 +88,7 @@ func (v *VM) cmdGag(rest string, depth int) []Result {
 			Enabled:   true,
 			GroupName: group,
 		})
+		v.rulesVersion++
 	}
 
 	msg := fmt.Sprintf("#gag {%s}", pattern)
@@ -109,6 +113,7 @@ func (v *VM) cmdUnsub(rest string, depth int) []Result {
 			if err := v.store.DeleteSubstitute(pid, pattern); err != nil {
 				return echoResults([]string{fmt.Sprintf("#unsub: error: %v", err)}, depth)
 			}
+			v.rulesVersion++
 			v.ensureFresh()
 		}
 	} else {
@@ -119,6 +124,7 @@ func (v *VM) cmdUnsub(rest string, depth int) []Result {
 			}
 		}
 		v.substitutes = kept
+		v.rulesVersion++
 	}
 	return echoResults([]string{fmt.Sprintf("#unsub: %s removed", pattern)}, depth)
 }

@@ -51,6 +51,7 @@ func (v *VM) cmdAction(rest string, depth int) []Result {
 		if err := v.store.SaveTrigger(pid, pattern, command, isButton, group); err != nil {
 			return echoResults([]string{fmt.Sprintf("#action: save error: %v", err)}, depth)
 		}
+		v.rulesVersion++
 		v.ensureFresh()
 	} else {
 		v.triggers = append(v.triggers, storage.TriggerRule{
@@ -60,6 +61,7 @@ func (v *VM) cmdAction(rest string, depth int) []Result {
 			GroupName: group,
 			Enabled:   true,
 		})
+		v.rulesVersion++
 	}
 
 	label := ""
@@ -80,6 +82,7 @@ func (v *VM) cmdUnaction(rest string, depth int) []Result {
 			if err := v.store.DeleteTrigger(pid, pattern); err != nil {
 				return echoResults([]string{fmt.Sprintf("#unaction: error: %v", err)}, depth)
 			}
+			v.rulesVersion++
 			v.ensureFresh()
 		}
 	}
@@ -121,10 +124,12 @@ func (v *VM) cmdHighlight(rest string, depth int) []Result {
 		if err := v.store.SaveHighlight(pid, h); err != nil {
 			return echoResults([]string{fmt.Sprintf("#highlight: save error: %v", err)}, depth)
 		}
+		v.rulesVersion++
 		v.ensureFresh()
 	} else {
 		h.Enabled = true
 		v.highlights = append(v.highlights, h)
+		v.rulesVersion++
 	}
 
 	return echoResults([]string{formatHighlight(h)}, depth)
@@ -141,6 +146,7 @@ func (v *VM) cmdUnhighlight(rest string, depth int) []Result {
 			if err := v.store.DeleteHighlight(pid, pattern); err != nil {
 				return echoResults([]string{fmt.Sprintf("#unhighlight: error: %v", err)}, depth)
 			}
+			v.rulesVersion++
 			v.ensureFresh()
 		}
 	}

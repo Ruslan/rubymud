@@ -2,6 +2,7 @@ package vm
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"rubymud/go/internal/storage"
@@ -43,9 +44,11 @@ func (v *VM) cmdAlias(rest string, depth int) []Result {
 		if err := v.store.SaveAlias(pid, name, template, true, "default"); err != nil {
 			return echoResults([]string{fmt.Sprintf("#alias: save error: %v", err)}, depth)
 		}
+		v.rulesVersion++
 		v.ensureFresh()
 	} else {
 		v.aliases = append(v.aliases, storage.AliasRule{Name: name, Template: template, Enabled: true, GroupName: "default"})
+		v.rulesVersion++
 	}
 
 	return echoResults([]string{fmt.Sprintf("#alias {%s} = {%s}", name, template)}, depth)
@@ -62,6 +65,7 @@ func (v *VM) cmdUnalias(rest string, depth int) []Result {
 			if err := v.store.DeleteAlias(pid, name); err != nil {
 				return echoResults([]string{fmt.Sprintf("#unalias: error: %v", err)}, depth)
 			}
+			v.rulesVersion++
 			v.ensureFresh()
 		}
 	}
@@ -97,9 +101,12 @@ func (v *VM) cmdVariable(rest string, depth int) []Result {
 		if err := v.store.SetVariable(v.sessionID, name, value); err != nil {
 			return echoResults([]string{fmt.Sprintf("#variable: save error: %v", err)}, depth)
 		}
+		v.rulesVersion++
+		v.effectivePatternCache = make(map[string]*regexp.Regexp)
 		v.ensureFresh()
 	} else {
 		v.variables[name] = value
+		v.effectivePatternCache = make(map[string]*regexp.Regexp)
 	}
 
 	return echoResults([]string{fmt.Sprintf("#variable {%s} = {%s}", name, value)}, depth)
@@ -114,9 +121,12 @@ func (v *VM) cmdUnvariable(rest string, depth int) []Result {
 		if err := v.store.DeleteVariable(v.sessionID, name); err != nil {
 			return echoResults([]string{fmt.Sprintf("#unvariable: error: %v", err)}, depth)
 		}
+		v.rulesVersion++
+		v.effectivePatternCache = make(map[string]*regexp.Regexp)
 		v.ensureFresh()
 	}
 	delete(v.variables, name)
+	v.effectivePatternCache = make(map[string]*regexp.Regexp)
 	return echoResults([]string{fmt.Sprintf("#unvariable: %s removed", name)}, depth)
 }
 
@@ -135,6 +145,7 @@ func (v *VM) cmdHotkey(rest string, depth int) []Result {
 		if _, err := v.store.CreateHotkey(pid, shortcut, command, 0, 0); err != nil {
 			return echoResults([]string{fmt.Sprintf("#hotkey: error: %v", err)}, depth)
 		}
+		v.rulesVersion++
 		v.ensureFresh()
 	}
 	return echoResults([]string{fmt.Sprintf("#hotkey {%s} {%s}", shortcut, command)}, depth)

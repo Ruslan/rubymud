@@ -53,6 +53,8 @@ type Session struct {
 	outputBatch      []ClientLogEntry
 	outputBatchHints []ServerMsg
 	batchActive      bool
+	batchOldestLine  time.Time
+	batchLatency     latencyAggregate
 
 	readSrc      io.Reader
 	initCmds     string
@@ -806,8 +808,8 @@ func (s *Session) NotifySettingsChanged(domain string) {
 		}
 	}
 
-	// Also reload VM state
-	if err := s.vm.Reload(); err != nil {
+	// Also reload VM state and rebuild compiled caches
+	if err := s.vm.ReloadFromStore(); err != nil {
 		log.Printf("failed to reload vm after settings change: %v", err)
 	}
 }

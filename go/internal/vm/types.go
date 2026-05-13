@@ -58,16 +58,32 @@ type TimerControl interface {
 	GetTimerCycleSeconds(name string) int
 }
 
+type compiledTrigger struct {
+	re   *regexp.Regexp
+	rule storage.TriggerRule
+}
+
+type compiledHighlight struct {
+	re   *regexp.Regexp
+	ansi string
+	rule storage.HighlightRule
+}
+
 type VM struct {
-	store       *storage.Store
-	sessionID   int64
-	aliases     []storage.AliasRule
-	triggers    []storage.TriggerRule
-	highlights  []storage.HighlightRule
-	substitutes []storage.SubstituteRule
-	variables   map[string]string
-	varPattern  *regexp.Regexp
-	ttsFn       func(string)
-	ttsCustom   bool
-	timerCtrl   TimerControl
+	store                 *storage.Store
+	sessionID             int64
+	aliases               []storage.AliasRule
+	triggers              []storage.TriggerRule
+	highlights            []storage.HighlightRule
+	substitutes           []storage.SubstituteRule
+	variables             map[string]string
+	varPattern            *regexp.Regexp
+	ttsFn                 func(string)
+	ttsCustom             bool
+	timerCtrl             TimerControl
+	rulesVersion          int64
+	loadedRulesVersion    int64
+	compiledTriggers      []compiledTrigger
+	compiledHighlights    []compiledHighlight
+	effectivePatternCache map[string]*regexp.Regexp
 }

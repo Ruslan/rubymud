@@ -11,10 +11,13 @@ import (
 
 func New(store *storage.Store, sessionID int64) *VM {
 	v := &VM{
-		store:      store,
-		sessionID:  sessionID,
-		variables:  make(map[string]string),
-		varPattern: regexp.MustCompile(`\$([\p{L}\p{N}_]+)`),
+		store:                 store,
+		sessionID:             sessionID,
+		variables:             make(map[string]string),
+		varPattern:            regexp.MustCompile(`\$([\p{L}\p{N}_]+)`),
+		rulesVersion:          1,
+		loadedRulesVersion:    0,
+		effectivePatternCache: make(map[string]*regexp.Regexp),
 	}
 
 	if runtime.GOOS == "darwin" {
@@ -126,14 +129,59 @@ func (v *VM) Reload() error {
 	return nil
 }
 
-func (v *VM) ensureFresh() {
+// ReloadFromStore reloads raw rules from the backing store and rebuilds all
+// compiled caches so that external/UI edits are visible immediately.
+func (v *VM) ReloadFromStore() error {
 	if v.store == nil {
-		return
+		return nil
 	}
 	if err := v.Reload(); err != nil {
-		// Runtime must continue operating even if refresh fails.
-		log.Printf("vm reload error: %v", err)
+		return err
 	}
+	v.loadedRulesVersion = v.rulesVersion
+	v.rebuildCaches()
+	return nil
+}
+
+func (v *VM) ensureFresh() {
+	if v.rulesVersion == v.loadedRulesVersion {
+		return
+	}
+	if v.store != nil {
+		if err := v.Reload(); err != nil {
+			// Runtime must continue operating even if refresh fails.
+			log.Printf("vm reload error: %v", err)
+			return
+		}
+	}
+	v.loadedRulesVersion = v.rulesVersion
+	v.rebuildCaches()
+}
+
+func (v *VM) rebuildCaches() {
+	v.compiledTriggers = v.compiledTriggers[:0]
+	for i := range v.triggers {
+		t := &v.triggers[i]
+		ct := compiledTrigger{rule: *t}
+		if re, err := regexp.Compile(t.Pattern); err == nil {
+			ct.re = re
+		} else {
+			log.Printf("trigger pattern compile error %q: %v", t.Pattern, err)
+		}
+		v.compiledTriggers = append(v.compiledTriggers, ct)
+	}
+
+	v.compiledHighlights = v.compiledHighlights[:0]
+	for i := range v.highlights {
+		h := &v.highlights[i]
+		ch := compiledHighlight{rule: *h, ansi: highlightToANSI(h)}
+		if re, err := regexp.Compile(h.Pattern); err == nil {
+			ch.re = re
+		}
+		v.compiledHighlights = append(v.compiledHighlights, ch)
+	}
+
+	v.effectivePatternCache = make(map[string]*regexp.Regexp)
 }
 
 func (v *VM) Aliases() []storage.AliasRule          { return v.aliases }

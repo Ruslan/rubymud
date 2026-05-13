@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"regexp"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -11,24 +10,21 @@ func (v *VM) ApplyHighlights(text string) string {
 	v.ensureFresh()
 
 	plainText := stripANSIFromVM(text)
-	for i := range v.highlights {
-		h := &v.highlights[i]
-		if !h.Enabled {
+	for _, ch := range v.compiledHighlights {
+		if !ch.rule.Enabled {
 			continue
 		}
-		re, err := regexp.Compile(h.Pattern)
-		if err != nil {
+		if ch.re == nil {
 			continue
 		}
-		
-		allLocs := re.FindAllStringIndex(plainText, -1)
+
+		allLocs := ch.re.FindAllStringIndex(plainText, -1)
 		if len(allLocs) == 0 {
 			continue
 		}
 
 		// Apply highlights backwards so that indices in allLocs remain valid
 		// even as we inject ANSI codes that change the string length.
-		ansi := highlightToANSI(h)
 		for j := len(allLocs) - 1; j >= 0; j-- {
 			loc := allLocs[j]
 			rawStart, rawEnd, ok := plainRangeToRawRange(text, loc[0], loc[1])
@@ -37,7 +33,7 @@ func (v *VM) ApplyHighlights(text string) string {
 			}
 			matched := text[rawStart:rawEnd]
 			restore := activeANSIAt(text, rawEnd)
-			text = text[:rawStart] + ansi + matched + resetANSI() + restore + text[rawEnd:]
+			text = text[:rawStart] + ch.ansi + matched + resetANSI() + restore + text[rawEnd:]
 		}
 	}
 	return text
