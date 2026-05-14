@@ -72,6 +72,27 @@ func TestApplyHighlightsLoadsLatestStateFromDB(t *testing.T) {
 	}
 }
 
+func TestStoreBackedHighlightCreationIsEnabled(t *testing.T) {
+	store := newRuntimeTestStore(t)
+	v := New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+
+	results := v.ProcessInputDetailed("#highlight {red} {danger}")
+	if len(results) == 0 {
+		t.Fatalf("expected #highlight to return results")
+	}
+
+	got := v.ApplyHighlights("danger zone")
+	if got == "danger zone" {
+		t.Fatalf("ApplyHighlights did not inject ANSI, meaning highlight is disabled or missing: %q", got)
+	}
+	if stripANSIFromVM(got) != "danger zone" {
+		t.Fatalf("ApplyHighlights plain text = %q, want %q", stripANSIFromVM(got), "danger zone")
+	}
+}
+
 func TestProfileAliasPriorityWithDisabled(t *testing.T) {
 	store := newRuntimeTestStore(t)
 	db := store.DB()

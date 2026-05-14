@@ -115,6 +115,7 @@ func (v *VM) cmdHighlight(rest string, depth int) []Result {
 	h := parseColorSpec(colorSpec)
 	h.Pattern = pattern
 	h.GroupName = group
+	h.Enabled = true
 
 	if v.store != nil {
 		pid := v.primaryProfileID()
@@ -127,7 +128,6 @@ func (v *VM) cmdHighlight(rest string, depth int) []Result {
 		v.rulesVersion++
 		v.ensureFresh()
 	} else {
-		h.Enabled = true
 		v.highlights = append(v.highlights, h)
 		v.rulesVersion++
 	}
