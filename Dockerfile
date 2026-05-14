@@ -4,11 +4,19 @@ RUN apk add --no-cache go make
 
 WORKDIR /build
 
-COPY go ./go
-COPY ui ./ui
 COPY Makefile ./
 
+# Cache Node.js dependencies
+COPY ui/package.json ui/package-lock.json* ./ui/
 RUN make ui-install
+
+# Cache Go module dependencies
+COPY go/go.mod go/go.sum ./go/
+RUN cd go && go mod download
+
+# Copy source code and build
+COPY ui ./ui
+COPY go ./go
 RUN CGO_ENABLED=0 make build
 
 FROM alpine:latest
