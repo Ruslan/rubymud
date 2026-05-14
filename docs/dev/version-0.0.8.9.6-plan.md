@@ -1,112 +1,73 @@
-# Rich markup в `#sub` replacement
+# Динамические подсветки с поддержкой переменных
 
-## Контекст
+## Описание
+В текущей реализации подсветки (Highlights) компилируются один раз при загрузке профиля. Если в шаблоне подсветки используется переменная (например, `$target`), она не раскрывается в значение переменной, а воспринимается как часть регулярного выражения (`$` становится regex-якорем конца строки), из-за чего такое правило фактически не работает как шаблон с переменной.
 
-`0.0.8.9.3` добавляет `#sub/#gag` как overlay-based UX-слой над входящим MUD-текстом: canonical log остаётся оригинальным, applied result сохраняется в `log_overlays`.
+Для сравнения, замены (Substitutions) уже поддерживают динамическое раскрытие переменных в шаблонах. Цель данной задачи — перевести подсветки на ту же динамическую модель.
 
-`0.0.8.9.4` добавляет HTML-like markup для локального авторского вывода (`#showme/#woutput`) и общий backend helper для генерации ANSI из safe markup.
+## Предложенные изменения
 
-Этот план расширяет `#sub` replacement: автор replacement может использовать markup для styling capture groups и статического текста.
+### [Component] Go Runtime (VM)
 
-## Цели
+#### [MODIFY] [types.go](file:///home/ru/rubymud/go/internal/vm/types.go)
+- Убрать поля `re *regexp.Regexp` и `rule storage.HighlightRule` из структуры `compiledHighlight` — регулярки больше не компилируются на этапе `rebuildCaches`, а само правило берётся из `v.highlights` по тому же индексу.
+- Оставить в `compiledHighlight` только поле `ansi string` (кэш ANSI-последовательности для правила).
+- `compiledHighlights` остаётся срезом `[]compiledHighlight`, индексируется параллельно с `v.highlights`.
 
-Поддержать rich substitutions вида:
+Почему не `map[int64]string`: при `store == nil` все подсветки имеют `ID = 0`, что приводит к коллизиям. Параллельная индексация по позиции в срезе надёжнее.
 
-```text
-#sub {вы взяли (.+) из трупа (.+)} {вы взяли <fg red>%1</fg> из трупа <fg green>%2</fg>}
-```
+Инвариант: после `ensureFresh()` длины `v.highlights` и `v.compiledHighlights` должны совпадать. В `ApplyHighlights` стоит либо опираться на этот инвариант, либо добавить защиту `if i >= len(v.compiledHighlights) { continue }`, чтобы ручная мутация `v.highlights` без увеличения `rulesVersion` не приводила к panic.
 
-Ожидаемый результат:
-- `%1/%2` подставляются из regex capture groups
-- markup автора компилируется в ANSI
-- `replacement_raw` сохраняется в overlay уже с ANSI
-- `replacement_plain` сохраняется без ANSI
-- restore воспроизводит тот же applied display result без переприменения текущих правил
+#### [MODIFY] [runtime.go](file:///home/ru/rubymud/go/internal/vm/runtime.go)
+- В `rebuildCaches`:
+  - Убрать компиляцию регулярных выражений для подсветок (строки 178-180).
+  - Оставить только вычисление ANSI через `highlightToANSI(h)` и заполнение `compiledHighlights` параллельно с `v.highlights`:
+    ```go
+    v.compiledHighlights = make([]compiledHighlight, len(v.highlights))
+    for i := range v.highlights {
+        v.compiledHighlights[i] = compiledHighlight{
+            ansi: highlightToANSI(&v.highlights[i]),
+        }
+    }
+    ```
+  - Строка `v.effectivePatternCache = make(map[string]*regexp.Regexp)` остаётся без изменений — очистка кэша при перестроении правил уже работает корректно.
 
-## Не меняется
+#### [MODIFY] [highlight_apply.go](file:///home/ru/rubymud/go/internal/vm/highlight_apply.go)
+- Переработать функцию `ApplyHighlights` для поддержки динамических шаблонов:
+  - Итерироваться по `v.highlights` с индексом `i` (вместо `v.compiledHighlights`).
+  - Внутри цикла для каждого включенного правила:
+    - Пропускать правила с `!rule.Enabled`.
+    - Получать ANSI из кэша: `ansi := v.compiledHighlights[i].ansi`, пропускать если `ansi == ""`.
+    - Вызывать `effectivePattern := v.substitutePatternVars(rule.Pattern)` для раскрытия переменных.
+    - Вызывать `re := v.compileEffectivePattern(rule.Pattern, effectivePattern)` для получения скомпилированной регулярки из `effectivePatternCache`.
+    - Пропускать если `re == nil` (ошибка компиляции).
+    - Остальная логика (поиск совпадений, вставка ANSI, восстановление внешнего контекста) остаётся без изменений.
+- `plainText := stripANSIFromVM(text)` можно оставить вычисленным один раз перед циклом: подсветки вставляют только ANSI-последовательности и не меняют plain-текст, поэтому plain offsets остаются валидными для следующих правил.
+- См. образец: `ApplySubsAndCollectOverlays` в `substitution_apply.go:76-138`.
 
-- `log_entries.raw_text/plain_text` остаются canonical original MUD input.
-- Triggers продолжают матчиться по оригинальному plain text.
-- `#highlight` остаётся отдельным dynamic presentation-only слоем.
-- Входящий MUD-текст не интерпретируется как markup.
+#### [MODIFY] [runtime_cache_test.go](file:///home/ru/rubymud/go/internal/vm/runtime_cache_test.go)
+- Тест `TestHighlightCachePrecomputesANSI` (строка 80-94) сейчас не обращается к `compiledHighlight.re`, поэтому может пройти почти без изменений. Его лучше усилить: проверять, что `compiledHighlights` содержит одну запись, `compiledHighlights[0].ansi != ""`, текст подсвечивается корректно, а после первого `ApplyHighlights` в `effectivePatternCache` появляется скомпилированный шаблон.
 
-## Семантика
+#### [NEW] [highlight_dynamic_test.go](file:///home/ru/rubymud/go/internal/vm/highlight_dynamic_test.go)
+- Добавить тесты, проверяющие:
+  1. **Подсветка через переменную**: задать `v.variables["enemy"] = "Крыса"`, highlight с pattern `$enemy`. Вызвать `ApplyHighlights("Атакует Крыса!")` — проверить что слово «Крыса» обёрнуто в ANSI.
+  2. **Literal-экранирование значения переменной**: задать значение с regex-метасимволами, например `v.variables["enemy"] = "a.b"` или `v.variables["enemy"] = "King\\dark"`. Проверить, что подсвечивается только literal-строка (`a.b`), а не regex-совпадение (`axb`). Это должно повторять поведение `substitutePatternVars`, где значение проходит через `regexp.QuoteMeta`.
+  3. **Автообновление при смене переменной**: после первого apply менять переменную через `v.ProcessInputDetailed("#variable {enemy} {Волк}")`, а не прямой записью в map. Это проверяет реальное поведение `cmdVariable`: переменная обновляется, `effectivePatternCache` очищается, затем «Волк» подсвечен, а «Крыса» — нет. Если тест меняет `v.variables` напрямую, тогда cache нужно очищать явно, потому что прямой доступ обходит runtime-команду.
+  4. **Корректность кэша**: вызвать `ApplyHighlights` дважды без изменения переменных. Проверить `len(v.effectivePatternCache)` до и после вызовов — размер не должен расти при повторном вызове (регулярка берётся из кэша, а не перекомпилируется).
+  5. **Несколько подсветок на одной строке**: две подсветки с разными переменными (например `$enemy` и `$weapon`), обе находят совпадение в одной строке — проверить что оба ANSI-кода применены.
+  6. **Неизвестная переменная остаётся literal**: pattern `$unknown` должен подсветить literal-текст `$unknown`, а не воспринимать `$` как regex-якорь.
 
-`#sub` replacement становится author-controlled markup template.
+## План верификации
 
-Порядок обработки:
-1. `Pattern` раскрывает `$vars` через `substitutePatternVars`, как в `0.0.8.9.3`, с `regexp.QuoteMeta` для значений переменных
-2. Regex матчится на текущем `displayPlain`
-3. Replacement template парсится как safe markup/template
-4. `$vars` в replacement раскрываются как literal text segments
-5. `%0..%N` подставляются как literal text segments из MUD capture groups
-6. Содержимое `$vars` и `%0..%N` не интерпретируется как markup
-7. Итоговый template render генерирует `replacement_raw` с ANSI и `replacement_plain` без ANSI
-8. `substitution` overlay сохраняет фактические `replacement_raw/replacement_plain`, `pattern_template`, `effective_pattern`, `replacement_template`
+### Автоматические тесты
+- Запуск всех тестов VM из модуля Go: `cd go && go test -v ./internal/vm/...`
+- Убедиться что существующие тесты подсветок (`highlight_test.go`) проходят без изменений.
 
-Ключевое security-правило: markup применим только к авторскому replacement template, а не к подставленным данным. Если MUD прислал capture group `<red>orc</red>`, она должна отобразиться как буквальный текст `<red>orc</red>`, а не включить цвет. Если `$target1` содержит `<red>orc</red>`, значение переменной тоже вставляется как literal text, а не как markup.
-
-## Parser/API
-
-Нельзя просто выполнить:
-
-```go
-renderLocalMarkup(expandedReplacement)
-```
-
-После такой операции MUD capture groups могли бы стать markup. Нужен template-aware API поверх модуля `0.0.8.9.4`, например:
-
-```go
-type MarkupSegment struct {
-    Text      string
-    IsMarkup  bool
-}
-
-func renderMarkupTemplate(template string, vars map[string]string, captures []string) (raw string, plain string)
-```
-
-Точная форма API не принципиальна, но renderer должен различать:
-- author markup/control tokens
-- literal text from `$vars`
-- literal text from `%0..%N`
-
-## Отношение к `#highlight`
-
-Rich `#sub` частично перекрывает сценарии `#highlight`, но не заменяет его полностью.
-
-`#highlight` лучше для:
-- простого dynamic coloring без изменения текста
-- правил, которые должны применяться к старым строкам при restore по текущей конфигурации
-- presentation-only подсветки
-
-Rich `#sub` лучше для:
-- переписывания строки
-- styling отдельных capture groups внутри replacement
-- стабильного history replay через saved overlays
-- сценариев, где важно сохранить именно applied result того времени
-
-## Edge cases
-
-- Nested markup в replacement поддерживается так же, как в `0.0.8.9.4`.
-- Unknown/broken tags остаются literal text и не становятся HTML.
-- `%N` без capture group заменяется пустой строкой.
-- Zero-width matches остаются ignored, как в `0.0.8.9.3`.
-- ANSI в capture group от MUD сохраняется как данные; renderer не должен ломать plain/raw mapping.
-- ANSI/raw escape sequences, явно написанные автором в replacement, остаются допустимыми, но markup является предпочтительным синтаксисом.
-
-## Tests
-
-- `#sub {вы взяли (.+) из трупа (.+)} {вы взяли <fg red>%1</fg> из трупа <fg green>%2</fg>}` создаёт overlay с ANSI в `replacement_raw` и plain без ANSI.
-- Capture group `<red>orc</red>` отображается как literal text, а не как markup.
-- `$target1` в replacement раскрывается и может быть внутри markup: `<fg red>$target1</fg>`.
-- `%1` внутри nested tags корректно наследует styles: `<red><u>%1</u></red>`.
-- Restore replay даёт тот же display raw/plain, что live render.
-- Canonical `log_entries.raw_text/plain_text` остаются оригинальным MUD-текстом.
-- `#highlight` после rich sub применяется поверх display raw.
-
-## Не входит в MVP этой версии
-
-- Markup в regex patterns.
-- Markup во входящем MUD-тексте.
-- Display-aware FTS по rich replacement.
-- UI preview с полноценным ANSI render, если это не появилось раньше.
+### Ручная проверка
+1. Создать подсветку на переменную `$enemy`: `#highlight {red} {$enemy}`
+2. Установить переменную: `#variable {enemy} {Крыса}`
+3. Убедиться, что в выводе слово «Крыса» подсвечено красным.
+4. Изменить переменную: `#variable {enemy} {Волк}`
+5. Убедиться, что теперь подсвечивается «Волк», а «Крыса» — нет.
+6. Создать вторую подсветку на `$weapon` с другим цветом.
+7. Отправить строку содержащую оба слова — убедиться что оба подсвечены разными цветами.
