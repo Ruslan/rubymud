@@ -10,6 +10,9 @@ export interface TimerSnapshot {
   enabled: boolean;
   cycle_ms: number;
   next_tick_at: string;
+  remaining_ms: number;
+  icon?: string;
+  repeat_mode?: string;
 }
 
 export interface Hotkey {

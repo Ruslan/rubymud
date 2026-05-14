@@ -290,6 +290,7 @@ func (s *Session) TickSet(name string, seconds float64) {
 	if t.Set(time.Duration(seconds * float64(time.Second))) {
 		s.BroadcastTick()
 		s.persistTimer(t)
+		s.persistProfileTimerDeclaration(t)
 	}
 }
 

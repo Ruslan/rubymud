@@ -629,11 +629,14 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     elements.connectionStatus.title = status === 'disconnected' ? 'Reconnect' : '';
   }
 
-  let activeTimers: TimerSnapshot[] = [];
+  type ActiveTimerSnapshot = TimerSnapshot & { received_at_ms: number };
+
+  let activeTimers: ActiveTimerSnapshot[] = [];
   let tickerInterval: any = null;
 
   function renderTimers(timers: TimerSnapshot[]) {
-    activeTimers = timers || [];
+    const receivedAt = performance.now();
+    activeTimers = (timers || []).map((timer) => ({ ...timer, received_at_ms: receivedAt }));
     updateTickerUI();
 
     if (!tickerInterval && activeTimers.some(t => t.enabled)) {
@@ -653,6 +656,23 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     return String(sec);
   }
 
+  function getRemainingSeconds(timer: ActiveTimerSnapshot): number {
+    const cycleSeconds = timer.cycle_ms > 0 ? Math.ceil(timer.cycle_ms / 1000) : 0;
+    const snapshotRemaining = Number.isFinite(timer.remaining_ms)
+      ? Math.max(0, timer.remaining_ms)
+      : Math.max(0, new Date(timer.next_tick_at).getTime() - Date.now());
+    const elapsed = Math.max(0, performance.now() - timer.received_at_ms);
+    const remaining = Math.ceil(Math.max(0, snapshotRemaining - elapsed) / 1000);
+
+    if (remaining === 0 && cycleSeconds > 0 && timer.repeat_mode !== 'one_shot') {
+      return cycleSeconds;
+    }
+    if (cycleSeconds > 0 && remaining > cycleSeconds) {
+      return cycleSeconds;
+    }
+    return remaining;
+  }
+
   function updateTickerUI() {
     const primary = activeTimers.find(t => t.name === 'ticker');
     const secondary = activeTimers.filter(t => t.name !== 'ticker' && t.enabled);
@@ -662,12 +682,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       elements.ticker.textContent = 'tick off';
       elements.ticker.classList.remove('ticker_active', 'ticker_low');
     } else {
-      const nextAt = new Date(primary.next_tick_at).getTime();
-      const now = Date.now();
-      let remaining = Math.max(0, Math.ceil((nextAt - now) / 1000));
-      if (remaining === 0 && primary.cycle_ms > 0) {
-          remaining = Math.ceil(primary.cycle_ms / 1000);
-      }
+      const remaining = getRemainingSeconds(primary);
 
       const icon = primary.icon || '🕒';
       elements.ticker.textContent = `${icon} tick ${formatRemaining(remaining)}`;
@@ -682,12 +697,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     // Secondary timers
     elements.secondaryTimers.innerHTML = '';
     secondary.forEach(t => {
-      const nextAt = new Date(t.next_tick_at).getTime();
-      const now = Date.now();
-      let remaining = Math.max(0, Math.ceil((nextAt - now) / 1000));
-      if (remaining === 0 && t.cycle_ms > 0) {
-          remaining = Math.ceil(t.cycle_ms / 1000);
-      }
+      const remaining = getRemainingSeconds(t);
 
       const pill = document.createElement('span');
       pill.className = 'timer-pill';

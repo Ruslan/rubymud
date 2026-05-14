@@ -647,7 +647,6 @@ document.addEventListener('visibilitychange', () => {
 });
 window.setInterval(() => {
   if (!document.hidden) {
-    logBoot('interval -> request variables');
     requestVariables();
   }
 }, 3000);

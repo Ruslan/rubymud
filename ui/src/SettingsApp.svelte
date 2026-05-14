@@ -79,6 +79,20 @@
     mobile_order: number;
   }
 
+  interface ProfileTimerSubscription {
+    second: number;
+    command: string;
+  }
+
+  interface ProfileTimer {
+    profile_id: number;
+    name: string;
+    icon: string;
+    cycle_ms: number;
+    repeat_mode: string;
+    subscriptions: ProfileTimerSubscription[];
+  }
+
   interface ProfileVariable {
     id?: number;
     position?: number;
@@ -163,6 +177,7 @@
     { id: 'subs', label: 'Substitutions' },
     { id: 'highlights', label: 'Highlights' },
     { id: 'hotkeys', label: 'Hotkeys' },
+    { id: 'timers', label: 'Tickers' },
     { id: 'groups', label: 'Groups' },
     { id: 'history', label: 'History' },
     { id: 'app', label: 'App' },
@@ -215,6 +230,9 @@
   let hotkeys: Hotkey[] = [];
   const defaultHotkey = (): Hotkey => ({ shortcut: '', command: '', mobile_row: 0, mobile_order: 0 });
   let hotkeyEditor: Hotkey = defaultHotkey();
+
+  // Profile Timers State
+  let profileTimers: ProfileTimer[] = [];
 
   // Profile Variables State
   let profileVariables: ProfileVariable[] = [];
@@ -359,7 +377,7 @@
       } else if (currentTab === 'history' && selectedSessionID) {
         const histRes = await fetch(`/api/sessions/${selectedSessionID}/history`, { headers });
         historyEntries = await histRes.json() || [];
-      } else if (['aliases', 'triggers', 'subs', 'highlights', 'hotkeys', 'groups', 'declared_variables'].includes(currentTab) && selectedProfileID) {
+      } else if (['aliases', 'triggers', 'subs', 'highlights', 'hotkeys', 'timers', 'groups', 'declared_variables'].includes(currentTab) && selectedProfileID) {
         const endpoint = currentTab === 'declared_variables' ? 'variables' : currentTab;
         const res = await fetch(`/api/profiles/${selectedProfileID}/${endpoint}`, { headers });
         const data = await res.json() || [];
@@ -368,6 +386,7 @@
         else if (currentTab === 'subs') subs = data;
         else if (currentTab === 'highlights') highlights = data;
         else if (currentTab === 'hotkeys') hotkeys = data;
+        else if (currentTab === 'timers') profileTimers = data;
         else if (currentTab === 'groups') groups = data;
         else if (currentTab === 'declared_variables') profileVariables = data;
       }
@@ -610,6 +629,16 @@
     return value.slice(0, 1).toUpperCase() + value.slice(1);
   }
 
+  function formatTimerCycle(ms: number): string {
+    const seconds = Math.round(ms / 1000);
+    if (seconds >= 60) {
+      const minutes = Math.floor(seconds / 60);
+      const rest = seconds % 60;
+      return `${minutes}:${String(rest).padStart(2, '0')}`;
+    }
+    return `${seconds}s`;
+  }
+
   function ruleCountForGroup(domain: string, groupName: string): number {
     const normalized = groupName || 'default';
     if (domain === 'aliases') return aliases.filter((item) => (item.group_name || 'default') === normalized).length;
@@ -693,7 +722,7 @@
         </div>
     {/if}
     
-    {#if ['aliases', 'triggers', 'subs', 'highlights', 'groups', 'hotkeys', 'declared_variables'].includes(currentTab)}
+    {#if ['aliases', 'triggers', 'subs', 'highlights', 'groups', 'hotkeys', 'timers', 'declared_variables'].includes(currentTab)}
         <div class="selector-box">
             <label for="profile-selector">Configuring Profile:</label>
             <select id="profile-selector" bind:value={selectedProfileID}>
@@ -1075,6 +1104,34 @@
         </tbody>
       </table>
 
+    {:else if currentTab === 'timers'}
+      <header class="content-header"><h2>Tickers</h2><p class="description">Profile timer declarations for {currentProfile?.name}. Runtime phase is still controlled from the client with #tickset.</p></header>
+      <table class="data-table">
+        <thead><tr><th>Name</th><th>Cycle</th><th>Icon</th><th>Mode</th><th>Subscriptions</th></tr></thead>
+        <tbody>
+          {#each profileTimers as timer}
+            <tr>
+              <td class="key-cell">{timer.name}</td>
+              <td class="value-cell">{formatTimerCycle(timer.cycle_ms)}</td>
+              <td class="dim-cell">{timer.icon || '-'}</td>
+              <td class="dim-cell">{timer.repeat_mode || 'repeating'}</td>
+              <td class="value-cell">
+                {#if timer.subscriptions.length}
+                  {#each timer.subscriptions as sub}
+                    <div class="timer-subscription"><code>{sub.second}</code> {sub.command}</div>
+                  {/each}
+                {:else}
+                  <span class="dim-cell">No #tickat subscriptions</span>
+                {/if}
+              </td>
+            </tr>
+          {/each}
+          {#if profileTimers.length === 0}
+            <tr><td colspan="5" class="dim-cell">No tickers declared in this profile.</td></tr>
+          {/if}
+        </tbody>
+      </table>
+
     {:else if currentTab === 'groups'}
       <header class="content-header"><h2>Groups</h2><p class="description">Bulk enable/disable rule groups for profile {currentProfile?.name}.</p></header>
       {#if formError}<div class="form-error">{formError}</div>{/if}
@@ -1353,6 +1410,8 @@
   .flag-off { color: #444; }
   .flag-icon { filter: grayscale(0.5); font-size: 0.9rem; }
   .sub-preview { color: #9ba3af; font-family: monospace; font-size: 0.85rem; flex: 1; min-width: 180px; }
+  .timer-subscription { font-family: monospace; margin: 2px 0; }
+  .timer-subscription code { color: #f39c12; margin-right: 6px; }
   .gag-row { background: rgba(231, 76, 60, 0.06); }
   .color-preview { display: flex; align-items: center; gap: 4px; }
   .color-chip { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #444; }

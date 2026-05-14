@@ -49,6 +49,16 @@ func TestDefaultTickerInitFromProfile(t *testing.T) {
 	if tTicker.CycleMS != 45000 {
 		t.Errorf("expected 45000ms cycle from profile, got %d", tTicker.CycleMS)
 	}
+
+	s.TickSet("ticker", 60)
+	updatedDecl, err := store.GetProfileTimer(profile.ID, "ticker")
+	if err != nil {
+		t.Fatalf("GetProfileTimer after TickSet: %v", err)
+	}
+	if updatedDecl.CycleMS != 60000 {
+		t.Errorf("expected TickSet to persist 60000ms profile cycle, got %d", updatedDecl.CycleMS)
+	}
+
 	if tTicker.Icon != "🕒" {
 		t.Errorf("expected icon 🕒, got %q", tTicker.Icon)
 	}

@@ -142,7 +142,7 @@ func TestTimerDeclarationWiring(t *testing.T) {
 		t.Error("gold timer declaration missing after #tickicon/#ticksize")
 	}
 
-	// 6. #tickset does NOT become a declaration-writing path
+	// 6. absolute #tickset updates the declaration too because it changes cycle size
 	v.ProcessInputDetailed("#ticksize {manual} {10}") // creates declaration
 	decls, _ = store.GetProfileTimers(profile.ID)
 	foundManual := false
@@ -158,12 +158,12 @@ func TestTimerDeclarationWiring(t *testing.T) {
 		t.Fatal("manual timer declaration missing after #ticksize")
 	}
 
-	v.ProcessInputDetailed("#tickset {manual} {20}") // should NOT update declaration
+	v.ProcessInputDetailed("#tickset {manual} {20}")
 	decls, _ = store.GetProfileTimers(profile.ID)
 	for _, d := range decls {
 		if d.Name == "manual" {
-			if d.CycleMS != 10000 {
-				t.Errorf("expected manual declaration cycle to remain 10s, but got %dms", d.CycleMS)
+			if d.CycleMS != 20000 {
+				t.Errorf("expected manual declaration cycle to update to 20s, but got %dms", d.CycleMS)
 			}
 		}
 	}

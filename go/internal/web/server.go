@@ -197,6 +197,7 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 						r.Delete("/", s.deleteProfileHotkey)
 					})
 				})
+				r.Get("/timers", s.listProfileTimers)
 				r.Route("/groups", func(r chi.Router) {
 					r.Get("/", s.listProfileGroups)
 					r.Post("/toggle", s.toggleProfileGroup)
@@ -774,6 +775,52 @@ func (s *Server) deleteProfileAlias(w http.ResponseWriter, r *http.Request) {
 	}
 	s.notifyProfileChanged(pid, "aliases")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+type profileTimerResponse struct {
+	ProfileID     int64                              `json:"profile_id"`
+	Name          string                             `json:"name"`
+	Icon          string                             `json:"icon"`
+	CycleMS       int                                `json:"cycle_ms"`
+	RepeatMode    string                             `json:"repeat_mode"`
+	Subscriptions []storage.ProfileTimerSubscription `json:"subscriptions"`
+}
+
+func (s *Server) listProfileTimers(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	timers, err := s.store.GetProfileTimers(pid)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	result := make([]profileTimerResponse, 0, len(timers))
+	for _, timer := range timers {
+		subs, err := s.store.GetProfileTimerSubscriptions(pid, timer.Name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if subs == nil {
+			subs = []storage.ProfileTimerSubscription{}
+		}
+		result = append(result, profileTimerResponse{
+			ProfileID:     timer.ProfileID,
+			Name:          timer.Name,
+			Icon:          timer.Icon,
+			CycleMS:       timer.CycleMS,
+			RepeatMode:    timer.RepeatMode,
+			Subscriptions: subs,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }
 
 // Profile Triggers
