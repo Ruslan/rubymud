@@ -10,15 +10,26 @@ func (v *VM) ApplyHighlights(text string) string {
 	v.ensureFresh()
 
 	plainText := stripANSIFromVM(text)
-	for _, ch := range v.compiledHighlights {
-		if !ch.rule.Enabled {
+	for i := range v.highlights {
+		rule := &v.highlights[i]
+		if !rule.Enabled {
 			continue
 		}
-		if ch.re == nil {
+		if i >= len(v.compiledHighlights) {
+			continue
+		}
+		ansi := v.compiledHighlights[i].ansi
+		if ansi == "" {
 			continue
 		}
 
-		allLocs := ch.re.FindAllStringIndex(plainText, -1)
+		effectivePattern := v.substitutePatternVars(rule.Pattern)
+		re := v.compileEffectivePattern(rule.Pattern, effectivePattern)
+		if re == nil {
+			continue
+		}
+
+		allLocs := re.FindAllStringIndex(plainText, -1)
 		if len(allLocs) == 0 {
 			continue
 		}
@@ -27,13 +38,16 @@ func (v *VM) ApplyHighlights(text string) string {
 		// even as we inject ANSI codes that change the string length.
 		for j := len(allLocs) - 1; j >= 0; j-- {
 			loc := allLocs[j]
+			if loc[0] == loc[1] {
+				continue
+			}
 			rawStart, rawEnd, ok := plainRangeToRawRange(text, loc[0], loc[1])
 			if !ok || rawStart < 0 || rawEnd > len(text) || rawStart >= rawEnd {
 				continue
 			}
 			matched := text[rawStart:rawEnd]
 			restore := activeANSIAt(text, rawEnd)
-			text = text[:rawStart] + ch.ansi + matched + resetANSI() + restore + text[rawEnd:]
+			text = text[:rawStart] + ansi + matched + resetANSI() + restore + text[rawEnd:]
 		}
 	}
 	return text

@@ -87,6 +87,17 @@ func TestHighlightCachePrecomputesANSI(t *testing.T) {
 	if got == "test" {
 		t.Fatal("expected highlight applied")
 	}
+
+	if len(v.compiledHighlights) != 1 {
+		t.Fatalf("expected 1 compiled highlight, got %d", len(v.compiledHighlights))
+	}
+	if v.compiledHighlights[0].ansi == "" {
+		t.Fatal("expected precomputed ansi string")
+	}
+	if len(v.effectivePatternCache) == 0 {
+		t.Fatal("expected effective pattern to be cached")
+	}
+
 	got2 := v.ApplyHighlights("test")
 	if got2 != got {
 		t.Fatalf("second apply differed: %q vs %q", got2, got)

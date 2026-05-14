@@ -171,14 +171,11 @@ func (v *VM) rebuildCaches() {
 		v.compiledTriggers = append(v.compiledTriggers, ct)
 	}
 
-	v.compiledHighlights = v.compiledHighlights[:0]
+	v.compiledHighlights = make([]compiledHighlight, len(v.highlights))
 	for i := range v.highlights {
-		h := &v.highlights[i]
-		ch := compiledHighlight{rule: *h, ansi: highlightToANSI(h)}
-		if re, err := regexp.Compile(h.Pattern); err == nil {
-			ch.re = re
+		v.compiledHighlights[i] = compiledHighlight{
+			ansi: highlightToANSI(&v.highlights[i]),
 		}
-		v.compiledHighlights = append(v.compiledHighlights, ch)
 	}
 
 	v.effectivePatternCache = make(map[string]*regexp.Regexp)

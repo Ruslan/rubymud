@@ -64,9 +64,7 @@ type compiledTrigger struct {
 }
 
 type compiledHighlight struct {
-	re   *regexp.Regexp
 	ansi string
-	rule storage.HighlightRule
 }
 
 type VM struct {
