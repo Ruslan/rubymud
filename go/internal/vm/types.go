@@ -14,6 +14,7 @@ type Effect struct {
 	Label        string
 	LogEntryID   int64
 	TargetBuffer string
+	Captures     []string
 }
 
 type RoutingInfo struct {

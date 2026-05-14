@@ -46,7 +46,7 @@ func TestBuiltinVars(t *testing.T) {
 
 func TestCmdVariableBracesStripped(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#var {weapon} {фламберг}", 0)
+	v.dispatchCommand("#var {weapon} {фламберг}", 0, nil)
 
 	if v.variables["weapon"] != "фламберг" {
 		t.Errorf("variable value should be 'фламберг', got %q", v.variables["weapon"])
@@ -61,7 +61,7 @@ func TestCmdVariableBracesStripped(t *testing.T) {
 func TestVariableInAliasTemplate(t *testing.T) {
 	v := New(nil, 1)
 	v.variables["двуруч"] = "фламберг"
-	v.dispatchCommand("#alias {моддву} {взя $двуруч;дву $двуруч}", 0)
+	v.dispatchCommand("#alias {моддву} {взя $двуруч;дву $двуруч}", 0, nil)
 
 	result := v.ProcessInput("моддву")
 	if len(result) != 2 {

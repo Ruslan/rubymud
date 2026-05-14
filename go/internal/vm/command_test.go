@@ -63,7 +63,7 @@ func TestRepeatSyntax(t *testing.T) {
 
 func TestRepeatWithAlias(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {кул} {удар}", 0)
+	v.dispatchCommand("#alias {кул} {удар}", 0, nil)
 
 	result := v.ProcessInput("#3 кул")
 	if len(result) != 3 {
@@ -78,7 +78,7 @@ func TestRepeatWithAlias(t *testing.T) {
 
 func TestCmdAliasBracesStripped(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {тест11} {смо деву}", 0)
+	v.dispatchCommand("#alias {тест11} {смо деву}", 0, nil)
 
 	template := ""
 	for _, a := range v.aliases {
@@ -100,7 +100,7 @@ func TestAliasRecursiveLocalCommands(t *testing.T) {
 	v := New(nil, 1)
 
 	// Define a complex alias that updates a variable and outputs a local message to a specific buffer
-	v.dispatchCommand("#alias {ц1} {#var t1 %1; #woutput {vars} {[$TIME]: set t1 = $t1}}", 0)
+	v.dispatchCommand("#alias {ц1} {#var t1 %1; #woutput {vars} {[$TIME]: set t1 = $t1}}", 0, nil)
 
 	// Execute the alias
 	results := v.ProcessInputDetailed("ц1 орк")
@@ -196,7 +196,7 @@ func TestSplitBraceArg(t *testing.T) {
 
 func TestArcticLootallAlias(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {lootall} {get all corpse;get all 2.corpse;get all 3.corpse;get all 4.corpse}", 0)
+	v.dispatchCommand("#alias {lootall} {get all corpse;get all 2.corpse;get all 3.corpse;get all 4.corpse}", 0, nil)
 
 	result := v.ProcessInput("lootall")
 	expected := []string{
@@ -217,7 +217,7 @@ func TestArcticLootallAlias(t *testing.T) {
 
 func TestArcticFeacuAlias(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {feacu} {fea;order all.elemental get all vine;order all.elemental drop all.grapes;order all.elemental eat all}", 0)
+	v.dispatchCommand("#alias {feacu} {fea;order all.elemental get all vine;order all.elemental drop all.grapes;order all.elemental eat all}", 0, nil)
 
 	result := v.ProcessInput("feacu")
 	if len(result) != 4 {
@@ -233,7 +233,7 @@ func TestArcticFeacuAlias(t *testing.T) {
 
 func TestArcticCastAliasWithQuotes(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {mm} {cast 'magic missile'}", 0)
+	v.dispatchCommand("#alias {mm} {cast 'magic missile'}", 0, nil)
 
 	result := v.ProcessInput("mm")
 	if len(result) != 1 || result[0] != "cast 'magic missile'" {
@@ -243,7 +243,7 @@ func TestArcticCastAliasWithQuotes(t *testing.T) {
 
 func TestArcticAliasWithArgs(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {hr} {cast 'regenerate' %1}", 0)
+	v.dispatchCommand("#alias {hr} {cast 'regenerate' %1}", 0, nil)
 
 	result := v.ProcessInput("hr крыса")
 	if len(result) != 1 || result[0] != "cast 'regenerate' крыса" {
@@ -253,7 +253,7 @@ func TestArcticAliasWithArgs(t *testing.T) {
 
 func TestArcticCastAliasWithSingleWordArg(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {ab} {cast 'acid blast'}", 0)
+	v.dispatchCommand("#alias {ab} {cast 'acid blast'}", 0, nil)
 
 	result := v.ProcessInput("ab")
 	if len(result) != 1 || result[0] != "cast 'acid blast'" {
@@ -263,7 +263,7 @@ func TestArcticCastAliasWithSingleWordArg(t *testing.T) {
 
 func TestArcticBrewscribeAlias(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {brewscribe} {rest;brew 'cure light';scribe 'cu l';stand}", 0)
+	v.dispatchCommand("#alias {brewscribe} {rest;brew 'cure light';scribe 'cu l';stand}", 0, nil)
 
 	result := v.ProcessInput("brewscribe")
 	expected := []string{"rest", "brew 'cure light'", "scribe 'cu l'", "stand"}
@@ -279,7 +279,7 @@ func TestArcticBrewscribeAlias(t *testing.T) {
 
 func TestArcticCompAlias(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {comp} {get all.component;put all.component pouch}", 0)
+	v.dispatchCommand("#alias {comp} {get all.component;put all.component pouch}", 0, nil)
 
 	result := v.ProcessInput("comp")
 	if len(result) != 2 {

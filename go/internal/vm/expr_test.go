@@ -33,11 +33,17 @@ func TestEvalExpression(t *testing.T) {
 		{"'dont split $var' == \"dont split $var\"", true},   // Preprocessing should handle single quotes
 		{"1.5 + 0.5 == 2.0", true},                           // Decimal literals
 		{"40 / 2.5 == 16.0", true},                           // Decimal literals
-		{"1 + 1", 2},                                         // Non-boolean result
+		{"1 + 1", 2},
+		{"not true", false},
+		{"$hp > 10", true},
+		{"$hp != 10", true},
+		{"$hp <= 40", true},
+		{"$hp == 40 && $hp == 40", true},
+		{"$hp % 2 == 0", true},
 	}
 
 	for _, tt := range tests {
-		got, err := EvalExpression(tt.expr, variables)
+		got, err := EvalExpression(tt.expr, variables, nil)
 		if err != nil {
 			t.Errorf("EvalExpression(%q) error: %v", tt.expr, err)
 			continue
@@ -56,11 +62,6 @@ func TestEvalExpressionErrors(t *testing.T) {
 		wantContains string
 	}{
 		{"invalid++", "unsupported word operator"},
-		{"$hp > 10", "not supported"},
-		{"$hp != 10", "not supported"},
-		{"$hp <= 10", "not supported"},
-		{"$hp == 10 && $hp == 10", "not supported"},
-		{"$hp % 2 == 0", "not supported"},
 		{"len(\"abc\") == 3", "unsupported word operator"},
 		{"[1, 2][0] == 1", "not supported"},
 		{"\"abc\" matches \"a.*\"", "unsupported word operator"},
@@ -68,12 +69,11 @@ func TestEvalExpressionErrors(t *testing.T) {
 		{"\"abc\" startsWith \"a\"", "unsupported word operator"},
 		{"\"abc\" endsWith \"c\"", "unsupported word operator"},
 		{"\"a\" in \"abc\"", "unsupported word operator"},
-		{"not true", "unsupported word operator"},
 		{"$hp . variable", "not supported"}, // invalid decimal/member access
 	}
 
 	for _, tt := range tests {
-		_, err := EvalExpression(tt.expr, variables)
+		_, err := EvalExpression(tt.expr, variables, nil)
 		if err == nil {
 			t.Errorf("EvalExpression(%q) expected error, got nil", tt.expr)
 			continue

@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"strings"
 	"testing"
 
 	"rubymud/go/internal/storage"
@@ -22,7 +23,7 @@ func TestSubstituteTemplate(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		result := substituteTemplate(tt.template, tt.args)
+		result := ExpandCaptures(tt.template, append([]string{strings.Join(tt.args, " ")}, tt.args...))
 		if result != tt.expected {
 			t.Errorf("substituteTemplate(%q, %v) = %q, want %q", tt.template, tt.args, result, tt.expected)
 		}
@@ -96,7 +97,7 @@ func TestExpandSemicolonInInput(t *testing.T) {
 
 func TestAliasWithPercentZeroNoArgs(t *testing.T) {
 	v := New(nil, 1)
-	v.dispatchCommand("#alias {вздох} {вздохнуть %0}", 0)
+	v.dispatchCommand("#alias {вздох} {вздохнуть %0}", 0, nil)
 
 	result := v.ProcessInput("вздох")
 	if len(result) != 1 {

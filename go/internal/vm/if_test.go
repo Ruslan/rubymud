@@ -46,6 +46,10 @@ func TestCmdIf(t *testing.T) {
 			"#if {$hp == 40} {#if {1 == 1} {nested}}",
 			[]Result{{Text: "nested", Kind: ResultCommand}},
 		},
+		{
+			"#if {$hp > 10} {then}",
+			[]Result{{Text: "then", Kind: ResultCommand}},
+		},
 	}
 
 	for _, tt := range tests {
@@ -93,13 +97,14 @@ func TestIfErrors(t *testing.T) {
 		wantContains string
 	}{
 		{"#if {1 + 1} {then}", "must return boolean"},
-		{"#if {invalid++} {then}", "unsupported word operator"},
 		{"#if {} {then}", "missing expression"},
 		{"#if", "missing expression"},
 		{"#if {true} {}", "missing then-branch"},
 		{"#if {true} {then} {else} {extra}", "too many arguments"},
-		// Integration check: out of scope operator
-		{"#if {$hp > 10} {then}", "not supported"},
+		{"#if {invalid++} {then} {else}", "unsupported word operator"},
+		{"#if {len(\"abc\") == 3} {then} {else}", "unsupported word operator"},
+		{"#if {a ? b : c} {then} {else}", "unsupported word operator"},
+		{"#if {a[0] == 1} {then} {else}", "unsupported word operator"},
 	}
 
 	for _, tt := range tests {

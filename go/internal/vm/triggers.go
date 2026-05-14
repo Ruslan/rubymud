@@ -26,16 +26,16 @@ func (v *VM) MatchTriggers(plainText string) ([]Effect, RoutingInfo) {
 			continue
 		}
 
-		cmd := expandTriggerCommand(ct.rule.Command, matches)
+		expandedCmd := ExpandCaptures(ct.rule.Command, matches)
 		if ct.rule.IsButton {
-			label := cmd
+			label := expandedCmd
 			runes := []rune(label)
 			if len(runes) > 40 {
 				label = string(runes[:37]) + "..."
 			}
-			effects = append(effects, Effect{Type: "button", Label: label, Command: cmd})
+			effects = append(effects, Effect{Type: "button", Label: label, Command: expandedCmd, Captures: matches})
 		} else {
-			effects = append(effects, Effect{Type: "send", Command: cmd})
+			effects = append(effects, Effect{Type: "send", Command: ct.rule.Command, Captures: matches})
 		}
 
 		if ct.rule.TargetBuffer != "" {
@@ -47,7 +47,7 @@ func (v *VM) MatchTriggers(plainText string) ([]Effect, RoutingInfo) {
 			case "copy":
 				routing.CopyBuffers = append(routing.CopyBuffers, ct.rule.TargetBuffer)
 			case "echo":
-				routing.Echoes = append(routing.Echoes, EchoAction{TargetBuffer: ct.rule.TargetBuffer, Text: cmd})
+				routing.Echoes = append(routing.Echoes, EchoAction{TargetBuffer: ct.rule.TargetBuffer, Text: expandedCmd})
 			}
 		}
 
@@ -59,26 +59,13 @@ func (v *VM) MatchTriggers(plainText string) ([]Effect, RoutingInfo) {
 	return effects, routing
 }
 
-func expandTriggerCommand(template string, matches []string) string {
-	return triggerCaptureRef.ReplaceAllStringFunc(template, func(match string) string {
-		idx := 0
-		for _, c := range match[1:] {
-			idx = idx*10 + int(c-'0')
-		}
-		if idx < len(matches) {
-			return matches[idx]
-		}
-		return match
-	})
-}
-
 func (v *VM) ApplyEffects(effects []Effect, entryID int64, buffer string, sendFn func(string, int64, string) error, echoFn func(Result)) []Effect {
 	var buttons []Effect
 	for _, e := range effects {
 		switch e.Type {
 		case "send":
 			// Process trigger command through the full pipeline (variables, aliases, local commands)
-			results := v.ProcessInputDetailed(e.Command)
+			results := v.ProcessInputWithCaptures(e.Command, e.Captures)
 			for _, res := range results {
 				if res.Kind == ResultEcho {
 					echoFn(res)

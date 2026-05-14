@@ -16,10 +16,15 @@ func (v *VM) ProcessInput(input string) []string {
 
 func (v *VM) ProcessInputDetailed(input string) []Result {
 	v.ensureFresh()
-	return v.evalLine(input, 0)
+	return v.evalLine(input, 0, nil)
 }
 
-func (v *VM) evalLine(input string, depth int) []Result {
+func (v *VM) ProcessInputWithCaptures(input string, captures []string) []Result {
+	v.ensureFresh()
+	return v.evalLine(input, 0, captures)
+}
+
+func (v *VM) evalLine(input string, depth int, captures []string) []Result {
 	if depth >= maxExpandDepth {
 		return []Result{{Text: input, Kind: ResultCommand}}
 	}
@@ -27,22 +32,30 @@ func (v *VM) evalLine(input string, depth int) []Result {
 	statements := splitStatements(input)
 	var results []Result
 	for _, stmt := range statements {
-		results = append(results, v.evalStatement(stmt, depth)...)
+		results = append(results, v.evalStatement(stmt, depth, captures)...)
 	}
 	return results
 }
 
-func (v *VM) evalStatement(stmt string, depth int) []Result {
+func (v *VM) evalStatement(stmt string, depth int, captures []string) []Result {
 	stmt = strings.TrimSpace(stmt)
 	if stmt == "" {
 		return nil
 	}
 
 	if isCodeBearingCommand(stmt) {
-		if stmt == "#if" || strings.HasPrefix(stmt, "#if ") || strings.HasPrefix(stmt, "#if\t") || strings.HasPrefix(stmt, "#if{") {
-			return v.dispatchIf(stmt, depth)
+		if stmt == "#if" || strings.HasPrefix(stmt, "#if ") || strings.HasPrefix(stmt, "#if	") || strings.HasPrefix(stmt, "#if{") {
+			return v.dispatchIf(stmt, depth, captures)
 		}
-		return v.dispatchCommand(stmt, depth)
+		if len(captures) > 0 {
+			stmt = ExpandCaptures(stmt, captures)
+		}
+		return v.dispatchCommand(stmt, depth, nil)
+	}
+
+	if len(captures) > 0 {
+		stmt = ExpandCaptures(stmt, captures)
+		stmt = strings.TrimSpace(stmt)
 	}
 
 	// 1. Variable substitution
@@ -50,7 +63,7 @@ func (v *VM) evalStatement(stmt string, depth int) []Result {
 
 	// 2. System command dispatch
 	if strings.HasPrefix(stmt, "#") {
-		return v.dispatchCommand(stmt, depth)
+		return v.dispatchCommand(stmt, depth, nil)
 	}
 
 	// 3. Alias expansion
@@ -60,8 +73,10 @@ func (v *VM) evalStatement(stmt string, depth int) []Result {
 		args := parsed[1:]
 		for _, a := range v.aliases {
 			if a.Name == cmd && a.Enabled {
-				expanded := substituteTemplate(a.Template, args)
-				return v.evalLine(expanded, depth+1)
+				aliasCaptures := make([]string, 0, len(args)+1)
+				aliasCaptures = append(aliasCaptures, strings.Join(args, " "))
+				aliasCaptures = append(aliasCaptures, args...)
+				return v.evalLine(a.Template, depth+1, aliasCaptures)
 			}
 		}
 	}
@@ -72,10 +87,10 @@ func (v *VM) evalStatement(stmt string, depth int) []Result {
 	}
 
 	// 5. Default: send to MUD
-	return []Result{{Text: stmt, Kind: ResultCommand}}
+	return []Result{{Text: stmt, Kind: ResultCommand, TargetBuffer: "main", IsInternal: false, Depth: depth}}
 }
 
-func (v *VM) dispatchCommand(input string, depth int) []Result {
+func (v *VM) dispatchCommand(input string, depth int, captures []string) []Result {
 	cmd := strings.TrimPrefix(input, "#")
 	cmd = strings.TrimSpace(cmd)
 
@@ -91,7 +106,7 @@ func (v *VM) dispatchCommand(input string, depth int) []Result {
 		n, rest := parseRepeat(cmd)
 		var result []Result
 		for i := 0; i < n; i++ {
-			result = append(result, v.evalLine(rest, depth+1)...)
+			result = append(result, v.evalLine(rest, depth+1, captures)...)
 		}
 		return result
 	}
@@ -149,7 +164,7 @@ func (v *VM) dispatchCommand(input string, depth int) []Result {
 	case "untickat":
 		return v.cmdUntickat(rest, depth)
 	case "delay":
-		return v.cmdDelay(rest, depth)
+		return v.cmdDelay(rest, depth, captures)
 	case "undelay":
 		return v.cmdUndelay(rest, depth)
 	case "tts", "ts":
@@ -174,7 +189,7 @@ func (v *VM) dispatchCommand(input string, depth int) []Result {
 	return []Result{{Text: input, Kind: ResultCommand, IsInternal: false, Depth: depth}}
 }
 
-func (v *VM) dispatchIf(input string, depth int) []Result {
+func (v *VM) dispatchIf(input string, depth int, captures []string) []Result {
 	rest := strings.TrimPrefix(input, "#if")
 	rest = strings.TrimSpace(rest)
 
@@ -198,7 +213,7 @@ func (v *VM) dispatchIf(input string, depth int) []Result {
 	}
 
 	// Evaluate expression
-	res, err := EvalExpression(exprStr, v.variables)
+	res, err := EvalExpression(exprStr, v.variables, captures)
 	if err != nil {
 		return []Result{{Text: fmt.Sprintf("#if expression error: %v", err), Kind: ResultEcho, TargetBuffer: "main", IsInternal: true, Depth: depth}}
 	}
@@ -209,9 +224,9 @@ func (v *VM) dispatchIf(input string, depth int) []Result {
 	}
 
 	if boolRes {
-		return v.evalLine(thenBranch, depth+1)
+		return v.evalLine(thenBranch, depth+1, captures)
 	} else if elseBranch != "" {
-		return v.evalLine(elseBranch, depth+1)
+		return v.evalLine(elseBranch, depth+1, captures)
 	}
 
 	return nil

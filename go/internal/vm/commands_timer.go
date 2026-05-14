@@ -372,7 +372,7 @@ func (v *VM) cmdTicker(rest string, depth int) []Result {
 	return nil
 }
 
-func (v *VM) cmdDelay(rest string, depth int) []Result {
+func (v *VM) cmdDelay(rest string, depth int, captures []string) []Result {
 	if v.timerCtrl == nil {
 		return nil
 	}

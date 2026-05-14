@@ -3,7 +3,6 @@ package vm
 import (
 	"fmt"
 	"regexp"
-	"strings"
 	"time"
 )
 
@@ -40,19 +39,18 @@ func builtinVar(key string) (string, bool) {
 	}
 }
 
-func substituteTemplate(template string, args []string) string {
-	allArgs := strings.Join(args, " ")
+func ExpandCaptures(template string, captures []string) string {
+	if len(captures) == 0 {
+		return template
+	}
 	r := regexp.MustCompile(`%(\d+)`)
 	return r.ReplaceAllStringFunc(template, func(match string) string {
 		idx := 0
 		for _, c := range match[1:] {
 			idx = idx*10 + int(c-'0')
 		}
-		if idx == 0 {
-			return allArgs
-		}
-		if idx >= 1 && idx <= len(args) {
-			return args[idx-1]
+		if idx >= 0 && idx < len(captures) {
+			return captures[idx]
 		}
 		return match
 	})

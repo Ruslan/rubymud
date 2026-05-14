@@ -74,8 +74,8 @@ func TestArcticTriggerSplitCoins(t *testing.T) {
 	}
 
 	effects, _ := v.MatchTriggers("There were 42 coins.")
-	if len(effects) != 1 || effects[0].Command != "split 42" {
-		t.Errorf("split coins trigger = %v, want send{split 42}", effects)
+	if len(effects) != 1 || effects[0].Command != "split %1" {
+		t.Errorf("split coins trigger = %v, want send{split %%1}", effects)
 	}
 }
 
@@ -207,7 +207,6 @@ func TestApplyEffects_FullPipeline(t *testing.T) {
 	}
 }
 
-
 func TestArcticTriggerCaptureInCommand(t *testing.T) {
 	v := New(nil, 1)
 	v.triggers = []storage.TriggerRule{
@@ -218,8 +217,8 @@ func TestArcticTriggerCaptureInCommand(t *testing.T) {
 	if len(effects) != 1 {
 		t.Fatalf("refresh trigger = %d, want 1", len(effects))
 	}
-	if effects[0].Command != "cast 'refresh' Воин" {
-		t.Errorf("capture in command = %q, want %q", effects[0].Command, "cast 'refresh' Воин")
+	if effects[0].Command != "cast 'refresh' %1" {
+		t.Errorf("capture in command = %q, want %q", effects[0].Command, "cast 'refresh' %1")
 	}
 }
 
