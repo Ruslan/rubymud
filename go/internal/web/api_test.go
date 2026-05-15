@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"unsafe"
 
@@ -574,6 +575,71 @@ func TestColorsAPI(t *testing.T) {
 	}
 	if !found {
 		t.Error("color 'red' not found in response")
+	}
+}
+
+func TestLogsAPI(t *testing.T) {
+	s, sess := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	sessionID := sess.SessionID()
+
+	// 1. Seed some logs
+	for i := 1; i <= 5; i++ {
+		text := fmt.Sprintf("Log entry %d", i)
+		s.store.AppendLogEntry(sessionID, "main", text, text)
+	}
+
+	// 2. Test List Logs (JSON)
+	url := fmt.Sprintf("%s/api/sessions/%d/logs?limit=2", ts.URL, sessionID)
+	req, _ := newAuthenticatedRequest(http.MethodGet, url, nil, s.apiToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want 200", url, resp.StatusCode)
+	}
+
+	var data struct {
+		Entries []storage.LogEntry `json:"entries"`
+		Total   int64              `json:"total"`
+		Page    int                `json:"page"`
+		Limit   int                `json:"limit"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		t.Fatalf("decode logs: %v", err)
+	}
+
+	if data.Total != 5 {
+		t.Errorf("expected 5 total logs, got %d", data.Total)
+	}
+	if len(data.Entries) != 2 {
+		t.Errorf("expected 2 logs in response (limit=2), got %d", len(data.Entries))
+	}
+
+	// 3. Test Download Logs (Stream)
+	dlUrl := fmt.Sprintf("%s/api/sessions/%d/logs/download", ts.URL, sessionID)
+	req, _ = newAuthenticatedRequest(http.MethodGet, dlUrl, nil, s.apiToken)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", dlUrl, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want 200", dlUrl, resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); ct != "text/plain; charset=utf-8" {
+		t.Errorf("Content-Type = %q, want text/plain; charset=utf-8", ct)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	content := string(body)
+	for i := 1; i <= 5; i++ {
+		expected := fmt.Sprintf("Log entry %d", i)
+		if !strings.Contains(content, expected) {
+			t.Errorf("download content missing %q", expected)
+		}
 	}
 }
 

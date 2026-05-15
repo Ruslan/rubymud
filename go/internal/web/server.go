@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"net/url"
@@ -120,6 +121,13 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 				r.Route("/history", func(r chi.Router) {
 					r.Get("/", s.listHistory)
 					r.Delete("/{entryID}", s.deleteHistoryEntry)
+				})
+
+				r.Route("/logs", func(r chi.Router) {
+					r.Get("/", s.listLogs)
+					r.Get("/search", s.listSearch)
+					r.Get("/{entryID}/context", s.getLogContext)
+					r.Get("/download", s.downloadLogs)
 				})
 
 				r.Route("/profiles", func(r chi.Router) {
@@ -458,6 +466,196 @@ func (s *Server) deleteHistoryEntry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
+	_, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+
+	if page < 1 {
+		page = 1
+	}
+	if limit < 1 || limit > 1000 {
+		limit = 100
+	}
+
+	var from, to storage.SQLiteTime
+	if fromStr != "" {
+		t, err := time.Parse(time.RFC3339, fromStr)
+		if err != nil {
+			http.Error(w, "invalid 'from' date: must be RFC3339 format", http.StatusBadRequest)
+			return
+		}
+		from.Time = t
+	}
+	if toStr != "" {
+		t, err := time.Parse(time.RFC3339, toStr)
+		if err != nil {
+			http.Error(w, "invalid 'to' date: must be RFC3339 format", http.StatusBadRequest)
+			return
+		}
+		to.Time = t
+	}
+
+	entries, total, err := s.store.LogRangeByDate(id, from, to, limit, (page-1)*limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"entries": entries,
+		"total":   total,
+		"page":    page,
+		"limit":   limit,
+	})
+}
+
+func (s *Server) listSearch(w http.ResponseWriter, r *http.Request) {
+	_, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	query := r.URL.Query().Get("q")
+	if query == "" {
+		http.Error(w, "query is required", http.StatusBadRequest)
+		return
+	}
+
+	beforeID, _ := strconv.ParseInt(r.URL.Query().Get("before_id"), 10, 64)
+	if beforeID == 0 {
+		beforeID = 9223372036854775807
+	}
+
+	groups, cursor, err := s.store.SearchLogsDetailed(id, query, 5, beforeID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"groups": groups,
+		"cursor": cursor,
+	})
+}
+
+func (s *Server) getLogContext(w http.ResponseWriter, r *http.Request) {
+	_, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	entryID, _ := strconv.ParseInt(chi.URLParam(r, "entryID"), 10, 64)
+	before, _ := strconv.Atoi(r.URL.Query().Get("before"))
+	after, _ := strconv.Atoi(r.URL.Query().Get("after"))
+
+	if before == 0 && after == 0 {
+		before = 20
+		after = 20
+	}
+
+	var allEntries []storage.LogEntry
+
+	if before > 0 {
+		entries, err := s.store.LogRangeDetailed(id, entryID, before)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		allEntries = append(allEntries, entries...)
+	}
+
+	// Fetch anchor entry with session_id check and overlays
+	anchor, err := s.store.LogEntryByID(id, entryID)
+	if err != nil {
+		http.Error(w, "entry not found", http.StatusNotFound)
+		return
+	}
+	allEntries = append(allEntries, anchor)
+
+	if after > 0 {
+		entries, err := s.store.LogsSinceID(id, entryID, after)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		allEntries = append(allEntries, entries...)
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(allEntries)
+}
+
+func (s *Server) downloadLogs(w http.ResponseWriter, r *http.Request) {
+	_, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	fromStr := r.URL.Query().Get("from")
+	toStr := r.URL.Query().Get("to")
+
+	var from, to storage.SQLiteTime
+	if fromStr != "" {
+		t, err := time.Parse(time.RFC3339, fromStr)
+		if err != nil {
+			http.Error(w, "invalid 'from' date: must be RFC3339 format", http.StatusBadRequest)
+			return
+		}
+		from.Time = t
+	}
+	if toStr != "" {
+		t, err := time.Parse(time.RFC3339, toStr)
+		if err != nil {
+			http.Error(w, "invalid 'to' date: must be RFC3339 format", http.StatusBadRequest)
+			return
+		}
+		to.Time = t
+	}
+
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.Header().Set("Content-Disposition", "attachment; filename=logs.txt")
+
+	db := s.store.DB().Model(&storage.LogRecord{}).
+		Where("session_id = ?", id).
+		Where("NOT EXISTS (SELECT 1 FROM log_overlays gag WHERE gag.log_entry_id = log_entries.id AND gag.overlay_type = 'gag')")
+
+	if !from.Time.IsZero() {
+		db = db.Where("created_at >= ?", from)
+	}
+	if !to.Time.IsZero() {
+		db = db.Where("created_at <= ?", to)
+	}
+
+	rows, err := db.Order("created_at ASC, id ASC").Rows()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var record storage.LogRecord
+		if err := s.store.DB().ScanRows(rows, &record); err != nil {
+			log.Printf("error scanning row: %v", err)
+			continue
+		}
+		fmt.Fprintf(w, "[%s] %s\n", record.CreatedAt.Format("2006-01-02 15:04:05"), record.PlainText)
+	}
 }
 
 // Session Profiles

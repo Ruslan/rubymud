@@ -3,6 +3,7 @@ package storage
 import (
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
@@ -59,7 +60,7 @@ func TestAppendLogEntryWithOverlaysFiltersGagAndIsAtomic(t *testing.T) {
 	if len(visible) != 0 {
 		t.Fatalf("visible logs = %+v, want none", visible)
 	}
-	groups, err := s.SearchLogsDetailed(sessionID, "spam", 1, 9223372036854775807)
+	groups, _, err := s.SearchLogsDetailed(sessionID, "spam", 1, 9223372036854775807)
 	if err != nil {
 		t.Fatalf("SearchLogsDetailed: %v", err)
 	}
@@ -86,7 +87,7 @@ func TestSearchLogsDetailed_OverlappingContext(t *testing.T) {
 	// Match at 7 should get [5, 6, 7, 8, 9]
 	// Since they overlap, they should be merged into one group [3, 4, 5, 6, 7, 8, 9]
 
-	groups, err := s.SearchLogsDetailed(sessionID, "[MATCH]", 2, 9223372036854775807)
+	groups, _, err := s.SearchLogsDetailed(sessionID, "[MATCH]", 2, 9223372036854775807)
 	if err != nil {
 		t.Fatalf("SearchLogsDetailed: %v", err)
 	}
@@ -117,7 +118,7 @@ func TestSearchLogsDetailed_SeparateGroups(t *testing.T) {
 		s.AppendLogEntry(sessionID, "main", text, text)
 	}
 
-	groups, err := s.SearchLogsDetailed(sessionID, "[MATCH]", 2, 9223372036854775807)
+	groups, _, err := s.SearchLogsDetailed(sessionID, "[MATCH]", 2, 9223372036854775807)
 	if err != nil {
 		t.Fatalf("SearchLogsDetailed: %v", err)
 	}
@@ -126,10 +127,10 @@ func TestSearchLogsDetailed_SeparateGroups(t *testing.T) {
 		t.Fatalf("Expected 2 separate groups, got %d", len(groups))
 	}
 
-	if len(groups[0]) != 5 || groups[0][2].PlainText != "Line 10 [MATCH]" {
+	if len(groups[0]) != 5 || groups[0][2].PlainText != "Line 40 [MATCH]" {
 		t.Errorf("Group 1 mismatch: size=%d, center=%q", len(groups[0]), groups[0][2].PlainText)
 	}
-	if len(groups[1]) != 5 || groups[1][2].PlainText != "Line 40 [MATCH]" {
+	if len(groups[1]) != 5 || groups[1][2].PlainText != "Line 10 [MATCH]" {
 		t.Errorf("Group 2 mismatch: size=%d, center=%q", len(groups[1]), groups[1][2].PlainText)
 	}
 }
@@ -154,5 +155,80 @@ func TestLogRangeDetailed(t *testing.T) {
 	}
 	if entries[0].PlainText != "Line 3" || entries[2].PlainText != "Line 5" {
 		t.Errorf("Entries mismatch: first=%q, last=%q", entries[0].PlainText, entries[2].PlainText)
+	}
+}
+
+func TestLogRangeByDate(t *testing.T) {
+	s := newLogStoreTestStore(t)
+	sessionID := int64(1)
+
+	now := nowSQLiteTime()
+	yesterday := SQLiteTime{Time: now.Add(-24 * time.Hour)}
+	tomorrow := SQLiteTime{Time: now.Add(24 * time.Hour)}
+
+	// Create some logs
+	s.AppendLogEntry(sessionID, "main", "Old Log", "Old Log")
+	// Manually update CreatedAt for testing range
+	s.db.Model(&LogRecord{}).Where("plain_text = ?", "Old Log").Update("created_at", yesterday)
+
+	s.AppendLogEntry(sessionID, "main", "New Log 1", "New Log 1")
+	s.AppendLogEntry(sessionID, "main", "New Log 2", "New Log 2")
+
+	// Test: Get only "Old Log"
+	entries, total, err := s.LogRangeByDate(sessionID, SQLiteTime{Time: yesterday.Add(-1 * time.Hour)}, SQLiteTime{Time: yesterday.Add(1 * time.Hour)}, 10, 0)
+	if err != nil {
+		t.Fatalf("LogRangeByDate error: %v", err)
+	}
+	if total != 1 || len(entries) != 1 || entries[0].PlainText != "Old Log" {
+		t.Errorf("Expected 1 'Old Log', got total=%d, count=%d, first=%q", total, len(entries), entries[0].PlainText)
+	}
+
+	// Test: Get all 3 logs
+	entries, total, err = s.LogRangeByDate(sessionID, SQLiteTime{Time: yesterday.Add(-1 * time.Hour)}, tomorrow, 10, 0)
+	if err != nil {
+		t.Fatalf("LogRangeByDate error: %v", err)
+	}
+	if total != 3 || len(entries) != 3 {
+		t.Errorf("Expected 3 logs, got total=%d, count=%d", total, len(entries))
+	}
+
+	// Test: Pagination (Page 2)
+	entries, total, err = s.LogRangeByDate(sessionID, SQLiteTime{Time: yesterday.Add(-1 * time.Hour)}, tomorrow, 2, 2)
+	if err != nil {
+		t.Fatalf("LogRangeByDate error: %v", err)
+	}
+	if total != 3 || len(entries) != 1 || entries[0].PlainText != "New Log 2" {
+		t.Errorf("Expected 1 log (New Log 2) on page 2, got total=%d, count=%d, first=%q", total, len(entries), entries[0].PlainText)
+	}
+}
+
+func TestLogEntryByID_ExcludesGagged(t *testing.T) {
+	s := newLogStoreTestStore(t)
+	sessionID := int64(1)
+
+	id, err := s.AppendLogEntryWithOverlays(sessionID, "main", "visible", "visible", nil)
+	if err != nil {
+		t.Fatalf("AppendLogEntryWithOverlays visible: %v", err)
+	}
+
+	gagID, err := s.AppendLogEntryWithOverlays(sessionID, "main", "hidden", "hidden", []LogOverlay{{
+		OverlayType: "gag",
+		PayloadJSON: `{"rule_id":1}`,
+	}})
+	if err != nil {
+		t.Fatalf("AppendLogEntryWithOverlays gag: %v", err)
+	}
+
+	entry, err := s.LogEntryByID(sessionID, id)
+	if err != nil {
+		t.Fatalf("LogEntryByID visible: %v", err)
+	}
+	if entry.ID != id {
+		t.Errorf("expected visible entry id=%d, got %d", id, entry.ID)
+	}
+
+	_, err = s.LogEntryByID(sessionID, gagID)
+	if err == nil {
+		t.Fatal("expected error for gagged entry, got nil")
 	}
 }

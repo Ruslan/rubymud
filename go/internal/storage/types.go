@@ -78,17 +78,17 @@ type ButtonOverlay struct {
 }
 
 type LogEntry struct {
-	ID           int64
-	Buffer       string
-	RawText      string
-	PlainText    string
-	DisplayRaw   string
-	DisplayPlain string
-	Hidden       bool
-	CreatedAt    SQLiteTime
-	Commands     []string
-	Buttons      []ButtonOverlay
-	Overlays     []LogOverlay
+	ID           int64           `json:"id"`
+	Buffer       string          `json:"buffer"`
+	RawText      string          `json:"raw_text"`
+	PlainText    string          `json:"plain_text"`
+	DisplayRaw   string          `json:"display_raw"`
+	DisplayPlain string          `json:"display_plain"`
+	Hidden       bool            `json:"hidden"`
+	CreatedAt    SQLiteTime      `json:"created_at"`
+	Commands     []string        `json:"commands"`
+	Buttons      []ButtonOverlay `json:"buttons"`
+	Overlays     []LogOverlay    `json:"overlays"`
 }
 
 func (e LogEntry) DisplayRawText() string {

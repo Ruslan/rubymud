@@ -132,6 +132,14 @@
     mccp_compression_ratio?: string;
   }
 
+  interface LogEntry {
+    id: number;
+    buffer: string;
+    display_plain: string;
+    plain_text: string;
+    created_at: string;
+  }
+
   interface HistoryEntry {
     id: number;
     session_id: number;
@@ -144,10 +152,10 @@
   let loading = true;
   let formError = '';
   let lastFetchKey: string | null = null;
-  
+
   let selectedSessionID: number | null = null;
   let selectedProfileID: number | null = null;
-  
+
   let appSettings: { api_token: string } = { api_token: '' };
   const wakeLockEnabledStorageKey = 'mudhost.wakeLockEnabled';
   let wakeLockEnabled = true;
@@ -180,8 +188,25 @@
     { id: 'timers', label: 'Tickers' },
     { id: 'groups', label: 'Groups' },
     { id: 'history', label: 'History' },
+    { id: 'logs', label: 'Logs' },
     { id: 'app', label: 'App' },
   ];
+
+  // Logs State
+  let logEntries: LogEntry[] = [];
+  let logTotal = 0;
+  let logPage = 1;
+  let logLimit = 100;
+  let logFrom = new Date().toISOString().split('T')[0];
+  let logTo = new Date().toISOString().split('T')[0];
+
+  let searchQuery = '';
+  let searchResults: LogEntry[][] = []; // Groups of entries (match + context)
+  let searchCursor: number | null = null;
+  let searchMode = false;
+  let contextMode = false;
+  let contextEntries: LogEntry[] = [];
+  let contextAnchorID: number | null = null;
 
   // Sessions State
   let sessions: Session[] = [];
@@ -289,7 +314,7 @@
   function colorValueToHex(value: string): string {
     const normalized = value.trim().toLowerCase();
     if (!normalized) return '#cccccc';
-    
+
     // 1. Check named color list from backend
     const named = namedColorList.find(c => c.name === normalized);
     if (named) return named.hex;
@@ -365,6 +390,8 @@
       if (currentTab === 'app') {
         const appRes = await fetch('/api/app/settings', { headers });
         appSettings = await appRes.json();
+      } else if (currentTab === 'logs' && selectedSessionID) {
+        await fetchLogs();
       } else if (currentTab === 'profiles') {
         const filesRes = await fetch('/api/profiles/files', { headers });
         profileFiles = await filesRes.json() || [];
@@ -404,7 +431,7 @@
     formError = '';
     const isUpdate = domain !== 'variables' && !!item.id;
     let url = `/api/${domain}`;
-    
+
     if (domain === 'variables' && selectedSessionID) {
       url = `/api/sessions/${selectedSessionID}/variables`;
     } else if (['aliases', 'triggers', 'subs', 'highlights', 'hotkeys', 'declared_variables'].includes(domain) && selectedProfileID) {
@@ -416,7 +443,7 @@
     } else if (domain === 'profiles' && isUpdate) {
       url += `/${item.id}`;
     }
-    
+
     // @ts-ignore
     const token = window.API_TOKEN || '';
     const method = isUpdate ? 'PUT' : 'POST';
@@ -493,7 +520,129 @@
     await fetch(`/api/sessions/${id}/${action}`, { method: 'POST', headers: { 'X-Session-Token': token } });
     await fetchData();
   }
-  
+
+  async function fetchLogs() {
+    if (!selectedSessionID) return;
+    loading = true;
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const headers = { 'X-Session-Token': token };
+
+    const from = logFrom ? new Date(logFrom).toISOString() : '';
+    const to = logTo ? new Date(logTo + 'T23:59:59Z').toISOString() : '';
+
+    const params = new URLSearchParams({
+        from,
+        to,
+        page: String(logPage),
+        limit: String(logLimit)
+    });
+
+    try {
+        const res = await fetch(`/api/sessions/${selectedSessionID}/logs?${params}`, { headers });
+        const data = await res.json();
+        logEntries = data.entries || [];
+        logTotal = data.total || 0;
+    } catch (e) {
+        console.error('Failed to fetch logs', e);
+    } finally {
+        loading = false;
+    }
+  }
+
+  async function searchLogs(loadMore = false) {
+    if (!selectedSessionID || !searchQuery) return;
+    loading = true;
+    searchMode = true;
+    contextMode = false;
+
+    if (!loadMore) {
+        searchResults = [];
+        searchCursor = null;
+        logEntries = []; // Clear browsing entries too to avoid confusion
+    }
+
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const headers = { 'X-Session-Token': token };
+
+    const url = `/api/sessions/${selectedSessionID}/logs/search?q=${encodeURIComponent(searchQuery)}` +
+                (loadMore && searchCursor ? `&before_id=${searchCursor}` : '');
+
+    try {
+        const res = await fetch(url, { headers });
+        const data = await res.json() || {};
+        const newGroups = data.groups || [];
+        if (loadMore) {
+            searchResults = [...searchResults, ...newGroups];
+        } else {
+            searchResults = newGroups;
+        }
+        searchCursor = data.cursor || null;
+    } catch (e) {
+        console.error('Search failed', e);
+    } finally {
+        loading = false;
+    }
+  }
+
+  async function showContext(entryID: number) {
+    if (!selectedSessionID) return;
+    loading = true;
+    contextMode = true;
+    searchMode = false;
+    contextAnchorID = entryID;
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const headers = { 'X-Session-Token': token };
+    try {
+        const res = await fetch(`/api/sessions/${selectedSessionID}/logs/${entryID}/context?before=20&after=20`, { headers });
+        contextEntries = await res.json() || [];
+    } catch (e) {
+        console.error('Failed to fetch context', e);
+    } finally {
+        loading = false;
+    }
+  }
+
+  async function loadMoreContext(direction: 'above' | 'below') {
+    if (!selectedSessionID || contextEntries.length === 0) return;
+    const anchor = direction === 'above' ? contextEntries[0] : contextEntries[contextEntries.length - 1];
+    if (!anchor) return;
+
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const headers = { 'X-Session-Token': token };
+    const query = direction === 'above' ? `before=50&after=0` : `before=0&after=50`;
+
+    try {
+        const res = await fetch(`/api/sessions/${selectedSessionID}/logs/${anchor.id}/context?${query}`, { headers });
+        const data: LogEntry[] = await res.json() || [];
+        if (direction === 'above') {
+            contextEntries = [...data.filter(e => e.id !== anchor.id), ...contextEntries];
+        } else {
+            contextEntries = [...contextEntries, ...data.filter(e => e.id !== anchor.id)];
+        }
+    } catch (e) {
+        console.error('Failed to load more context', e);
+    }
+  }
+
+  function downloadLogs() {
+    if (!selectedSessionID) return;
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const from = logFrom ? new Date(logFrom).toISOString() : '';
+    const to = logTo ? new Date(logTo + 'T23:59:59Z').toISOString() : '';
+
+    const params = new URLSearchParams({
+        from,
+        to,
+        token
+    });
+    window.open(`/api/sessions/${selectedSessionID}/logs/download?${params}`, '_blank');
+  }
+
   async function addProfileToSession(profileID: number) {
     if (!selectedSessionID) return;
     // @ts-ignore
@@ -506,7 +655,7 @@
     });
     await fetchData();
   }
-  
+
   async function removeProfileFromSession(profileID: number) {
     if (!selectedSessionID) return;
     // @ts-ignore
@@ -514,16 +663,16 @@
     await fetch(`/api/sessions/${selectedSessionID}/profiles/${profileID}`, { method: 'DELETE', headers: { 'X-Session-Token': token } });
     await fetchData();
   }
-  
+
   async function moveSessionProfile(index: number, direction: -1 | 1) {
     if (!selectedSessionID) return;
     if (index + direction < 0 || index + direction >= sessionProfiles.length) return;
-    
+
     const newProfiles = [...sessionProfiles];
     const temp = newProfiles[index];
     newProfiles[index] = newProfiles[index + direction]!;
     newProfiles[index + direction] = temp!;
-    
+
     const payload = newProfiles.map((sp, i) => ({ profile_id: sp.profile_id, order_index: i }));
     // @ts-ignore
     const token = window.API_TOKEN || '';
@@ -534,7 +683,7 @@
     });
     await fetchData();
   }
-  
+
   async function exportProfile(profileID: number) {
     // @ts-ignore
     const token = window.API_TOKEN || '';
@@ -579,10 +728,10 @@
     if (!res.ok) { alert('Import failed: ' + await res.text()); return; }
     await fetchData();
   }
-  
+
   async function moveRule(domain: string, item: any, direction: -1 | 1) {
     if (!selectedProfileID) return;
-    
+
     let list: any[] = [];
     if (domain === 'aliases') list = aliases;
     else if (domain === 'triggers') list = triggers;
@@ -590,28 +739,28 @@
     else if (domain === 'highlights') list = highlights;
     else if (domain === 'hotkeys') list = hotkeys;
     else if (domain === 'declared_variables') list = profileVariables;
-    
+
     const index = list.findIndex(x => x.id === item.id);
     if (index === -1 || index + direction < 0 || index + direction >= list.length) return;
-    
+
     const swapWith = list[index + direction];
     const currentPos = item.position;
     const swapPos = swapWith.position;
-    
+
     // @ts-ignore
     const token = window.API_TOKEN || '';
     const headers = { 'Content-Type': 'application/json', 'X-Session-Token': token };
-    
+
     // Optimistic update
     item.position = swapPos;
     swapWith.position = currentPos;
-    
+
     const endpoint = domain === 'declared_variables' ? 'variables' : domain;
     await Promise.all([
       fetch(`/api/profiles/${selectedProfileID}/${endpoint}/${item.id}`, { method: 'PUT', headers, body: JSON.stringify(item) }),
       fetch(`/api/profiles/${selectedProfileID}/${endpoint}/${swapWith.id}`, { method: 'PUT', headers, body: JSON.stringify(swapWith) })
     ]);
-    
+
     await fetchData();
   }
 
@@ -721,7 +870,7 @@
             </select>
         </div>
     {/if}
-    
+
     {#if ['aliases', 'triggers', 'subs', 'highlights', 'groups', 'hotkeys', 'timers', 'declared_variables'].includes(currentTab)}
         <div class="selector-box">
             <label for="profile-selector">Configuring Profile:</label>
@@ -966,11 +1115,11 @@
           <div class="form-row color-controls">
             <label class="color-field">
               <span>FG</span>
-              <select 
-                value={namedColorSelectValue(highlightEditor.fg)} 
-                on:change={(e) => { 
-                  const v = (e.currentTarget as HTMLSelectElement).value; 
-                  if (v !== '__custom__') highlightEditor = { ...highlightEditor, fg: v }; 
+              <select
+                value={namedColorSelectValue(highlightEditor.fg)}
+                on:change={(e) => {
+                  const v = (e.currentTarget as HTMLSelectElement).value;
+                  if (v !== '__custom__') highlightEditor = { ...highlightEditor, fg: v };
                 }}
               >
                 <option value="">default</option>
@@ -987,11 +1136,11 @@
             </label>
             <label class="color-field">
               <span>BG</span>
-              <select 
-                value={namedColorSelectValue(highlightEditor.bg)} 
-                on:change={(e) => { 
-                  const v = (e.currentTarget as HTMLSelectElement).value; 
-                  if (v !== '__custom__') highlightEditor = { ...highlightEditor, bg: v }; 
+              <select
+                value={namedColorSelectValue(highlightEditor.bg)}
+                on:change={(e) => {
+                  const v = (e.currentTarget as HTMLSelectElement).value;
+                  if (v !== '__custom__') highlightEditor = { ...highlightEditor, bg: v };
                 }}
               >
                 <option value="">default</option>
@@ -1066,7 +1215,7 @@
           {/each}
         </tbody>
       </table>
-      
+
     {:else if currentTab === 'hotkeys'}
       <header class="content-header"><h2>Hotkeys</h2><p class="description">Keyboard shortcuts for profile {currentProfile?.name}.</p></header>
       <div class="editor-box">
@@ -1152,10 +1301,10 @@
           {/each}
         </tbody>
       </table>
-      
+
     {:else if currentTab === 'profiles'}
       <header class="content-header"><h2>Profiles</h2><p class="description">Manage settings profiles.</p></header>
-      
+
       <div class="editor-box" style="display: flex; gap: 12px; align-items: center; margin-bottom: 24px;">
         <button class="btn-primary" on:click={exportAllProfiles}>Export All to config/</button>
         <button class="btn-primary" style="background: #2ecc71" on:click={importAllProfiles}>Import All from config/</button>
@@ -1270,7 +1419,7 @@
           {/each}
         </tbody>
       </table>
-      
+
       {#if currentSession}
         <h3 style="margin-top: 40px; border-bottom: 1px solid #2d333b; padding-bottom: 8px;">Active Profiles for {currentSession.name}</h3>
         <p class="description">Profiles at the bottom of the list have higher priority and will override rules from profiles above them.</p>
@@ -1294,7 +1443,7 @@
                 {/if}
             </tbody>
         </table>
-        
+
         <div class="form-row" style="max-width: 400px">
             <select bind:value={profileEditor.id} style="flex: 1; background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px; border-radius: 6px;">
                 <option value={null} disabled selected>Select a profile to add</option>
@@ -1326,6 +1475,128 @@
           {/if}
         </tbody>
       </table>
+
+    {:else if currentTab === 'logs'}
+      <header class="content-header">
+          <h2>Logs</h2>
+          <p class="description">Browse and download historical logs for {currentSession?.name || 'selected session'}.</p>
+      </header>
+
+      <div class="editor-box">
+          <div class="form-row" style="margin-bottom: 1rem;">
+              <input type="text" placeholder="Search logs..." bind:value={searchQuery} on:keydown={(e) => e.key === 'Enter' && searchLogs()} />
+              <button class="btn-primary" on:click={() => searchLogs()} disabled={!searchQuery || loading}>
+                {loading ? 'Searching...' : 'Search'}
+              </button>
+              {#if searchMode || contextMode}
+                <button class="btn-secondary" on:click={() => { searchMode = false; contextMode = false; fetchLogs(); }}>Back to Browsing</button>
+              {/if}
+          </div>
+          {#if loading && searchMode && searchResults.length === 0}
+            <div style="text-align: center; color: #3498db; margin-bottom: 1rem;">Searching logs for "{searchQuery}"...</div>
+          {/if}
+          {#if searchMode}
+            <div style="font-size: 0.8rem; color: #9ba3af; margin-bottom: 1rem; text-align: center;">
+                💡 Search works across all historical data, ignoring date filters.
+            </div>
+          {/if}
+          <div class="form-row">
+              <div class="form-group">
+                  <label for="log-from">From</label>
+                  <input id="log-from" type="date" bind:value={logFrom} on:change={() => { logPage = 1; searchMode = false; contextMode = false; fetchLogs(); }} />
+              </div>
+              <div class="form-group">
+                  <label for="log-to">To</label>
+                  <input id="log-to" type="date" bind:value={logTo} on:change={() => { logPage = 1; searchMode = false; contextMode = false; fetchLogs(); }} />
+              </div>
+              <div class="form-group" style="align-self: flex-end;">
+                  <button class="btn-secondary" on:click={downloadLogs}>Download (.txt)</button>
+              </div>
+          </div>
+      </div>
+
+      {#if contextMode}
+        <button class="load-more-btn" on:click={() => loadMoreContext('above')}>Load more above...</button>
+        <div class="log-container">
+            {#each contextEntries as entry}
+                <div class="log-line {entry.id === contextAnchorID ? 'context-anchor-highlight' : ''}">
+                    <div class="log-content">{entry.display_plain || entry.plain_text}</div>
+                    <div class="log-meta">
+                        <span>{entry.buffer}</span>
+                        <span title={entry.created_at}>{new Date(entry.created_at).toLocaleString()}</span>
+                    </div>
+                </div>
+            {/each}
+        </div>
+        <button class="load-more-btn" on:click={() => loadMoreContext('below')}>Load more below...</button>
+
+      {:else if searchMode}
+        {#each searchResults as group}
+            {@const matchEntry = group.find(e => searchQuery && (e.display_plain || e.plain_text).toLowerCase().includes(searchQuery.toLowerCase())) || group[Math.floor(group.length/2)]}
+            {@const groupDate = new Date(group[0]!.created_at)}
+            <div class="editor-box" style="padding: 0; overflow: hidden; margin-bottom: 1rem;">
+                <div class="search-group-header">
+                    <div>
+                        <span style="font-weight: bold; color: #e8edf2; margin-right: 12px;">
+                            {groupDate.toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
+                            {groupDate.toLocaleTimeString()}
+                        </span>
+                        <span style="color: #9ba3af; margin-right: 12px;">(Match +-5 lines)</span>
+                        <button class="btn-link" style="font-size: 0.8rem; font-weight: bold;" on:click={() => showContext(matchEntry!.id)}>[View Context]</button>
+                    </div>
+                </div>
+                <div class="log-container" style="border: none; border-radius: 0;">
+                    {#each group as entry}
+                        {@const isMatch = searchQuery && (entry.display_plain || entry.plain_text).toLowerCase().includes(searchQuery.toLowerCase())}
+                        <div class="log-line {isMatch ? 'search-match-line' : ''}">
+                            <div class="log-content">
+                                {#if isMatch}
+                                    {@const text = entry.display_plain || entry.plain_text}
+                                    {@const idx = text.toLowerCase().indexOf(searchQuery.toLowerCase())}
+                                    {text.slice(0, idx)}<span class="search-match-highlight">{text.slice(idx, idx + searchQuery.length)}</span>{text.slice(idx + searchQuery.length)}
+                                {:else}
+                                    {entry.display_plain || entry.plain_text}
+                                {/if}
+                            </div>
+                            <div class="log-meta">
+                                <span>{entry.buffer}</span>
+                                <span>{new Date(entry.created_at).toLocaleTimeString()}</span>
+                            </div>
+                        </div>
+                    {/each}
+                </div>
+            </div>
+        {/each}
+        {#if searchResults.length === 0}
+            <div class="dim-cell" style="text-align: center; padding: 2rem;">No matches found for "{searchQuery}".</div>
+        {:else}
+            <button class="load-more-btn" on:click={() => searchLogs(true)}>Load more search results...</button>
+        {/if}
+
+      {:else}
+        <div class="log-container">
+            {#each logEntries as entry}
+                <div class="log-line">
+                    <div class="log-content">{entry.display_plain || entry.plain_text}</div>
+                    <div class="log-meta">
+                        <span>{entry.buffer}</span>
+                        <span title={entry.created_at}>{new Date(entry.created_at).toLocaleString()}</span>
+                    </div>
+                </div>
+            {/each}
+            {#if logEntries.length === 0}
+                <div style="padding: 2rem; text-align: center; color: #484f58;">No logs found for this period.</div>
+            {/if}
+        </div>
+
+        {#if logTotal > logLimit}
+            <div class="form-row" style="margin-top: 1rem; justify-content: center; align-items: center; gap: 1rem;">
+                <button class="btn-link" disabled={logPage <= 1} on:click={() => { logPage--; fetchLogs(); }}>Previous</button>
+                <span>Page {logPage} of {Math.ceil(logTotal / logLimit)} ({logTotal} total)</span>
+                <button class="btn-link" disabled={logPage >= Math.ceil(logTotal / logLimit)} on:click={() => { logPage++; fetchLogs(); }}>Next</button>
+            </div>
+        {/if}
+      {/if}
 
     {:else if currentTab === 'app'}
         <header class="content-header"><h2>App Settings</h2><p class="description">Global application configuration.</p></header>
@@ -1382,7 +1653,30 @@
   .color-controls { flex-wrap: wrap; }
   input[type="color"] { width: 36px; height: 32px; background: none; border: none; padding: 0; cursor: pointer; }
   .btn-primary { background: #3498db; color: white; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; }
+  .btn-primary:hover { background: #2980b9; }
+  .btn-secondary { background: #30363d; color: #e8edf2; border: 1px solid #30363d; padding: 8px 20px; border-radius: 6px; cursor: pointer; }
+  .btn-secondary:hover { background: #3c444d; }
+  .btn-link { background: none; border: none; color: #3498db; cursor: pointer; padding: 0; font-size: 0.9rem; }
+  .btn-link:hover { text-decoration: underline; }
+  .btn-link:disabled { color: #484f58; cursor: not-allowed; text-decoration: none; }
+  .btn-danger { color: #ff7b72; }
+  .btn-danger:hover { color: #f85149; }
+  .search-match-highlight { background: rgba(52, 152, 219, 0.3); border-radius: 2px; }
+  .context-anchor-highlight { border-left: 4px solid #3498db; padding-left: 8px; background: rgba(52, 152, 219, 0.1); }
+  .search-group-header { padding: 8px 12px; background: #24292f; border-bottom: 1px solid #30363d; font-size: 0.8rem; color: #9ba3af; display: flex; justify-content: space-between; }
+  .load-more-btn { width: 100%; padding: 8px; background: #1a1d21; border: 1px dashed #30363d; color: #3498db; cursor: pointer; border-radius: 4px; margin: 4px 0; font-size: 0.8rem; }
+  .load-more-btn:hover { background: #24292f; }
   .btn-primary:disabled { background: #2980b9; opacity: 0.5; cursor: not-allowed; }
+
+  .log-container { display: flex; flex-direction: column; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; overflow: hidden; }
+  .log-line { display: flex; justify-content: space-between; padding: 1px 12px; min-height: 1.2em; line-height: 1.2; font-family: monospace; border-left: 4px solid transparent; }
+  .log-line:hover { background: rgba(255, 255, 255, 0.03); }
+  .log-content { white-space: pre-wrap; word-break: break-all; flex: 1; font-size: 0.9rem; }
+  .log-meta { display: flex; gap: 12px; font-size: 0.75rem; color: #484f58; white-space: nowrap; align-items: flex-start; margin-left: 16px; opacity: 0.6; }
+  .log-meta:hover { opacity: 1; }
+  .log-line.context-anchor-highlight { background: rgba(52, 152, 219, 0.1); border-left-color: #3498db; }
+  .log-line.search-match-line { background: rgba(52, 152, 219, 0.05); }
+
   .data-table { width: 100%; border-collapse: collapse; }
   .data-table th { text-align: left; padding: 12px; border-bottom: 2px solid #30363d; color: #9ba3af; font-size: 0.8rem; text-transform: uppercase; }
   .data-table td { padding: 12px; border-bottom: 1px solid #21262d; font-size: 0.9rem; vertical-align: middle; }

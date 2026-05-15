@@ -294,7 +294,7 @@ func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 			isError = true
 			break
 		}
-		groups, err := s.store.SearchLogsDetailed(sid, args.Query, args.Context, args.BeforeID)
+		groups, _, err := s.store.SearchLogsDetailed(sid, args.Query, args.Context, args.BeforeID)
 		if err != nil {
 			return nil, err
 		}

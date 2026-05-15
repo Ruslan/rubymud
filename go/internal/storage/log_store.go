@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"gorm.io/gorm"
@@ -179,6 +180,69 @@ func (s *Store) LogRangeDetailed(sessionID, beforeID int64, limit int) ([]LogEnt
 	return entries, nil
 }
 
+func (s *Store) LogRangeByDate(sessionID int64, from, to SQLiteTime, limit, offset int) ([]LogEntry, int64, error) {
+	var count int64
+	baseQuery := s.db.Model(&LogRecord{}).
+		Where("session_id = ?", sessionID).
+		Where(visibleLogEntrySQL)
+
+	if !from.Time.IsZero() {
+		baseQuery = baseQuery.Where("created_at >= ?", from)
+	}
+	if !to.Time.IsZero() {
+		baseQuery = baseQuery.Where("created_at <= ?", to)
+	}
+
+	if err := baseQuery.Count(&count).Error; err != nil {
+		return nil, 0, err
+	}
+
+	var records []LogRecord
+	err := baseQuery.Order("created_at ASC, id ASC").
+		Limit(limit).
+		Offset(offset).
+		Find(&records).Error
+	if err != nil {
+		return nil, 0, err
+	}
+
+	entries := make([]LogEntry, 0, len(records))
+	for _, r := range records {
+		entries = append(entries, LogEntry{
+			ID:        r.ID,
+			Buffer:    r.WindowName,
+			RawText:   r.RawText,
+			PlainText: r.PlainText,
+			CreatedAt: r.CreatedAt,
+		})
+	}
+
+	if err := s.loadOverlays(entries); err != nil {
+		return nil, 0, err
+	}
+	return entries, count, nil
+}
+
+func (s *Store) LogEntryByID(sessionID, entryID int64) (LogEntry, error) {
+	var record LogRecord
+	err := s.db.Where("id = ? AND session_id = ?", entryID, sessionID).Where(visibleLogEntrySQL).First(&record).Error
+	if err != nil {
+		return LogEntry{}, err
+	}
+	entry := LogEntry{
+		ID:        record.ID,
+		Buffer:    record.WindowName,
+		RawText:   record.RawText,
+		PlainText: record.PlainText,
+		CreatedAt: record.CreatedAt,
+	}
+	entries := []LogEntry{entry}
+	if err := s.loadOverlays(entries); err != nil {
+		return LogEntry{}, err
+	}
+	return entries[0], nil
+}
+
 func (s *Store) AppendCommandOverlay(entryID int64, command string) error {
 	command = strings.TrimSpace(command)
 	if command == "" || entryID == 0 {
@@ -296,29 +360,67 @@ func (s *Store) loadOverlays(entries []LogEntry) error {
 	return nil
 }
 
-func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines int, beforeID int64) ([][]LogEntry, error) {
-	like := "%" + query + "%"
+func escapeGlob(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		switch r {
+		case '*':
+			b.WriteString("[*]")
+		case '?':
+			b.WriteString("[?]")
+		case '[':
+			b.WriteString("[[]")
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines int, beforeID int64) ([][]LogEntry, int64, error) {
+	// Build a GLOB pattern for case-insensitive Unicode search.
+	// GLOB in SQLite is case-sensitive, but we can make it insensitive by using [aA] patterns.
+	escaped := escapeGlob(query)
+	var globPattern strings.Builder
+	globPattern.WriteByte('*')
+	for _, r := range escaped {
+		lower := unicode.ToLower(r)
+		upper := unicode.ToUpper(r)
+		if lower == upper {
+			globPattern.WriteRune(lower)
+		} else {
+			globPattern.WriteByte('[')
+			globPattern.WriteRune(lower)
+			globPattern.WriteRune(upper)
+			globPattern.WriteByte(']')
+		}
+	}
+	globPattern.WriteByte('*')
+	pattern := globPattern.String()
 
 	// Match log entries by MUD output text.
 	var textMatchIDs []int64
-	db := s.db.Model(&LogRecord{}).Where("session_id = ? AND plain_text LIKE ?", sessionID, like).Where(visibleLogEntrySQL)
+	db := s.db.Model(&LogRecord{}).Where("session_id = ? AND plain_text GLOB ?", sessionID, pattern).Where(visibleLogEntrySQL)
+
 	if beforeID > 0 {
 		db = db.Where("id < ?", beforeID)
 	}
-	if err := db.Order("id DESC").Limit(200).Pluck("id", &textMatchIDs).Error; err != nil {
-		return nil, err
+	// Limit results per page to 50 matches to avoid overwhelming the UI
+	if err := db.Order("id DESC").Limit(50).Pluck("id", &textMatchIDs).Error; err != nil {
+		return nil, 0, err
 	}
 
 	// Also match log entries where a sent command (command_hint overlay) contains the query.
 	var cmdMatchIDs []int64
 	cmdDB := s.db.Model(&LogOverlay{}).
-		Where("overlay_type = 'command_hint' AND payload_json LIKE ?", like).
+		Where("overlay_type = 'command_hint' AND payload_json GLOB ?", pattern).
 		Where("log_entry_id IN (SELECT id FROM log_entries WHERE session_id = ? AND "+visibleLogEntrySQL+")", sessionID)
+
 	if beforeID > 0 {
 		cmdDB = cmdDB.Where("log_entry_id < ?", beforeID)
 	}
-	if err := cmdDB.Order("log_entry_id DESC").Limit(200).Pluck("log_entry_id", &cmdMatchIDs).Error; err != nil {
-		return nil, err
+	if err := cmdDB.Order("log_entry_id DESC").Limit(50).Pluck("log_entry_id", &cmdMatchIDs).Error; err != nil {
+		return nil, 0, err
 	}
 
 	// Merge and deduplicate match IDs.
@@ -331,7 +433,7 @@ func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines i
 		}
 	}
 	if len(matchingIDs) == 0 {
-		return nil, nil
+		return nil, 0, nil
 	}
 
 	allIDsMap := make(map[int64]bool)
@@ -353,11 +455,13 @@ func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines i
 	for id := range allIDsMap {
 		allIDs = append(allIDs, id)
 	}
+	// Sort IDs ascending to prepare for grouping chronologically,
+	// but we will reverse the final groups to show newest first.
 	sort.Slice(allIDs, func(i, j int) bool { return allIDs[i] < allIDs[j] })
 
 	var records []LogRecord
 	if err := s.db.Where("id IN ?", allIDs).Where(visibleLogEntrySQL).Order("id ASC").Find(&records).Error; err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	var allEntries []LogEntry
@@ -371,7 +475,7 @@ func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines i
 		})
 	}
 	if err := s.loadOverlays(allEntries); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	entryMap := make(map[int64]LogEntry)
@@ -381,7 +485,7 @@ func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines i
 
 	var groups [][]LogEntry
 	if len(records) == 0 {
-		return nil, nil
+		return nil, 0, nil
 	}
 
 	currentGroup := []LogEntry{entryMap[records[0].ID]}
@@ -399,7 +503,22 @@ func (s *Store) SearchLogsDetailed(sessionID int64, query string, contextLines i
 	}
 	groups = append(groups, currentGroup)
 
-	return groups, nil
+	// Reverse groups to show newest first
+	for i, j := 0, len(groups)-1; i < j; i, j = i+1, j-1 {
+		groups[i], groups[j] = groups[j], groups[i]
+	}
+
+	var cursor int64
+	if len(matchingIDs) > 0 {
+		cursor = matchingIDs[0]
+		for _, mid := range matchingIDs {
+			if mid < cursor {
+				cursor = mid
+			}
+		}
+	}
+
+	return groups, cursor, nil
 }
 
 type substitutionOverlayPayload struct {
@@ -453,7 +572,6 @@ func ReplayAppliedOverlays(rawText, plainText string, overlays []LogOverlay) (st
 
 	return displayRaw, displayPlain, false
 }
-
 func plainRangeToRawRange(raw string, startPlain, endPlain int) (int, int, bool) {
 	plainOffset := 0
 	rawStart := -1
