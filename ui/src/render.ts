@@ -223,6 +223,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     scrollButtonEl.addEventListener('click', () => {
       outputEl.scrollTop = outputEl.scrollHeight;
       updateScrollButtonVisibility(renderedPanes.get(node.id));
+      elements.input.focus();
     });
     outputEl.addEventListener('scroll', () => {
       updateScrollButtonVisibility(renderedPanes.get(node.id));

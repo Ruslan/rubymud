@@ -569,6 +569,15 @@ window.addEventListener('resize', rerenderHotkeysForViewportWidth);
 window.visualViewport?.addEventListener('resize', rerenderHotkeysForViewportWidth);
 
 window.addEventListener('keydown', (event) => {
+  const match = matchHotkey(event, configuredHotkeys);
+  if (match) {
+    logBoot('hotkey matched', { shortcut: match.shortcut, command: match.command });
+    event.preventDefault();
+    renderer.appendCommandHint(match.command);
+    sendCommand(match.command, 'key');
+    return;
+  }
+
   if (focusInputForTyping(event)) {
     return;
   }
@@ -585,13 +594,6 @@ window.addEventListener('keydown', (event) => {
     }
   }
 
-  const match = matchHotkey(event, configuredHotkeys);
-  if (!match) return;
-
-  logBoot('hotkey matched', { shortcut: match.shortcut, command: match.command });
-  event.preventDefault();
-  renderer.appendCommandHint(match.command);
-  sendCommand(match.command, 'key');
 });
 
 elements.keyboardToggle.addEventListener('click', () => renderer.setActivePanel('keyboard'));
