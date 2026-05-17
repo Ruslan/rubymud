@@ -715,6 +715,8 @@ func (s *Session) persistSubscriptions(t *Timer) {
 }
 
 func (s *Session) restoreTimers() {
+	newTimers := make(map[string]*Timer)
+
 	if s.store != nil {
 		timers, err := s.store.GetTimers(s.sessionID)
 		if err != nil {
@@ -725,7 +727,6 @@ func (s *Session) restoreTimers() {
 				log.Printf("failed to load timer subscriptions: %v", err)
 			}
 
-			s.timersMu.Lock()
 			for _, rt := range timers {
 				cycleMS := rt.CycleMS
 				enabled := rt.Enabled
@@ -788,53 +789,45 @@ func (s *Session) restoreTimers() {
 					}
 				}
 
-				s.timers[rt.Name] = t
+				newTimers[rt.Name] = t
 			}
-			s.timersMu.Unlock()
 		}
 	}
 
 	// Ensure default ticker exists
-	s.timersMu.Lock()
-	_, hasTicker := s.timers["ticker"]
-	s.timersMu.Unlock()
+	_, hasTicker := newTimers["ticker"]
 
 	if !hasTicker {
 		// No session runtime state for ticker, try profile declaration
 		if t := s.loadProfileTimerDeclaration("ticker"); t != nil {
-			s.timersMu.Lock()
-			s.timers["ticker"] = t
-			s.timersMu.Unlock()
+			newTimers["ticker"] = t
 			s.persistTimer(t)
 			s.persistSubscriptions(t)
 		} else {
 			// Absolute fallback
 			t := NewTimer("ticker", 60*time.Second)
-			s.timersMu.Lock()
-			s.timers["ticker"] = t
-			s.timersMu.Unlock()
+			newTimers["ticker"] = t
 		}
 	}
 
-	// Get a snapshot of timer names to avoid locking the map during resolution
-	s.timersMu.Lock()
 	var timerNames []string
-	for name := range s.timers {
+	for name := range newTimers {
 		timerNames = append(timerNames, name)
 	}
-	s.timersMu.Unlock()
 
 	for _, name := range timerNames {
 		if resolved := s.resolveTimerSubscriptions(name); resolved != nil {
-			s.timersMu.Lock()
-			if t, ok := s.timers[name]; ok {
+			if t, ok := newTimers[name]; ok {
 				t.mu.Lock()
 				t.Subscriptions = resolved
 				t.mu.Unlock()
 			}
-			s.timersMu.Unlock()
 		}
 	}
+
+	s.timersMu.Lock()
+	s.timers = newTimers
+	s.timersMu.Unlock()
 }
 
 func (s *Session) SessionID() int64 {
@@ -986,6 +979,11 @@ func (s *Session) NotifySettingsChanged(domain string) {
 	// Also reload VM state and rebuild compiled caches
 	if err := s.vm.ReloadFromStore(); err != nil {
 		log.Printf("failed to reload vm after settings change: %v", err)
+	}
+
+	if domain == "timers" || domain == "profiles" {
+		s.restoreTimers()
+		s.BroadcastTick()
 	}
 }
 

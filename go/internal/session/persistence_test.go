@@ -257,6 +257,88 @@ func TestTickAdjustParsing(t *testing.T) {
 	}
 }
 
+func TestNotifySettingsChangedTimersBroadcastsUpdatedIcon(t *testing.T) {
+	store := newTestStore(t)
+	v := vm.New(store, 1)
+
+	profile, err := store.CreateProfile("Default", "")
+	if err != nil {
+		t.Fatalf("CreateProfile: %v", err)
+	}
+	if err := store.AddProfileToSession(1, profile.ID, 0); err != nil {
+		t.Fatalf("AddProfileToSession: %v", err)
+	}
+
+	if err := store.SaveProfileTimer(storage.ProfileTimer{
+		ProfileID:  profile.ID,
+		Name:       "ticker",
+		Icon:       "OLD",
+		CycleMS:    60000,
+		RepeatMode: "repeating",
+	}); err != nil {
+		t.Fatalf("SaveProfileTimer OLD: %v", err)
+	}
+
+	s := &Session{
+		sessionID: 1,
+		store:     store,
+		vm:        v,
+		clients:   make(map[int]clientSink),
+		timers:    make(map[string]*Timer),
+	}
+	v.SetTimerControl(s)
+
+	msgCh := make(chan ServerMsg, 8)
+	s.clients[1] = clientSink{
+		id:   1,
+		name: "test",
+		send: func(msg ServerMsg) error {
+			msgCh <- msg
+			return nil
+		},
+	}
+
+	// Prime runtime from old declaration/icon.
+	s.restoreTimers()
+
+	if err := store.SaveProfileTimer(storage.ProfileTimer{
+		ProfileID:  profile.ID,
+		Name:       "ticker",
+		Icon:       "NEW",
+		CycleMS:    60000,
+		RepeatMode: "repeating",
+	}); err != nil {
+		t.Fatalf("SaveProfileTimer NEW: %v", err)
+	}
+
+	s.NotifySettingsChanged("timers")
+
+	deadline := time.After(2 * time.Second)
+	for {
+		select {
+		case msg := <-msgCh:
+			if msg.Type != "tick" {
+				continue
+			}
+			foundTicker := false
+			for _, ts := range msg.Timers {
+				if ts.Name == "ticker" {
+					foundTicker = true
+					if ts.Icon != "NEW" {
+						t.Fatalf("expected ticker icon NEW in broadcast, got %q", ts.Icon)
+					}
+				}
+			}
+			if !foundTicker {
+				t.Fatal("expected ticker in tick broadcast")
+			}
+			return
+		case <-deadline:
+			t.Fatal("timeout waiting for tick broadcast after timer settings change")
+		}
+	}
+}
+
 type mockTimerControlWithAdjust struct {
 	on        string
 	off       string

@@ -46,6 +46,20 @@ Completed in this cycle:
 5. runtime-originated declaration writes remain primary-profile targeted, with explicit behavior and coverage.
 6. acceptance-test matrix completed for layered merge/order/remove/restart consistency.
 
+Additional post-release hardening completed:
+
+1. fixed a runtime race window in timer restore/reload path by rebuilding into a temporary map and atomically swapping session timer state.
+2. fixed admin UI repeat-mode value mismatch (`once` -> `one_shot`) to match runtime/parser contract.
+3. added server-side validation/normalization for timer admin API writes (`cycle_ms`, `repeat_mode`, subscription removal forms).
+4. ensured timer/profile settings reload triggers immediate timer snapshot broadcast so icon/declaration updates become visible on frontend without waiting for the next scheduler tick.
+
+Deferred tradeoffs (intentional for urgent HIGH-first stabilization):
+
+1. TODO: define and implement explicit zero-active-profile subscription policy (currently legacy behavior may preserve runtime subscriptions when layered declaration source is empty).
+2. TODO: add dedicated HTTP API tests for profile timer CRUD and validation matrix (`POST/DELETE /profiles/{id}/timers`, subscription create/delete validation/normalization).
+3. TODO: improve timer admin UX for bulk removal rows (hide/disable/clear command input when `is_bulk=true`).
+4. TODO: revisit default `cycle_ms` for newly created timers in admin UI (currently aggressive default may be surprising).
+
 ### Known Pitfalls (from review + implementation)
 
 1. primary-gated declaration loading can silently drop lower-profile timer behavior.

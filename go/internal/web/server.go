@@ -205,7 +205,13 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 						r.Delete("/", s.deleteProfileHotkey)
 					})
 				})
-				r.Get("/timers", s.listProfileTimers)
+				r.Route("/timers", func(r chi.Router) {
+					r.Get("/", s.listProfileTimers)
+					r.Post("/", s.createOrUpdateProfileTimer)
+					r.Delete("/{name}", s.deleteProfileTimer)
+					r.Post("/{name}/subscriptions", s.createOrUpdateProfileTimerSubscription)
+					r.Delete("/{name}/subscriptions/{second}/{sortOrder}", s.deleteProfileTimerSubscription)
+				})
 				r.Route("/groups", func(r chi.Router) {
 					r.Get("/", s.listProfileGroups)
 					r.Post("/toggle", s.toggleProfileGroup)
@@ -1019,6 +1025,147 @@ func (s *Server) listProfileTimers(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(result)
+}
+
+func (s *Server) createOrUpdateProfileTimer(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	var timer storage.ProfileTimer
+	if err := json.NewDecoder(r.Body).Decode(&timer); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	timer.ProfileID = pid
+
+	if timer.Name == "" {
+		http.Error(w, "timer name is required", http.StatusBadRequest)
+		return
+	}
+	if timer.CycleMS <= 0 {
+		http.Error(w, "cycle_ms must be > 0", http.StatusBadRequest)
+		return
+	}
+	if timer.RepeatMode == "" {
+		timer.RepeatMode = "repeating"
+	}
+	if timer.RepeatMode != "repeating" && timer.RepeatMode != "one_shot" {
+		http.Error(w, "repeat_mode must be 'repeating' or 'one_shot'", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.SaveProfileTimer(timer); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.notifyProfileChanged(pid, "timers")
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) deleteProfileTimer(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	name := chi.URLParam(r, "name")
+
+	if err := s.store.DeleteProfileTimer(pid, name); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if err := s.store.ClearProfileTimerSubscriptions(pid, name); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.notifyProfileChanged(pid, "timers")
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) createOrUpdateProfileTimerSubscription(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	name := chi.URLParam(r, "name")
+
+	var sub storage.ProfileTimerSubscription
+	if err := json.NewDecoder(r.Body).Decode(&sub); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	sub.ProfileID = pid
+	sub.TimerName = name
+
+	if sub.Second < 0 {
+		http.Error(w, "second must be >= 0", http.StatusBadRequest)
+		return
+	}
+	if sub.SortOrder < 0 {
+		http.Error(w, "sort_order must be >= 0", http.StatusBadRequest)
+		return
+	}
+	if sub.IsBulk {
+		sub.IsRemoval = true
+		sub.Command = ""
+	}
+	if sub.IsRemoval {
+		if !sub.IsBulk && sub.Command == "" {
+			http.Error(w, "command is required for exact removal", http.StatusBadRequest)
+			return
+		}
+	} else {
+		if sub.Command == "" {
+			http.Error(w, "command is required for subscription", http.StatusBadRequest)
+			return
+		}
+		sub.IsBulk = false
+	}
+
+	if err := s.store.SaveProfileTimerSubscription(sub); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.notifyProfileChanged(pid, "timers")
+	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) deleteProfileTimerSubscription(w http.ResponseWriter, r *http.Request) {
+	pid, err := s.getProfileID(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	name := chi.URLParam(r, "name")
+	secondStr := chi.URLParam(r, "second")
+	sortOrderStr := chi.URLParam(r, "sortOrder")
+
+	second, err := strconv.Atoi(secondStr)
+	if err != nil {
+		http.Error(w, "invalid second", http.StatusBadRequest)
+		return
+	}
+	sortOrder, err := strconv.Atoi(sortOrderStr)
+	if err != nil {
+		http.Error(w, "invalid sortOrder", http.StatusBadRequest)
+		return
+	}
+
+	if err := s.store.DeleteProfileTimerSubscription(pid, name, second, sortOrder); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	s.notifyProfileChanged(pid, "timers")
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Profile Triggers

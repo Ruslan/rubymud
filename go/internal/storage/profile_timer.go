@@ -46,3 +46,8 @@ func (s *Store) ClearProfileTimerSubscriptions(profileID int64, timerName string
 	return s.db.Where("profile_id = ? AND timer_name = ?", profileID, timerName).
 		Delete(&ProfileTimerSubscription{}).Error
 }
+
+func (s *Store) DeleteProfileTimerSubscription(profileID int64, timerName string, second int, sortOrder int) error {
+	return s.db.Where("profile_id = ? AND timer_name = ? AND second = ? AND sort_order = ?", profileID, timerName, second, sortOrder).
+		Delete(&ProfileTimerSubscription{}).Error
+}
