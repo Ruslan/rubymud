@@ -54,6 +54,7 @@ type TimerControl interface {
 	TickMode(name string, mode string)
 	SubscribeTimer(name string, second int, command string)
 	UnsubscribeTimer(name string, second int)
+	UnsubscribeTimerExact(name string, second int, command string)
 	ScheduleDelay(id string, seconds float64, command string) error
 	CancelDelay(id string)
 	GetTimerCycleSeconds(name string) int

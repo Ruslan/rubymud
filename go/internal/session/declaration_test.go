@@ -539,3 +539,173 @@ func TestTickerSubscriptionsOverridePersistedRuntimeState(t *testing.T) {
 		t.Fatalf("expected empty merged ticker subscriptions to clear stale runtime state, got %+v", ticker2.Subscriptions)
 	}
 }
+
+func TestLayeredTimerDeclarations0086(t *testing.T) {
+	store := newTestStoreWithDeclarations(t)
+
+	// Create three profiles: base, raid, boss
+	base, err := store.CreateProfile("Base", "")
+	if err != nil {
+		t.Fatalf("CreateProfile Base: %v", err)
+	}
+	raid, err := store.CreateProfile("Raid", "")
+	if err != nil {
+		t.Fatalf("CreateProfile Raid: %v", err)
+	}
+	boss, err := store.CreateProfile("Boss", "")
+	if err != nil {
+		t.Fatalf("CreateProfile Boss: %v", err)
+	}
+
+	// Add them to the session with ordering: base (order 0), raid (order 1), boss (order 2)
+	// Base is lowest priority (applied first), Boss is highest priority (applied last)
+	if err := store.AddProfileToSession(1, base.ID, 0); err != nil {
+		t.Fatalf("AddProfileToSession base: %v", err)
+	}
+	if err := store.AddProfileToSession(1, raid.ID, 1); err != nil {
+		t.Fatalf("AddProfileToSession raid: %v", err)
+	}
+	if err := store.AddProfileToSession(1, boss.ID, 2); err != nil {
+		t.Fatalf("AddProfileToSession boss: %v", err)
+	}
+
+	// 1. Base profile declares "herb" with icon 🪴, cycle 15s (15000ms), repeat mode "one_shot"
+	// and a subscription at second 5: "basecmd"
+	if err := store.SaveProfileTimer(storage.ProfileTimer{
+		ProfileID:  base.ID,
+		Name:       "herb",
+		Icon:       "🪴",
+		CycleMS:    15000,
+		RepeatMode: "one_shot",
+	}); err != nil {
+		t.Fatalf("SaveProfileTimer base: %v", err)
+	}
+	if err := store.SaveProfileTimerSubscription(storage.ProfileTimerSubscription{
+		ProfileID: base.ID, TimerName: "herb", Second: 5, SortOrder: 0, Command: "basecmd",
+	}); err != nil {
+		t.Fatalf("SaveProfileTimerSubscription base: %v", err)
+	}
+
+	// 2. Raid profile overrides only the icon field with ⚗️
+	// and adds a subscription at second 5: "raidcmd"
+	// and a subscription at second 10: "raidcmd2"
+	if err := store.SaveProfileTimer(storage.ProfileTimer{
+		ProfileID:  raid.ID,
+		Name:       "herb",
+		Icon:       "⚗️",
+		CycleMS:    0,  // not set
+		RepeatMode: "",  // not set
+	}); err != nil {
+		t.Fatalf("SaveProfileTimer raid: %v", err)
+	}
+	if err := store.SaveProfileTimerSubscription(storage.ProfileTimerSubscription{
+		ProfileID: raid.ID, TimerName: "herb", Second: 5, SortOrder: 0, Command: "raidcmd",
+	}); err != nil {
+		t.Fatalf("SaveProfileTimerSubscription raid: %v", err)
+	}
+	if err := store.SaveProfileTimerSubscription(storage.ProfileTimerSubscription{
+		ProfileID: raid.ID, TimerName: "herb", Second: 10, SortOrder: 0, Command: "raidcmd2",
+	}); err != nil {
+		t.Fatalf("SaveProfileTimerSubscription raid: %v", err)
+	}
+
+	// 3. Boss profile adds an exact unsubscribe at second 5: removing "basecmd"
+	// and a bulk unsubscribe at second 10: removing everything at second 10
+	if err := store.SaveProfileTimer(storage.ProfileTimer{
+		ProfileID:  boss.ID,
+		Name:       "herb",
+		Icon:       "",
+		CycleMS:    0,
+		RepeatMode: "",
+	}); err != nil {
+		t.Fatalf("SaveProfileTimer boss: %v", err)
+	}
+	if err := store.SaveProfileTimerSubscription(storage.ProfileTimerSubscription{
+		ProfileID: boss.ID, TimerName: "herb", Second: 5, SortOrder: 0, Command: "basecmd", IsRemoval: true, IsBulk: false,
+	}); err != nil {
+		t.Fatalf("SaveProfileTimerSubscription boss exact removal: %v", err)
+	}
+	if err := store.SaveProfileTimerSubscription(storage.ProfileTimerSubscription{
+		ProfileID: boss.ID, TimerName: "herb", Second: 10, SortOrder: 0, Command: "", IsRemoval: true, IsBulk: true,
+	}); err != nil {
+		t.Fatalf("SaveProfileTimerSubscription boss bulk removal: %v", err)
+	}
+
+	// 4. Test Resolved Startup: call #tickon {herb} without prior runtime state
+	v := vm.New(store, 1)
+	s := &Session{
+		sessionID: 1,
+		conn:      &recordingConn{},
+		store:     store,
+		vm:        v,
+		clients:   make(map[int]clientSink),
+		timers:    make(map[string]*Timer),
+		done:      make(chan struct{}),
+	}
+	v.SetTimerControl(s)
+
+	v.ProcessInputDetailed("#tickon {herb}")
+
+	tHerb := s.timers["herb"]
+	if tHerb == nil {
+		t.Fatal("expected herb timer to be loaded and started")
+	}
+
+	// Verify Scalar Field Overrides
+	if tHerb.Icon != "⚗️" {
+		t.Errorf("expected resolved icon '⚗️' (raid override wins over base), got %q", tHerb.Icon)
+	}
+	if tHerb.CycleMS != 15000 {
+		t.Errorf("expected resolved cycle 15s, got %dms", tHerb.CycleMS)
+	}
+	if tHerb.RepeatMode != "one_shot" {
+		t.Errorf("expected resolved repeat mode 'one_shot', got %q", tHerb.RepeatMode)
+	}
+
+	// Verify Sequential Subscriptions Merge & Exact/Bulk removals
+	got5 := tHerb.Subscriptions[5]
+	if len(got5) != 1 || got5[0] != "raidcmd" {
+		t.Errorf("expected only 'raidcmd' at second 5 (basecmd was removed by boss), got %v", got5)
+	}
+	got10 := tHerb.Subscriptions[10]
+	if len(got10) != 0 {
+		t.Errorf("expected second 10 to be completely empty (removed by boss bulk), got %v", got10)
+	}
+
+	// 5. Test Session Restore Consistency: write stale runtime timer state and subscriptions to DB
+	// and verify that restoreTimers reapplies the profile declarations and clears stale subscriptions
+	past := storage.SQLiteTime{Time: time.Now().Add(-5 * time.Minute)}
+	if err := store.SaveTimer(storage.TimerRecord{
+		SessionID: 1, Name: "herb", CycleMS: 20000, Enabled: true, RepeatMode: "repeating", NextTickAt: &past,
+	}); err != nil {
+		t.Fatalf("SaveTimer herb stale runtime: %v", err)
+	}
+	if err := store.SaveSubscription(storage.TimerSubscriptionRecord{
+		SessionID: 1, TimerName: "herb", Second: 12, SortOrder: 0, Command: "stale_runtime_cmd",
+	}); err != nil {
+		t.Fatalf("SaveSubscription stale runtime: %v", err)
+	}
+
+	s2 := &Session{
+		sessionID: 1,
+		store:     store,
+		vm:        v,
+		timers:    make(map[string]*Timer),
+	}
+	s2.restoreTimers()
+
+	tHerbRestored := s2.timers["herb"]
+	if tHerbRestored == nil {
+		t.Fatal("expected herb to be restored")
+	}
+
+	// Verify restored subscriptions are overridden and stale runtime subscriptions are cleared!
+	gotRestored5 := tHerbRestored.Subscriptions[5]
+	if len(gotRestored5) != 1 || gotRestored5[0] != "raidcmd" {
+		t.Errorf("expected restored subscriptions to be reapplied from profile, got %v", gotRestored5)
+	}
+	gotRestored12 := tHerbRestored.Subscriptions[12]
+	if len(gotRestored12) != 0 {
+		t.Errorf("expected stale runtime subscription at second 12 to be completely cleared, got %v", gotRestored12)
+	}
+}

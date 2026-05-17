@@ -188,6 +188,8 @@ type ProfileTimerSubscription struct {
 	Second    int    `gorm:"primaryKey" json:"second"`
 	SortOrder int    `gorm:"primaryKey" json:"sort_order"`
 	Command   string `json:"command"`
+	IsRemoval bool   `gorm:"column:is_removal;default:false" json:"is_removal"`
+	IsBulk    bool   `gorm:"column:is_bulk;default:false" json:"is_bulk"`
 }
 
 func (ProfileTimerSubscription) TableName() string {

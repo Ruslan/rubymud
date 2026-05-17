@@ -34,6 +34,11 @@ func (m *mockTimerCtrl) UnsubscribeTimer(name string, sec int) {
 		delete(m.timerCmds[name], sec)
 	}
 }
+func (m *mockTimerCtrl) UnsubscribeTimerExact(name string, sec int, cmd string) {
+	if m.timerCmds != nil && m.timerCmds[name] != nil {
+		delete(m.timerCmds[name], sec)
+	}
+}
 func (m *mockTimerCtrl) ScheduleDelay(id string, sec float64, cmd string) error {
 	m.scheduledCmd = cmd
 	m.scheduledSec = sec

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -248,10 +249,26 @@ func (s *Store) ExportProfileScript(profileID int64) (string, error) {
 			}
 			subs, _ := s.GetProfileTimerSubscriptions(profileID, t.Name)
 			for _, sub := range subs {
-				if isDefault {
-					sb.WriteString(fmt.Sprintf("#tickat {%d} {%s}\n", sub.Second, sub.Command))
+				if sub.IsRemoval {
+					if sub.IsBulk {
+						if isDefault {
+							sb.WriteString(fmt.Sprintf("#untickat {%d}\n", sub.Second))
+						} else {
+							sb.WriteString(fmt.Sprintf("#untickat {%s} {%d}\n", t.Name, sub.Second))
+						}
+					} else {
+						if isDefault {
+							sb.WriteString(fmt.Sprintf("#untickat {%d} {%s}\n", sub.Second, sub.Command))
+						} else {
+							sb.WriteString(fmt.Sprintf("#untickat {%s} {%d} {%s}\n", t.Name, sub.Second, sub.Command))
+						}
+					}
 				} else {
-					sb.WriteString(fmt.Sprintf("#tickat {%s} {%d} {%s}\n", t.Name, sub.Second, sub.Command))
+					if isDefault {
+						sb.WriteString(fmt.Sprintf("#tickat {%d} {%s}\n", sub.Second, sub.Command))
+					} else {
+						sb.WriteString(fmt.Sprintf("#tickat {%s} {%d} {%s}\n", t.Name, sub.Second, sub.Command))
+					}
 				}
 			}
 			sb.WriteString("\n")
@@ -625,6 +642,52 @@ func ParseProfileScript(text string) (*ProfileScript, error) {
 				})
 			}
 			pendingMeta = nil
+		} else if strings.HasPrefix(line, "#untickat ") {
+			rest := strings.TrimSpace(strings.TrimPrefix(line, "#untickat "))
+			arg1, rest := splitBraceArg(rest)
+			arg2, rest := splitBraceArg(rest)
+			arg3, _ := splitBraceArg(rest)
+
+			var name string
+			var secondStr string
+			var command string
+			var isBulk bool
+
+			if _, err := strconv.Atoi(arg1); err == nil {
+				// arg1 is numeric, treat as #untickat {second} [{command}] for default ticker
+				name = "ticker"
+				secondStr = arg1
+				command = arg2
+				if command == "" {
+					isBulk = true
+				}
+			} else {
+				// arg1 is name, arg2 is second, arg3 is command
+				name = arg1
+				secondStr = arg2
+				command = arg3
+				if command == "" {
+					isBulk = true
+				}
+			}
+
+			if name != "" && secondStr != "" {
+				var second int
+				n, err := fmt.Sscanf(secondStr, "%d", &second)
+				if n != 1 || err != nil {
+					return nil, fmt.Errorf("invalid #untickat for %q: invalid second %q", name, secondStr)
+				}
+
+				// Add subscription
+				ps.Subscriptions = append(ps.Subscriptions, ProfileTimerSubscription{
+					TimerName: name,
+					Second:    second,
+					Command:   command,
+					IsRemoval: true,
+					IsBulk:    isBulk,
+				})
+			}
+			pendingMeta = nil
 		}
 	}
 
@@ -633,7 +696,7 @@ func ParseProfileScript(text string) (*ProfileScript, error) {
 		t := ensurePSTimer(sub.TimerName)
 		maxSec := t.CycleMS / 1000
 		if sub.Second < 0 || sub.Second > maxSec {
-			return nil, fmt.Errorf("invalid #tickat for %q: second %d is out of range (max %d)", sub.TimerName, sub.Second, maxSec)
+			return nil, fmt.Errorf("invalid #tickat or #untickat for %q: second %d is out of range (max %d)", sub.TimerName, sub.Second, maxSec)
 		}
 	}
 

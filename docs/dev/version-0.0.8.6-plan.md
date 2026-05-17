@@ -13,6 +13,67 @@ Finish timer declaration layering across multiple active profiles, without expan
 
 ---
 
+## Current Status
+
+### Done (in this cycle)
+
+1. `ticker` subscriptions are no longer strictly primary-only in the common active-profile path.
+2. `ticker` subscriptions are merged from active profiles in deterministic profile order (base -> later), with per-second command dedupe.
+3. restore path now reapplies profile-derived `ticker` subscriptions even when persisted runtime ticker state exists.
+4. regression coverage added for:
+   1. two-profile `ticker` subscription merge/order behavior
+   2. primary profile without `ticker` declaration
+   3. persisted runtime stale-subscription override by profile declarations
+   4. clearing stale runtime subscriptions when profile merge is empty (for active-profile stacks)
+
+### Intentionally Not Changed Yet
+
+1. zero-active-profile edge path keeps legacy behavior to avoid runtime persistence regressions.
+2. no broad runtime model redesign was introduced.
+
+### Release Completion Status
+
+`0.0.8.6` goals are implemented and validated in code/tests.
+
+Completed in this cycle:
+
+1. full layered declaration resolution for named timers (not only `ticker`) across all active profiles.
+2. layered scalar override semantics (`icon`, `cycle_ms`, `repeat_mode`) where later profile wins.
+3. layered subscription mutation model including exact removal:
+   1. `#untickat {name} {second} {command}` exact tuple removal
+   2. existing bulk form `#untickat {name} {second}` remains supported
+4. declaration-aware validation/startup paths use resolved layered declarations for named timers.
+5. runtime-originated declaration writes remain primary-profile targeted, with explicit behavior and coverage.
+6. acceptance-test matrix completed for layered merge/order/remove/restart consistency.
+
+### Known Pitfalls (from review + implementation)
+
+1. primary-gated declaration loading can silently drop lower-profile timer behavior.
+   1. if startup/declaration resolution requires the primary profile to declare a timer before merge runs, lower/base profile declarations may never be applied.
+   2. tests must include "primary has no timer declaration, lower profile does" scenarios.
+
+2. persisted runtime state can mask declaration-layer fixes.
+   1. if restore loads session-scoped timer subscriptions first and layered merge is skipped/partial, stale runtime subscriptions can survive.
+   2. restore-path tests must include preexisting runtime rows and verify override/clear semantics.
+
+3. empty layered result must be treated as authoritative, not as "no-op".
+   1. when active profile merge resolves to no subscriptions, runtime subscriptions should be cleared for that timer in layered paths.
+   2. otherwise stale subscriptions continue firing even though declaration layers removed them.
+
+4. zero-active-profile sessions are a special risk boundary.
+   1. behavior differs depending on whether the product guarantees at least one active profile.
+   2. if zero-profile sessions are allowed, merge/clear logic and tests must explicitly define expected fallback behavior.
+
+5. runtime writeback can unintentionally collapse layering provenance.
+   1. persisting full resolved runtime subscriptions back into the primary profile may copy lower-profile contributions upward.
+   2. this can change future behavior after profile reorder/remove and should be either constrained or explicitly accepted/documented.
+
+6. "contains-only" scheduler tests can hide ordering bugs.
+   1. asserting only that commands eventually appear does not prove deterministic merge order.
+   2. tests should assert resolved in-memory subscription order (or precise execution order with deterministic timing control).
+
+---
+
 ## Scope
 
 ### Multi-Profile Declaration Resolution
@@ -168,15 +229,9 @@ Runtime stays:
 
 ### Export of Exact Unsubscribe
 
-If a profile contains layered removal intent, exported scripts may need to include:
+Resolved for `0.0.8.6`:
 
-```text
-#untickat {name} {second} {command}
-```
-
-Question:
-
-1. should `0.0.8.6` export exact-unsubscribe lines when they are part of the stored declaration layer behavior?
+1. export includes exact-unsubscribe lines when they are part of stored declaration-layer behavior.
 
 ### Default `ticker`
 
@@ -201,6 +256,8 @@ Unless needed for consistency, `0.0.8.6` should avoid pulling default `ticker` i
 ---
 
 ## Acceptance Criteria
+
+Status: met for `0.0.8.6`.
 
 1. named timer declaration resolution uses all active profiles, not only the primary profile
 2. later profiles override earlier scalar fields: `icon`, `cycle_ms`, `repeat_mode`

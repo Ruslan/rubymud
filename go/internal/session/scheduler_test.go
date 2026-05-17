@@ -43,6 +43,10 @@ func (m *mockTimerControl) UnsubscribeTimer(name string, second int) {
 	m.unsubName = name
 	m.unsubSec = second
 }
+func (m *mockTimerControl) UnsubscribeTimerExact(name string, second int, command string) {
+	m.unsubName = name
+	m.unsubSec = second
+}
 func (m *mockTimerControl) ScheduleDelay(id string, seconds float64, command string) error {
 	m.delayId = id
 	m.delaySec = seconds

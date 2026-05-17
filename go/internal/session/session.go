@@ -228,44 +228,142 @@ func (s *Session) ensureTimer(name string) *Timer {
 	return t
 }
 
+func (s *Session) resolveTimerSubscriptions(name string) map[int][]string {
+	if s.store == nil {
+		return nil
+	}
+
+	profileIDs, err := s.store.GetOrderedProfileIDs(s.sessionID)
+	if err != nil || len(profileIDs) == 0 {
+		return nil
+	}
+
+	resolvedSubs := make(map[int][]string)
+
+	for i := len(profileIDs) - 1; i >= 0; i-- {
+		profileID := profileIDs[i]
+		subs, err := s.store.GetProfileTimerSubscriptions(profileID, name)
+		if err != nil {
+			continue
+		}
+
+		for _, sub := range subs {
+			if sub.IsRemoval {
+				if sub.IsBulk {
+					delete(resolvedSubs, sub.Second)
+				} else {
+					cmds := resolvedSubs[sub.Second]
+					newCmds := make([]string, 0, len(cmds))
+					for _, cmd := range cmds {
+						if cmd != sub.Command {
+							newCmds = append(newCmds, cmd)
+						}
+					}
+					if len(newCmds) > 0 {
+						resolvedSubs[sub.Second] = newCmds
+					} else {
+						delete(resolvedSubs, sub.Second)
+					}
+				}
+			} else {
+				cmds := resolvedSubs[sub.Second]
+				exists := false
+				for _, cmd := range cmds {
+					if cmd == sub.Command {
+						exists = true
+						break
+					}
+				}
+				if !exists {
+					resolvedSubs[sub.Second] = append(resolvedSubs[sub.Second], sub.Command)
+				}
+			}
+		}
+	}
+
+	return resolvedSubs
+}
+
 func (s *Session) loadProfileTimerDeclaration(name string) *Timer {
 	if s.store == nil {
 		return nil
 	}
-	profileID, err := s.store.GetPrimaryProfileID(s.sessionID)
-	if err != nil {
+	profileIDs, err := s.store.GetOrderedProfileIDs(s.sessionID)
+	if err != nil || len(profileIDs) == 0 {
 		return nil
 	}
-	decls, err := s.store.GetProfileTimers(profileID)
-	if err != nil {
-		return nil
-	}
-	for _, d := range decls {
-		if d.Name == name {
-			t := NewTimer(name, time.Duration(d.CycleMS)*time.Millisecond)
-			t.Icon = d.Icon
-			t.RepeatMode = d.RepeatMode
-			if t.RepeatMode == "" {
-				t.RepeatMode = "repeating"
-			}
 
-			// Also load subscriptions.
-			// For default ticker, merge subscriptions from all active profiles in
-			// deterministic profile order (base -> later).
-			if name == "ticker" {
-				s.applyMergedTickerSubscriptions(t)
+	var resolvedTimer *storage.ProfileTimer
+	var hasDeclaration bool
+
+	// Process in reverse to go from base (lowest priority) to primary (highest priority)
+	for i := len(profileIDs) - 1; i >= 0; i-- {
+		profileID := profileIDs[i]
+		d, err := s.store.GetProfileTimer(profileID, name)
+		if err == nil && d != nil {
+			hasDeclaration = true
+			if resolvedTimer == nil {
+				resolvedTimer = &storage.ProfileTimer{
+					Name:       name,
+					Icon:       d.Icon,
+					CycleMS:    d.CycleMS,
+					RepeatMode: d.RepeatMode,
+				}
 			} else {
-				subs, err := s.store.GetProfileTimerSubscriptions(profileID, name)
-				if err == nil {
-					for _, sub := range subs {
-						t.Subscriptions[sub.Second] = append(t.Subscriptions[sub.Second], sub.Command)
-					}
+				// Scalar Field Override Rules: later profile wins
+				if d.Icon != "" {
+					resolvedTimer.Icon = d.Icon
+				}
+				if d.CycleMS > 0 {
+					resolvedTimer.CycleMS = d.CycleMS
+				}
+				if d.RepeatMode != "" {
+					resolvedTimer.RepeatMode = d.RepeatMode
 				}
 			}
-			return t
 		}
 	}
-	return nil
+
+	// For default ticker, even if no explicit ProfileTimer is found, we should still return a default ticker
+	// and merge its subscriptions, because ticker is always available by default.
+	if name == "ticker" {
+		t := NewTimer("ticker", 60*time.Second)
+		if resolvedTimer != nil {
+			if resolvedTimer.CycleMS > 0 {
+				t.Cycle = time.Duration(resolvedTimer.CycleMS) * time.Millisecond
+				t.CycleMS = resolvedTimer.CycleMS
+			}
+			t.Icon = resolvedTimer.Icon
+			if resolvedTimer.RepeatMode != "" {
+				t.RepeatMode = resolvedTimer.RepeatMode
+			}
+		}
+		if resolved := s.resolveTimerSubscriptions("ticker"); resolved != nil {
+			t.Subscriptions = resolved
+		}
+		return t
+	}
+
+	// For named timers, if none of the active profiles declared it, return nil
+	if !hasDeclaration {
+		return nil
+	}
+
+	cycleMS := resolvedTimer.CycleMS
+	if cycleMS <= 0 {
+		cycleMS = 60000 // default 60s
+	}
+	t := NewTimer(name, time.Duration(cycleMS)*time.Millisecond)
+	t.Icon = resolvedTimer.Icon
+	t.RepeatMode = resolvedTimer.RepeatMode
+	if t.RepeatMode == "" {
+		t.RepeatMode = "repeating"
+	}
+
+	if resolved := s.resolveTimerSubscriptions(name); resolved != nil {
+		t.Subscriptions = resolved
+	}
+	return t
 }
 
 func (s *Session) mergeTickerSubscriptionsFromAllProfiles(t *Timer) {
@@ -273,39 +371,11 @@ func (s *Session) mergeTickerSubscriptionsFromAllProfiles(t *Timer) {
 }
 
 func (s *Session) applyMergedTickerSubscriptions(t *Timer) {
-	if s.store == nil {
-		return
+	if resolved := s.resolveTimerSubscriptions(t.Name); resolved != nil {
+		t.mu.Lock()
+		t.Subscriptions = resolved
+		t.mu.Unlock()
 	}
-
-	profileIDs, err := s.store.GetOrderedProfileIDs(s.sessionID)
-	if err != nil || len(profileIDs) == 0 {
-		return
-	}
-
-	merged := make(map[int][]string)
-	for i := len(profileIDs) - 1; i >= 0; i-- {
-		profileID := profileIDs[i]
-		subs, subErr := s.store.GetProfileTimerSubscriptions(profileID, "ticker")
-		if subErr != nil {
-			continue
-		}
-		for _, sub := range subs {
-			exists := false
-			for _, existing := range merged[sub.Second] {
-				if existing == sub.Command {
-					exists = true
-					break
-				}
-			}
-			if !exists {
-				merged[sub.Second] = append(merged[sub.Second], sub.Command)
-			}
-		}
-	}
-
-	t.mu.Lock()
-	t.Subscriptions = merged
-	t.mu.Unlock()
 }
 
 func (s *Session) TickOff(name string) {
@@ -417,12 +487,14 @@ func (s *Session) SubscribeTimer(name string, second int, command string) {
 
 	s.persistSubscriptions(t)
 	s.persistTimer(t)
-
 	s.persistProfileTimerDeclaration(t)
-	s.persistProfileTimerSubscriptions(t)
+
+	if !exists {
+		s.appendProfileTimerSubscription(t.Name, second, command, false, false)
+	}
 }
 
-func (s *Session) persistProfileTimerSubscriptions(t *Timer) {
+func (s *Session) appendProfileTimerSubscription(timerName string, second int, command string, isRemoval bool, isBulk bool) {
 	if s.store == nil {
 		return
 	}
@@ -431,32 +503,30 @@ func (s *Session) persistProfileTimerSubscriptions(t *Timer) {
 		return
 	}
 
-	t.mu.Lock()
-	subsCopy := make(map[int][]string)
-	for k, v := range t.Subscriptions {
-		subsCopy[k] = append([]string{}, v...)
-	}
-	t.mu.Unlock()
-
 	s.store.Transaction(func(store *storage.Store) error {
-		if err := store.ClearProfileTimerSubscriptions(profileID, t.Name); err != nil {
+		subs, err := store.GetProfileTimerSubscriptions(profileID, timerName)
+		if err != nil {
 			return err
 		}
-		for second, commands := range subsCopy {
-			for i, cmd := range commands {
-				sub := storage.ProfileTimerSubscription{
-					ProfileID: profileID,
-					TimerName: t.Name,
-					Second:    second,
-					SortOrder: i,
-					Command:   cmd,
-				}
-				if err := store.SaveProfileTimerSubscription(sub); err != nil {
-					return err
-				}
+
+		maxSort := -1
+		for _, existing := range subs {
+			if existing.Second == second && existing.SortOrder > maxSort {
+				maxSort = existing.SortOrder
 			}
 		}
-		return nil
+
+		sub := storage.ProfileTimerSubscription{
+			ProfileID: profileID,
+			TimerName: timerName,
+			Second:    second,
+			SortOrder: maxSort + 1,
+			Command:   command,
+			IsRemoval: isRemoval,
+			IsBulk:    isBulk,
+		}
+
+		return store.SaveProfileTimerSubscription(sub)
 	})
 }
 
@@ -471,7 +541,38 @@ func (s *Session) UnsubscribeTimer(name string, second int) {
 		s.persistSubscriptions(t)
 		s.persistTimer(t)
 
-		s.persistProfileTimerSubscriptions(t)
+		s.appendProfileTimerSubscription(t.Name, second, "", true, true)
+	}
+}
+
+func (s *Session) UnsubscribeTimerExact(name string, second int, command string) {
+	s.timersMu.Lock()
+	defer s.timersMu.Unlock()
+	if t, ok := s.timers[name]; ok {
+		t.mu.Lock()
+		cmds := t.Subscriptions[second]
+		newCmds := make([]string, 0, len(cmds))
+		modified := false
+		for _, cmd := range cmds {
+			if cmd != command {
+				newCmds = append(newCmds, cmd)
+			} else {
+				modified = true
+			}
+		}
+		if len(newCmds) > 0 {
+			t.Subscriptions[second] = newCmds
+		} else {
+			delete(t.Subscriptions, second)
+		}
+		t.mu.Unlock()
+
+		if modified {
+			s.persistSubscriptions(t)
+			s.persistTimer(t)
+
+			s.appendProfileTimerSubscription(t.Name, second, command, true, false)
+		}
 	}
 }
 
@@ -523,14 +624,14 @@ func (s *Session) GetTimerCycleSeconds(name string) int {
 		return cycle
 	}
 
-	// Not in runtime, check declaration
-	if name != "ticker" && s.store != nil {
-		profileID, err := s.store.GetPrimaryProfileID(s.sessionID)
-		if err == nil {
-			d, err := s.store.GetProfileTimer(profileID, name)
-			if err == nil {
-				return d.CycleMS / 1000
+	// Not in runtime, check declaration using layered active profile resolution
+	if s.store != nil {
+		if tDecl := s.loadProfileTimerDeclaration(name); tDecl != nil {
+			cycle := int(tDecl.Cycle.Seconds())
+			if cycle == 0 && name == "ticker" {
+				return 60
 			}
+			return cycle
 		}
 	}
 
@@ -695,21 +796,44 @@ func (s *Session) restoreTimers() {
 
 	// Ensure default ticker exists
 	s.timersMu.Lock()
-	defer s.timersMu.Unlock()
-	if _, ok := s.timers["ticker"]; !ok {
+	_, hasTicker := s.timers["ticker"]
+	s.timersMu.Unlock()
+
+	if !hasTicker {
 		// No session runtime state for ticker, try profile declaration
 		if t := s.loadProfileTimerDeclaration("ticker"); t != nil {
+			s.timersMu.Lock()
 			s.timers["ticker"] = t
+			s.timersMu.Unlock()
 			s.persistTimer(t)
 			s.persistSubscriptions(t)
 		} else {
 			// Absolute fallback
-			s.timers["ticker"] = NewTimer("ticker", 60*time.Second)
+			t := NewTimer("ticker", 60*time.Second)
+			s.timersMu.Lock()
+			s.timers["ticker"] = t
+			s.timersMu.Unlock()
 		}
 	}
 
-	if ticker, ok := s.timers["ticker"]; ok {
-		s.applyMergedTickerSubscriptions(ticker)
+	// Get a snapshot of timer names to avoid locking the map during resolution
+	s.timersMu.Lock()
+	var timerNames []string
+	for name := range s.timers {
+		timerNames = append(timerNames, name)
+	}
+	s.timersMu.Unlock()
+
+	for _, name := range timerNames {
+		if resolved := s.resolveTimerSubscriptions(name); resolved != nil {
+			s.timersMu.Lock()
+			if t, ok := s.timers[name]; ok {
+				t.mu.Lock()
+				t.Subscriptions = resolved
+				t.mu.Unlock()
+			}
+			s.timersMu.Unlock()
+		}
 	}
 }
 

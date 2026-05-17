@@ -232,32 +232,39 @@ func (v *VM) cmdUntickat(rest string, depth int) []Result {
 	}
 
 	arg1, after1 := splitBraceArg(rest)
-	arg2, remaining := splitBraceArg(strings.TrimSpace(after1))
+	arg2, after2 := splitBraceArg(strings.TrimSpace(after1))
+	arg3, remaining := splitBraceArg(strings.TrimSpace(after2))
 
 	if arg1 == "" || strings.TrimSpace(remaining) != "" {
-		return echoResults([]string{"#untickat: usage: #untickat [{name}] {second}"}, depth)
+		return echoResults([]string{"#untickat: usage: #untickat [{name}] {second} [{command}]"}, depth)
 	}
 
 	var name string
 	var secondStr string
+	var command string
 
-	if _, err := strconv.Atoi(arg1); err == nil {
-		// arg1 is numeric, treat as #untickat {second} for default ticker
+	sArg1 := v.substituteVars(arg1)
+	sArg2 := v.substituteVars(arg2)
+
+	if _, err := strconv.Atoi(sArg1); err == nil {
+		// arg1 is numeric, treat as #untickat {second} [{command}] for default ticker
 		name = "ticker"
-		secondStr = arg1
-		if arg2 != "" {
-			return echoResults([]string{"#untickat: usage: #untickat [{name}] {second}"}, depth)
+		secondStr = sArg1
+		command = arg2 // Use raw arg2 to match the raw command string in subscriptions
+		if arg3 != "" {
+			return echoResults([]string{"#untickat: usage: #untickat [{name}] {second} [{command}]"}, depth)
 		}
 	} else {
-		// arg1 is name, arg2 is second
-		if !isValidTimerName(arg1) {
-			return echoResults([]string{fmt.Sprintf("#untickat: invalid timer name %q", arg1)}, depth)
+		// arg1 is name, arg2 is second, arg3 is command
+		if !isValidTimerName(sArg1) {
+			return echoResults([]string{fmt.Sprintf("#untickat: invalid timer name %q", sArg1)}, depth)
 		}
 		if arg2 == "" {
-			return echoResults([]string{"#untickat: usage: #untickat [{name}] {second}"}, depth)
+			return echoResults([]string{"#untickat: usage: #untickat [{name}] {second} [{command}]"}, depth)
 		}
-		name = arg1
-		secondStr = arg2
+		name = sArg1
+		secondStr = sArg2
+		command = arg3
 	}
 
 	second, err := strconv.Atoi(secondStr)
@@ -265,7 +272,11 @@ func (v *VM) cmdUntickat(rest string, depth int) []Result {
 		return echoResults([]string{fmt.Sprintf("#untickat: invalid second %q", secondStr)}, depth)
 	}
 
-	v.timerCtrl.UnsubscribeTimer(name, second)
+	if command != "" {
+		v.timerCtrl.UnsubscribeTimerExact(name, second, command)
+	} else {
+		v.timerCtrl.UnsubscribeTimer(name, second)
+	}
 	return nil
 }
 

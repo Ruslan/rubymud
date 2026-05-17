@@ -37,6 +37,7 @@ func (m *mockTimerControl) SubscribeTimer(name string, second int, command strin
 	m.subCmd = command
 }
 func (m *mockTimerControl) UnsubscribeTimer(name string, second int)                {}
+func (m *mockTimerControl) UnsubscribeTimerExact(name string, second int, command string) {}
 func (m *mockTimerControl) ScheduleDelay(id string, seconds float64, command string) error { return nil }
 func (m *mockTimerControl) CancelDelay(id string)                                    {}
 func (m *mockTimerControl) GetTimerCycleSeconds(name string) int {
