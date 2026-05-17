@@ -249,17 +249,63 @@ func (s *Session) loadProfileTimerDeclaration(name string) *Timer {
 				t.RepeatMode = "repeating"
 			}
 
-			// Also load subscriptions
-			subs, err := s.store.GetProfileTimerSubscriptions(profileID, name)
-			if err == nil {
-				for _, sub := range subs {
-					t.Subscriptions[sub.Second] = append(t.Subscriptions[sub.Second], sub.Command)
+			// Also load subscriptions.
+			// For default ticker, merge subscriptions from all active profiles in
+			// deterministic profile order (base -> later).
+			if name == "ticker" {
+				s.applyMergedTickerSubscriptions(t)
+			} else {
+				subs, err := s.store.GetProfileTimerSubscriptions(profileID, name)
+				if err == nil {
+					for _, sub := range subs {
+						t.Subscriptions[sub.Second] = append(t.Subscriptions[sub.Second], sub.Command)
+					}
 				}
 			}
 			return t
 		}
 	}
 	return nil
+}
+
+func (s *Session) mergeTickerSubscriptionsFromAllProfiles(t *Timer) {
+	s.applyMergedTickerSubscriptions(t)
+}
+
+func (s *Session) applyMergedTickerSubscriptions(t *Timer) {
+	if s.store == nil {
+		return
+	}
+
+	profileIDs, err := s.store.GetOrderedProfileIDs(s.sessionID)
+	if err != nil || len(profileIDs) == 0 {
+		return
+	}
+
+	merged := make(map[int][]string)
+	for i := len(profileIDs) - 1; i >= 0; i-- {
+		profileID := profileIDs[i]
+		subs, subErr := s.store.GetProfileTimerSubscriptions(profileID, "ticker")
+		if subErr != nil {
+			continue
+		}
+		for _, sub := range subs {
+			exists := false
+			for _, existing := range merged[sub.Second] {
+				if existing == sub.Command {
+					exists = true
+					break
+				}
+			}
+			if !exists {
+				merged[sub.Second] = append(merged[sub.Second], sub.Command)
+			}
+		}
+	}
+
+	t.mu.Lock()
+	t.Subscriptions = merged
+	t.mu.Unlock()
 }
 
 func (s *Session) TickOff(name string) {
@@ -660,6 +706,10 @@ func (s *Session) restoreTimers() {
 			// Absolute fallback
 			s.timers["ticker"] = NewTimer("ticker", 60*time.Second)
 		}
+	}
+
+	if ticker, ok := s.timers["ticker"]; ok {
+		s.applyMergedTickerSubscriptions(ticker)
 	}
 }
 

@@ -30,10 +30,18 @@ func (s *Session) SendCommand(command string, source string) error {
 		source = "input"
 	}
 
+	originalCommand := strings.TrimSpace(command)
+
 	// Special case: empty enter from user input sends just a newline
 	if command == "" && source == "input" {
 		_, err := s.conn.Write([]byte("\n"))
 		return err
+	}
+
+	if source == "input" && originalCommand != "" {
+		if err := s.store.AppendHistoryEntry(s.sessionID, "input", originalCommand); err != nil {
+			log.Printf("append history entry failed: %v", err)
+		}
 	}
 
 	shouldBroadcastVariables := isVariableCommand(command)
@@ -78,8 +86,13 @@ func (s *Session) SendCommand(command string, source string) error {
 			continue
 		}
 
+		historyKind := source
+		if source == "input" {
+			historyKind = "expanded"
+		}
+
 		log.Printf("sending command to MUD: %q (source=%s)", cmd, source)
-		if err := s.store.AppendHistoryEntry(s.sessionID, source, cmd); err != nil {
+		if err := s.store.AppendHistoryEntry(s.sessionID, historyKind, cmd); err != nil {
 			log.Printf("append history entry failed: %v", err)
 		}
 		if source != "connect" {

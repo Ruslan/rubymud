@@ -372,3 +372,170 @@ func TestTimerDeclarationWiring(t *testing.T) {
 		t.Error("reset_dormant should be enabled after TickReset")
 	}
 }
+
+func TestTickerSubscriptionsMergeAcrossProfiles(t *testing.T) {
+	store := newTestStoreWithDeclarations(t)
+
+	p1, err := store.CreateProfile("P1", "")
+	if err != nil {
+		t.Fatalf("CreateProfile P1: %v", err)
+	}
+	p2, err := store.CreateProfile("P2", "")
+	if err != nil {
+		t.Fatalf("CreateProfile P2: %v", err)
+	}
+
+	if err := store.AddProfileToSession(1, p1.ID, 0); err != nil {
+		t.Fatalf("AddProfileToSession P1: %v", err)
+	}
+	if err := store.AddProfileToSession(1, p2.ID, 1); err != nil {
+		t.Fatalf("AddProfileToSession P2: %v", err)
+	}
+
+	if err := store.SaveProfileTimer(storage.ProfileTimer{ProfileID: p1.ID, Name: "ticker", CycleMS: 10000, RepeatMode: "repeating"}); err != nil {
+		t.Fatalf("SaveProfileTimer P1: %v", err)
+	}
+	if err := store.SaveProfileTimerSubscription(storage.ProfileTimerSubscription{ProfileID: p1.ID, TimerName: "ticker", Second: 5, SortOrder: 0, Command: "p1_sec5"}); err != nil {
+		t.Fatalf("SaveProfileTimerSubscription P1 sec5: %v", err)
+	}
+	if err := store.SaveProfileTimerSubscription(storage.ProfileTimerSubscription{ProfileID: p1.ID, TimerName: "ticker", Second: 10, SortOrder: 0, Command: "p1_sec10"}); err != nil {
+		t.Fatalf("SaveProfileTimerSubscription P1 sec10: %v", err)
+	}
+
+	if err := store.SaveProfileTimer(storage.ProfileTimer{ProfileID: p2.ID, Name: "ticker", CycleMS: 10000, RepeatMode: "repeating"}); err != nil {
+		t.Fatalf("SaveProfileTimer P2: %v", err)
+	}
+	if err := store.SaveProfileTimerSubscription(storage.ProfileTimerSubscription{ProfileID: p2.ID, TimerName: "ticker", Second: 5, SortOrder: 0, Command: "p2_sec5"}); err != nil {
+		t.Fatalf("SaveProfileTimerSubscription P2 sec5: %v", err)
+	}
+	if err := store.SaveProfileTimerSubscription(storage.ProfileTimerSubscription{ProfileID: p2.ID, TimerName: "ticker", Second: 10, SortOrder: 0, Command: "p2_sec10"}); err != nil {
+		t.Fatalf("SaveProfileTimerSubscription P2 sec10: %v", err)
+	}
+
+	conn := &recordingConn{}
+	v := vm.New(store, 1)
+	s := &Session{
+		sessionID: 1,
+		conn:      conn,
+		store:     store,
+		vm:        v,
+		clients:   make(map[int]clientSink),
+		timers:    make(map[string]*Timer),
+		delays:    make(map[string]*delayTask),
+		cmdQueue:  make(chan cmdItem, 20),
+		done:      make(chan struct{}),
+	}
+	v.SetTimerControl(s)
+	s.restoreTimers()
+
+	ticker := s.timers["ticker"]
+	if ticker == nil {
+		t.Fatal("expected ticker to be restored")
+	}
+
+	got5 := ticker.Subscriptions[5]
+	got10 := ticker.Subscriptions[10]
+	if len(got5) != 2 || got5[0] != "p1_sec5" || got5[1] != "p2_sec5" {
+		t.Fatalf("unexpected second=5 subscriptions order/content: %v", got5)
+	}
+	if len(got10) != 2 || got10[0] != "p1_sec10" || got10[1] != "p2_sec10" {
+		t.Fatalf("unexpected second=10 subscriptions order/content: %v", got10)
+	}
+
+	_ = conn
+	defer s.Close()
+}
+
+func TestTickerSubscriptionsMergeWhenPrimaryHasNoTickerDeclaration(t *testing.T) {
+	store := newTestStoreWithDeclarations(t)
+
+	base, _ := store.CreateProfile("Base", "")
+	over, _ := store.CreateProfile("Over", "")
+	if err := store.AddProfileToSession(1, base.ID, 0); err != nil {
+		t.Fatalf("AddProfileToSession base: %v", err)
+	}
+	if err := store.AddProfileToSession(1, over.ID, 1); err != nil {
+		t.Fatalf("AddProfileToSession over: %v", err)
+	}
+
+	if err := store.SaveProfileTimer(storage.ProfileTimer{ProfileID: base.ID, Name: "ticker", CycleMS: 10000, RepeatMode: "repeating"}); err != nil {
+		t.Fatalf("SaveProfileTimer base: %v", err)
+	}
+	if err := store.SaveProfileTimerSubscription(storage.ProfileTimerSubscription{ProfileID: base.ID, TimerName: "ticker", Second: 5, SortOrder: 0, Command: "base_only"}); err != nil {
+		t.Fatalf("SaveProfileTimerSubscription base: %v", err)
+	}
+
+	v := vm.New(store, 1)
+	s := &Session{sessionID: 1, store: store, vm: v, timers: make(map[string]*Timer)}
+	s.restoreTimers()
+
+	ticker := s.timers["ticker"]
+	if ticker == nil {
+		t.Fatal("expected ticker to exist")
+	}
+	got := ticker.Subscriptions[5]
+	if len(got) != 1 || got[0] != "base_only" {
+		t.Fatalf("expected base profile subscription even without primary declaration, got %v", got)
+	}
+}
+
+func TestTickerSubscriptionsOverridePersistedRuntimeState(t *testing.T) {
+	store := newTestStoreWithDeclarations(t)
+
+	base, _ := store.CreateProfile("Base", "")
+	over, _ := store.CreateProfile("Over", "")
+	if err := store.AddProfileToSession(1, base.ID, 0); err != nil {
+		t.Fatalf("AddProfileToSession base: %v", err)
+	}
+	if err := store.AddProfileToSession(1, over.ID, 1); err != nil {
+		t.Fatalf("AddProfileToSession over: %v", err)
+	}
+
+	if err := store.SaveProfileTimer(storage.ProfileTimer{ProfileID: base.ID, Name: "ticker", CycleMS: 10000, RepeatMode: "repeating"}); err != nil {
+		t.Fatalf("SaveProfileTimer base: %v", err)
+	}
+	if err := store.SaveProfileTimerSubscription(storage.ProfileTimerSubscription{ProfileID: base.ID, TimerName: "ticker", Second: 5, SortOrder: 0, Command: "base_live"}); err != nil {
+		t.Fatalf("SaveProfileTimerSubscription base: %v", err)
+	}
+
+	next := storage.SQLiteTime{Time: time.Now().Add(5 * time.Second)}
+	if err := store.SaveTimer(storage.TimerRecord{SessionID: 1, Name: "ticker", CycleMS: 10000, Enabled: true, NextTickAt: &next, RepeatMode: "repeating"}); err != nil {
+		t.Fatalf("SaveTimer ticker runtime: %v", err)
+	}
+	if err := store.SaveSubscription(storage.TimerSubscriptionRecord{SessionID: 1, TimerName: "ticker", Second: 7, SortOrder: 0, Command: "stale_runtime"}); err != nil {
+		t.Fatalf("SaveSubscription stale runtime: %v", err)
+	}
+
+	v := vm.New(store, 1)
+	s := &Session{sessionID: 1, store: store, vm: v, timers: make(map[string]*Timer)}
+	s.restoreTimers()
+
+	ticker := s.timers["ticker"]
+	if ticker == nil {
+		t.Fatal("expected ticker to be restored")
+	}
+	if got := ticker.Subscriptions[7]; len(got) != 0 {
+		t.Fatalf("expected stale runtime subscriptions to be overridden, got %v", got)
+	}
+	got := ticker.Subscriptions[5]
+	if len(got) != 1 || got[0] != "base_live" {
+		t.Fatalf("expected merged profile subscriptions to be applied, got %v", got)
+	}
+
+	if err := store.ClearProfileTimerSubscriptions(base.ID, "ticker"); err != nil {
+		t.Fatalf("ClearProfileTimerSubscriptions: %v", err)
+	}
+	if err := store.ClearProfileTimerSubscriptions(over.ID, "ticker"); err != nil {
+		t.Fatalf("ClearProfileTimerSubscriptions over: %v", err)
+	}
+
+	s2 := &Session{sessionID: 1, store: store, vm: v, timers: make(map[string]*Timer)}
+	s2.restoreTimers()
+	ticker2 := s2.timers["ticker"]
+	if ticker2 == nil {
+		t.Fatal("expected ticker to be restored on second pass")
+	}
+	if len(ticker2.Subscriptions) != 0 {
+		t.Fatalf("expected empty merged ticker subscriptions to clear stale runtime state, got %+v", ticker2.Subscriptions)
+	}
+}

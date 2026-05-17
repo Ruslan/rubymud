@@ -122,6 +122,83 @@ func TestSendCommandTextWithColonStillSends(t *testing.T) {
 	}
 }
 
+func TestSendCommandAliasHistorySeparatesInputAndExpanded(t *testing.T) {
+	store := newTestStoreWithDeclarations(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles failed: %v", err)
+	}
+
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+
+	conn := &recordingConn{}
+	sess := &Session{
+		sessionID: 1,
+		conn:      conn,
+		store:     store,
+		vm:        v,
+		clients:   map[int]clientSink{},
+	}
+
+	if err := sess.SendCommand("#alias {test_alias} {say cmd1;say cmd2}", "input"); err != nil {
+		t.Fatalf("SendCommand(alias define): %v", err)
+	}
+	if err := sess.SendCommand("test_alias", "input"); err != nil {
+		t.Fatalf("SendCommand(test_alias): %v", err)
+	}
+
+	inputHistory, err := store.RecentInputHistory(1, 50)
+	if err != nil {
+		t.Fatalf("RecentInputHistory failed: %v", err)
+	}
+
+	foundAliasInput := false
+	foundExpandedInInput := false
+	for _, line := range inputHistory {
+		if line == "test_alias" {
+			foundAliasInput = true
+		}
+		if line == "say cmd1" || line == "say cmd2" {
+			foundExpandedInInput = true
+		}
+	}
+	if !foundAliasInput {
+		t.Fatalf("expected RecentInputHistory to contain test_alias, got %v", inputHistory)
+	}
+	if foundExpandedInInput {
+		t.Fatalf("expected RecentInputHistory to exclude expanded commands, got %v", inputHistory)
+	}
+
+	fullHistory, err := store.ListHistory(1, 100)
+	if err != nil {
+		t.Fatalf("ListHistory failed: %v", err)
+	}
+
+	foundAliasInputKind := false
+	foundCmd1Expanded := false
+	foundCmd2Expanded := false
+	for _, entry := range fullHistory {
+		if entry.Line == "test_alias" && entry.Kind == "input" {
+			foundAliasInputKind = true
+		}
+		if entry.Line == "say cmd1" && entry.Kind == "expanded" {
+			foundCmd1Expanded = true
+		}
+		if entry.Line == "say cmd2" && entry.Kind == "expanded" {
+			foundCmd2Expanded = true
+		}
+	}
+
+	if !foundAliasInputKind {
+		t.Fatal("expected full history to contain test_alias with kind=input")
+	}
+	if !foundCmd1Expanded || !foundCmd2Expanded {
+		t.Fatal("expected full history to contain expanded say commands with kind=expanded")
+	}
+}
+
 func TestReadLoopClosesSessionOnRemoteDisconnect(t *testing.T) {
 	tests := []struct {
 		name    string
