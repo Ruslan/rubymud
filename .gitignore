@@ -27,4 +27,5 @@ go/internal/web/static/
 analytic
 .opencode
 .claude/
+.antigravitycli
 go/mudhost
