@@ -13,6 +13,8 @@ import (
 )
 
 func (s *Session) RunReadLoop() {
+	defer s.recoverGoroutine("read loop")
+
 	log.Printf("session read loop started for %s", s.mudAddr)
 	decoder := newTelnetDecoder()
 	buf := make([]byte, 100*1024)

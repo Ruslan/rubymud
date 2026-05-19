@@ -1659,6 +1659,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	writeJSON := func(msg session.ServerMsg) error {
 		writeMu.Lock()
 		defer writeMu.Unlock()
+		ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		return ws.WriteJSON(msg)
 	}
 
@@ -1705,7 +1706,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		clientID = currentSess.AttachClient(ws.RemoteAddr().String(), func(msg session.ServerMsg) error {
-			return writeJSON(msg)
+			if err := writeJSON(msg); err != nil {
+				_ = ws.Close()
+				return err
+			}
+			return nil
 		})
 	}
 
@@ -1732,7 +1737,11 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 						return
 					}
 					clientID = sess.AttachClient(ws.RemoteAddr().String(), func(msg session.ServerMsg) error {
-						return writeJSON(msg)
+						if err := writeJSON(msg); err != nil {
+							_ = ws.Close()
+							return err
+						}
+						return nil
 					})
 				} else if err := writeJSON(session.ServerMsg{Type: "status", Status: "disconnected"}); err != nil {
 					log.Printf("websocket status send failed: %v", err)

@@ -413,40 +413,38 @@
       } else if (currentTab === 'history' && selectedSessionID) {
         const histRes = await fetch(`/api/sessions/${selectedSessionID}/history`, { headers });
         historyEntries = await histRes.json() || [];
-      } else if (['aliases', 'triggers', 'subs', 'highlights', 'hotkeys', 'timers', 'groups', 'declared_variables'].includes(currentTab) && selectedProfileID) {
-        if (currentTab === 'timers') {
-          const timersMap: Record<number, ProfileTimer[]> = {};
-          for (const p of profiles) {
-            const res = await fetch(`/api/profiles/${p.id}/timers`, { headers });
-            const list = await res.json() || [];
-            timersMap[p.id] = list;
+      } else if (currentTab === 'timers' && profiles.length > 0) {
+        const timersMap: Record<number, ProfileTimer[]> = {};
+        for (const p of profiles) {
+          const res = await fetch(`/api/profiles/${p.id}/timers`, { headers });
+          const list = await res.json() || [];
+          timersMap[p.id] = list;
 
-            // Pre-initialize newTimerForms for each profile
-            if (!newTimerForms[p.id]) {
-              newTimerForms[p.id] = { name: '', cycle_ms: 1000, icon: '', repeat_mode: 'repeating' };
-            }
+          // Pre-initialize newTimerForms for each profile
+          if (!newTimerForms[p.id]) {
+            newTimerForms[p.id] = { name: '', cycle_ms: 1000, icon: '', repeat_mode: 'repeating' };
+          }
 
-            // Pre-initialize newSubForms for each timer
-            for (const t of list) {
-              const key = `${p.id}|${t.name}`;
-              if (!newSubForms[key]) {
-                newSubForms[key] = { second: 0, command: '', is_removal: false, is_bulk: false };
-              }
+          // Pre-initialize newSubForms for each timer
+          for (const t of list) {
+            const key = `${p.id}|${t.name}`;
+            if (!newSubForms[key]) {
+              newSubForms[key] = { second: 0, command: '', is_removal: false, is_bulk: false };
             }
           }
-          allProfilesTimers = timersMap;
-        } else {
-          const endpoint = currentTab === 'declared_variables' ? 'variables' : currentTab;
-          const res = await fetch(`/api/profiles/${selectedProfileID}/${endpoint}`, { headers });
-          const data = await res.json() || [];
-          if (currentTab === 'aliases') aliases = data;
-          else if (currentTab === 'triggers') triggers = data;
-          else if (currentTab === 'subs') subs = data;
-          else if (currentTab === 'highlights') highlights = data;
-          else if (currentTab === 'hotkeys') hotkeys = data;
-          else if (currentTab === 'groups') groups = data;
-          else if (currentTab === 'declared_variables') profileVariables = data;
         }
+        allProfilesTimers = timersMap;
+      } else if (['aliases', 'triggers', 'subs', 'highlights', 'hotkeys', 'groups', 'declared_variables'].includes(currentTab) && selectedProfileID) {
+        const endpoint = currentTab === 'declared_variables' ? 'variables' : currentTab;
+        const res = await fetch(`/api/profiles/${selectedProfileID}/${endpoint}`, { headers });
+        const data = await res.json() || [];
+        if (currentTab === 'aliases') aliases = data;
+        else if (currentTab === 'triggers') triggers = data;
+        else if (currentTab === 'subs') subs = data;
+        else if (currentTab === 'highlights') highlights = data;
+        else if (currentTab === 'hotkeys') hotkeys = data;
+        else if (currentTab === 'groups') groups = data;
+        else if (currentTab === 'declared_variables') profileVariables = data;
       }
     } catch (e) {
       console.error(`Failed to fetch data`, e);
@@ -1021,7 +1019,7 @@
         </div>
     {/if}
 
-    {#if ['aliases', 'triggers', 'subs', 'highlights', 'groups', 'hotkeys', 'timers', 'declared_variables'].includes(currentTab)}
+    {#if ['aliases', 'triggers', 'subs', 'highlights', 'groups', 'hotkeys', 'declared_variables'].includes(currentTab)}
         <div class="selector-box">
             <label for="profile-selector">Configuring Profile:</label>
             <select id="profile-selector" bind:value={selectedProfileID}>

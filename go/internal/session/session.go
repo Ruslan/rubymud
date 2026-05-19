@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"net"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -70,7 +71,8 @@ type Session struct {
 }
 
 func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM, initCmds string, mccpOn bool) (*Session, error) {
-	conn, err := net.Dial("tcp", mudAddr)
+	dialer := net.Dialer{KeepAlive: 30 * time.Second}
+	conn, err := dialer.Dial("tcp", mudAddr)
 	if err != nil {
 		return nil, err
 	}
@@ -102,6 +104,8 @@ func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM, initCm
 }
 
 func (s *Session) runCommandDispatcher() {
+	defer s.recoverGoroutine("command dispatcher")
+
 	for {
 		select {
 		case item := <-s.cmdQueue:
@@ -119,6 +123,8 @@ func (s *Session) runCommandDispatcher() {
 }
 
 func (s *Session) runTimerLoop() {
+	defer s.recoverGoroutine("timer loop")
+
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -172,6 +178,13 @@ func (s *Session) runTimerLoop() {
 		case <-s.done:
 			return
 		}
+	}
+}
+
+func (s *Session) recoverGoroutine(name string) {
+	if r := recover(); r != nil {
+		log.Printf("%s panic: %v\n%s", name, r, debug.Stack())
+		_ = s.Close()
 	}
 }
 
@@ -794,6 +807,19 @@ func (s *Session) restoreTimers() {
 		}
 	}
 
+	// Merge scalar fields (icon, repeat_mode) from profile declarations
+	// into runtime timers. Profile declarations are the source of truth for config,
+	// runtime state only tracks dynamic fields (enabled, next_tick_at, remaining_ms).
+	// CycleMS is NOT overridden because the user may have changed it at runtime via #tick set.
+	for name, t := range newTimers {
+		if decl := s.loadProfileTimerDeclaration(name); decl != nil {
+			t.Icon = decl.Icon
+			if decl.RepeatMode != "" {
+				t.RepeatMode = decl.RepeatMode
+			}
+		}
+	}
+
 	// Ensure default ticker exists
 	_, hasTicker := newTimers["ticker"]
 
@@ -960,21 +986,13 @@ func (s *Session) Close() error {
 }
 
 func (s *Session) NotifySettingsChanged(domain string) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	msg := ServerMsg{
 		Type: "settings.changed",
 		Settings: &SettingsChangedJSON{
 			Domain: domain,
 		},
 	}
-
-	for _, client := range s.clients {
-		if err := client.send(msg); err != nil {
-			log.Printf("failed to send settings notification to client %d: %v", client.id, err)
-		}
-	}
+	s.broadcastMsg(msg)
 
 	// Also reload VM state and rebuild compiled caches
 	if err := s.vm.ReloadFromStore(); err != nil {
@@ -983,7 +1001,9 @@ func (s *Session) NotifySettingsChanged(domain string) {
 
 	if domain == "timers" || domain == "profiles" {
 		s.restoreTimers()
+		s.timersMu.Lock()
 		s.BroadcastTick()
+		s.timersMu.Unlock()
 	}
 }
 
