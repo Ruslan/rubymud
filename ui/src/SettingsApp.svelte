@@ -415,24 +415,30 @@
         historyEntries = await histRes.json() || [];
       } else if (currentTab === 'timers' && profiles.length > 0) {
         const timersMap: Record<number, ProfileTimer[]> = {};
+        const nextTimerForms = { ...newTimerForms };
+        const nextSubForms = { ...newSubForms };
+
         for (const p of profiles) {
           const res = await fetch(`/api/profiles/${p.id}/timers`, { headers });
           const list = await res.json() || [];
           timersMap[p.id] = list;
 
           // Pre-initialize newTimerForms for each profile
-          if (!newTimerForms[p.id]) {
-            newTimerForms[p.id] = { name: '', cycle_ms: 1000, icon: '', repeat_mode: 'repeating' };
+          if (!nextTimerForms[p.id]) {
+            nextTimerForms[p.id] = { name: '', cycle_ms: 1000, icon: '', repeat_mode: 'repeating' };
           }
 
           // Pre-initialize newSubForms for each timer
           for (const t of list) {
             const key = `${p.id}|${t.name}`;
-            if (!newSubForms[key]) {
-              newSubForms[key] = { second: 0, command: '', is_removal: false, is_bulk: false };
+            if (!nextSubForms[key]) {
+              nextSubForms[key] = { second: 0, command: '', is_removal: false, is_bulk: false };
             }
           }
         }
+
+        newTimerForms = nextTimerForms;
+        newSubForms = nextSubForms;
         allProfilesTimers = timersMap;
       } else if (['aliases', 'triggers', 'subs', 'highlights', 'hotkeys', 'groups', 'declared_variables'].includes(currentTab) && selectedProfileID) {
         const endpoint = currentTab === 'declared_variables' ? 'variables' : currentTab;
@@ -624,7 +630,7 @@
   function getNewSubForm(profileID: number, timerName: string) {
     const key = `${profileID}|${timerName}`;
     if (!newSubForms[key]) {
-      newSubForms[key] = { second: 0, command: '', is_removal: false, is_bulk: false };
+      newSubForms = { ...newSubForms, [key]: { second: 0, command: '', is_removal: false, is_bulk: false } };
     }
     return newSubForms[key];
   }
@@ -642,12 +648,12 @@
     }
     const subWithOrder = { ...sub, sort_order: maxSort + 1 };
     await saveProfileTimerSubscription(profileID, timerName, subWithOrder);
-    newSubForms[`${profileID}|${timerName}`] = { second: 0, command: '', is_removal: false, is_bulk: false };
+    newSubForms = { ...newSubForms, [`${profileID}|${timerName}`]: { second: 0, command: '', is_removal: false, is_bulk: false } };
   }
 
   function getNewTimerForm(profileID: number) {
     if (!newTimerForms[profileID]) {
-      newTimerForms[profileID] = { name: '', cycle_ms: 1000, icon: '', repeat_mode: 'repeating' };
+      newTimerForms = { ...newTimerForms, [profileID]: { name: '', cycle_ms: 1000, icon: '', repeat_mode: 'repeating' } };
     }
     return newTimerForms[profileID];
   }
@@ -659,7 +665,7 @@
       return;
     }
     await saveProfileTimer(profileID, timer);
-    newTimerForms[profileID] = { name: '', cycle_ms: 1000, icon: '', repeat_mode: 'repeating' };
+    newTimerForms = { ...newTimerForms, [profileID]: { name: '', cycle_ms: 1000, icon: '', repeat_mode: 'repeating' } };
   }
 
   async function sessionAction(action: 'connect' | 'disconnect', id: number) {
