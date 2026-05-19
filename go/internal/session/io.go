@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"rubymud/go/internal/storage"
 	"rubymud/go/internal/vm"
@@ -194,7 +196,10 @@ func (s *Session) processLine(line string) {
 	}
 
 	phaseStartedAt = time.Now()
-	highlighted := s.vm.ApplyHighlights(displayRaw)
+	baseANSI := s.getANSICarry(routing.TargetBuffer)
+	highlighted := s.vm.ApplyHighlightsWithBase(displayRaw, baseANSI)
+	highlighted = preserveOriginalTailANSI(processed, highlighted)
+	s.setANSICarry(routing.TargetBuffer, activeSGRAtEnd(highlighted))
 	highlightDuration += time.Since(phaseStartedAt)
 
 	phaseStartedAt = time.Now()
@@ -230,7 +235,9 @@ func (s *Session) processLine(line string) {
 		if err == nil {
 			echoEntry := storage.LogEntry{ID: echoID, Buffer: echo.TargetBuffer, RawText: echo.Text, PlainText: echoPlain}
 			phaseStartedAt = time.Now()
-			echoHighlighted := s.vm.ApplyHighlights(echo.Text)
+			echoBaseANSI := s.getANSICarry(echo.TargetBuffer)
+			echoHighlighted := s.vm.ApplyHighlightsWithBase(echo.Text, echoBaseANSI)
+			s.setANSICarry(echo.TargetBuffer, activeSGRAtEnd(echoHighlighted))
 			highlightDuration += time.Since(phaseStartedAt)
 			phaseStartedAt = time.Now()
 			s.broadcastEntryWithTextAt(echoEntry, echoHighlighted, lineStartedAt)
@@ -239,6 +246,192 @@ func (s *Session) processLine(line string) {
 	}
 
 	s.finishLineLatency("line", len(line), mudRTT, parseDuration, vmGagDuration, vmTriggersDuration, vmSubsDuration, dbMainDuration, dbExtraDuration, effectsDuration, highlightDuration, wsQueueDuration, time.Since(lineStartedAt))
+}
+
+func (s *Session) getANSICarry(buffer string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ansiCarry == nil {
+		s.ansiCarry = make(map[string]string)
+	}
+	return s.ansiCarry[buffer]
+}
+
+func (s *Session) setANSICarry(buffer, ansi string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.ansiCarry == nil {
+		s.ansiCarry = make(map[string]string)
+	}
+	if ansi == "" {
+		delete(s.ansiCarry, buffer)
+		return
+	}
+	s.ansiCarry[buffer] = ansi
+}
+
+func preserveOriginalTailANSI(originalRaw, transformedRaw string) string {
+	originalTail := activeSGRAtEnd(originalRaw)
+	transformedTail := activeSGRAtEnd(transformedRaw)
+	if transformedTail == originalTail {
+		return transformedRaw
+	}
+	return transformedRaw + "\x1b[0m" + originalTail
+}
+
+type sgrState struct {
+	bold      bool
+	faint     bool
+	italic    bool
+	underline bool
+	blink     bool
+	reverse   bool
+	strike    bool
+	fg        []string
+	bg        []string
+}
+
+func activeSGRAtEnd(raw string) string {
+	var state sgrState
+	for i := 0; i < len(raw); {
+		if raw[i] != 0x1b || i+1 >= len(raw) || raw[i+1] != '[' {
+			_, size := utf8.DecodeRuneInString(raw[i:])
+			if size <= 0 {
+				break
+			}
+			i += size
+			continue
+		}
+		end := i + 2
+		for end < len(raw) && raw[end] != 'm' {
+			end++
+		}
+		if end >= len(raw) {
+			break
+		}
+		state.apply(raw[i+2 : end])
+		i = end + 1
+	}
+	return state.ansi()
+}
+
+func (s *sgrState) apply(params string) {
+	if params == "" {
+		s.reset()
+		return
+	}
+	parts := strings.Split(params, ";")
+	for i := 0; i < len(parts); i++ {
+		code, err := strconv.Atoi(parts[i])
+		if err != nil {
+			continue
+		}
+		switch code {
+		case 0:
+			s.reset()
+		case 1:
+			s.bold = true
+		case 2:
+			s.faint = true
+		case 3:
+			s.italic = true
+		case 4:
+			s.underline = true
+		case 5:
+			s.blink = true
+		case 7:
+			s.reverse = true
+		case 9:
+			s.strike = true
+		case 22:
+			s.bold = false
+			s.faint = false
+		case 23:
+			s.italic = false
+		case 24:
+			s.underline = false
+		case 25:
+			s.blink = false
+		case 27:
+			s.reverse = false
+		case 29:
+			s.strike = false
+		case 39:
+			s.fg = nil
+		case 49:
+			s.bg = nil
+		case 38, 48:
+			consumed := s.applyExtended(parts, i, code)
+			i += consumed
+		case 30, 31, 32, 33, 34, 35, 36, 37, 90, 91, 92, 93, 94, 95, 96, 97:
+			s.fg = []string{parts[i]}
+		case 40, 41, 42, 43, 44, 45, 46, 47, 100, 101, 102, 103, 104, 105, 106, 107:
+			s.bg = []string{parts[i]}
+		}
+	}
+}
+
+func (s *sgrState) applyExtended(parts []string, index int, code int) int {
+	if index+1 >= len(parts) {
+		return 0
+	}
+	mode := parts[index+1]
+	target := &s.fg
+	if code == 48 {
+		target = &s.bg
+	}
+	switch mode {
+	case "5":
+		if index+2 >= len(parts) {
+			return 0
+		}
+		*target = []string{parts[index], parts[index+1], parts[index+2]}
+		return 2
+	case "2":
+		if index+4 >= len(parts) {
+			return 0
+		}
+		*target = []string{parts[index], parts[index+1], parts[index+2], parts[index+3], parts[index+4]}
+		return 4
+	}
+	return 0
+}
+
+func (s *sgrState) reset() { *s = sgrState{} }
+
+func (s *sgrState) ansi() string {
+	var codes []string
+	if s.bold {
+		codes = append(codes, "1")
+	}
+	if s.faint {
+		codes = append(codes, "2")
+	}
+	if s.italic {
+		codes = append(codes, "3")
+	}
+	if s.underline {
+		codes = append(codes, "4")
+	}
+	if s.blink {
+		codes = append(codes, "5")
+	}
+	if s.reverse {
+		codes = append(codes, "7")
+	}
+	if s.strike {
+		codes = append(codes, "9")
+	}
+	if len(s.fg) > 0 {
+		codes = append(codes, s.fg...)
+	}
+	if len(s.bg) > 0 {
+		codes = append(codes, s.bg...)
+	}
+	if len(codes) == 0 {
+		return ""
+	}
+	return "\x1b[" + strings.Join(codes, ";") + "m"
 }
 
 type lineLatencySample struct {

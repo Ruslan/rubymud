@@ -68,6 +68,7 @@ type Session struct {
 	mccpDecompressedBytes atomic.Uint64
 
 	lastCommandAt time.Time
+	ansiCarry     map[string]string
 }
 
 func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM, initCmds string, mccpOn bool) (*Session, error) {
@@ -91,6 +92,7 @@ func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM, initCm
 		readSrc:   conn,
 		initCmds:  initCmds,
 		mccpOn:    mccpOn,
+		ansiCarry: make(map[string]string),
 	}
 
 	s.restoreTimers()

@@ -79,3 +79,46 @@ func TestApplyHighlightsMultipleMatchesWithExistingANSI(t *testing.T) {
 		t.Fatalf("plain text after ANSI-aware multiple-match highlight = %q", stripANSIFromVM(got))
 	}
 }
+
+func TestApplyHighlightsAfterSubWithUnclosedANSI(t *testing.T) {
+	v := New(nil, 1)
+	v.substitutes = []storage.SubstituteRule{{Pattern: `danger`, Replacement: "[31mdanger", Enabled: true}}
+	v.highlights = []storage.HighlightRule{{Pattern: `danger`, FG: "blue", Enabled: true}}
+
+	raw, plain, _ := v.ApplySubsAndCollectOverlays("danger zone", "danger zone")
+	if plain != "danger zone" {
+		t.Fatalf("plain text changed unexpectedly: %q", plain)
+	}
+
+	highlighted := v.ApplyHighlights(raw)
+
+	if !strings.Contains(highlighted, "\x1b[34mdanger\x1b[0m\x1b[31m") {
+		t.Fatalf("expected highlight reset+restore sequence, got %q", highlighted)
+	}
+	if !strings.HasSuffix(highlighted, "\x1b[31m zone") {
+		t.Fatalf("expected unclosed substitute color to remain active after highlight, got %q", highlighted)
+	}
+}
+
+func TestSubAndHighlightChangeTerminalTailStateRepro(t *testing.T) {
+	v := New(nil, 1)
+	v.substitutes = []storage.SubstituteRule{{Pattern: `danger`, Replacement: "[31mdanger", Enabled: true}}
+	v.highlights = []storage.HighlightRule{{Pattern: `danger`, FG: "blue", Enabled: true}}
+
+	original := "danger zone"
+	raw, _, _ := v.ApplySubsAndCollectOverlays(original, original)
+	highlighted := v.ApplyHighlights(raw)
+
+	originalTail := activeANSIAt(original, len(original))
+	highlightedTail := activeANSIAt(highlighted, len(highlighted))
+
+	if originalTail != "" {
+		t.Fatalf("expected original tail ANSI state to be empty, got %q", originalTail)
+	}
+	if highlightedTail == "" {
+		t.Fatalf("expected highlighted tail ANSI state to stay active (bug repro), got empty in %q", highlighted)
+	}
+	if highlightedTail != "\x1b[31m" {
+		t.Fatalf("expected highlighted tail ANSI state to be red, got %q", highlightedTail)
+	}
+}

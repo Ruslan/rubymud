@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run"
   },
   "keywords": [],
   "author": "",
@@ -13,10 +14,12 @@
   "description": "",
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
+    "jsdom": "^26.1.0",
     "svelte": "^5.55.4",
     "tslib": "^2.8.1",
     "typescript": "^6.0.3",
-    "vite": "^8.0.9"
+    "vite": "^8.0.9",
+    "vitest": "^3.2.4"
   },
   "dependencies": {
     "@fontsource/fira-code": "^5.2.7",

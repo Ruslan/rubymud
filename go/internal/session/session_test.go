@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -317,6 +318,162 @@ func TestVariableUpdateAppliesImmediatelyInLiveSession(t *testing.T) {
 
 	if got := conn.String(); got != "wield sword\n" {
 		t.Fatalf("live variable substitution write = %q, want %q", got, "wield sword\n")
+	}
+}
+
+func TestLineWithUnclosedSubColorCanLeakToNextLine(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles failed: %v", err)
+	}
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+
+	sess := &Session{
+		sessionID: 1,
+		conn:      &recordingConn{},
+		store:     store,
+		vm:        v,
+		clients:   map[int]clientSink{},
+	}
+
+	if err := sess.SendCommand("#sub {danger} {[31mdanger}", "input"); err != nil {
+		t.Fatalf("SendCommand(#sub): %v", err)
+	}
+	if err := sess.SendCommand("#highlight {blue} {danger}", "input"); err != nil {
+		t.Fatalf("SendCommand(#highlight): %v", err)
+	}
+
+	var out []string
+	sess.AttachClient("test", func(msg ServerMsg) error {
+		if msg.Type != "output" {
+			return nil
+		}
+		for _, e := range msg.Entries {
+			out = append(out, e.Text)
+		}
+		return nil
+	})
+	sess.beginOutputBatch()
+	sess.processLine("danger zone")
+	sess.processLine("plain next")
+	sess.flushOutputBatch()
+
+	if len(out) < 2 {
+		t.Fatalf("expected at least 2 broadcasted lines, got %d (%q)", len(out), out)
+	}
+
+	first := out[0]
+	second := out[1]
+
+	if !strings.Contains(first, "\x1b[34mdanger\x1b[0m\x1b[31m") {
+		t.Fatalf("expected first line to contain highlight reset+restore sequence, got %q", first)
+	}
+	if strings.Contains(second, "\x1b[") {
+		t.Fatalf("expected second line payload to have no ANSI codes, got %q", second)
+	}
+}
+
+func TestHighlightPreservesOuterColorWithinSameLine(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles failed: %v", err)
+	}
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+
+	sess := &Session{
+		sessionID: 1,
+		conn:      &recordingConn{},
+		store:     store,
+		vm:        v,
+		clients:   map[int]clientSink{},
+	}
+
+	if err := sess.SendCommand("#highlight {blue} {Стражник}", "input"); err != nil {
+		t.Fatalf("SendCommand(#highlight): %v", err)
+	}
+
+	var out []string
+	sess.AttachClient("test", func(msg ServerMsg) error {
+		if msg.Type != "output" {
+			return nil
+		}
+		for _, e := range msg.Entries {
+			out = append(out, e.Text)
+		}
+		return nil
+	})
+
+	sess.beginOutputBatch()
+	sess.processLine("\x1b[31mНаемный Стражник проходит мимо.")
+	sess.flushOutputBatch()
+
+	if len(out) == 0 {
+		t.Fatalf("expected at least 1 broadcasted line, got %d", len(out))
+	}
+
+	line := out[0]
+	if !strings.Contains(line, "\x1b[34mСтражник\x1b[0m\x1b[31m") {
+		t.Fatalf("expected highlight reset+restore sequence, got %q", line)
+	}
+	if !strings.Contains(line, "\x1b[31m проходит мимо.") {
+		t.Fatalf("expected tail text to remain in outer red color, got %q", line)
+	}
+}
+
+func TestHighlightRestoresInheritedOuterColorAcrossLines(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles failed: %v", err)
+	}
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+
+	sess := &Session{
+		sessionID: 1,
+		conn:      &recordingConn{},
+		store:     store,
+		vm:        v,
+		clients:   map[int]clientSink{},
+	}
+
+	if err := sess.SendCommand("#highlight {blue} {стражник}", "input"); err != nil {
+		t.Fatalf("SendCommand(#highlight): %v", err)
+	}
+
+	var out []string
+	sess.AttachClient("test", func(msg ServerMsg) error {
+		if msg.Type != "output" {
+			return nil
+		}
+		for _, e := range msg.Entries {
+			out = append(out, e.Text)
+		}
+		return nil
+	})
+
+	sess.beginOutputBatch()
+	sess.processLine("\x1b[31mПервая строка открывает красный")
+	sess.processLine("Наемный стражник проходит мимо.")
+	sess.flushOutputBatch()
+
+	if len(out) < 2 {
+		t.Fatalf("expected at least 2 broadcasted lines, got %d (%q)", len(out), out)
+	}
+
+	second := out[1]
+	if !strings.Contains(second, "\x1b[34mстражник\x1b[0m\x1b[31m") {
+		t.Fatalf("expected blue highlight with restored inherited red on second line, got %q", second)
+	}
+	if !strings.Contains(second, "\x1b[31m проходит мимо.") {
+		t.Fatalf("expected tail text to remain red on second line, got %q", second)
 	}
 }
 

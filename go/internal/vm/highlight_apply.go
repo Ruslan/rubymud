@@ -7,6 +7,10 @@ import (
 )
 
 func (v *VM) ApplyHighlights(text string) string {
+	return v.ApplyHighlightsWithBase(text, "")
+}
+
+func (v *VM) ApplyHighlightsWithBase(text, baseANSI string) string {
 	v.ensureFresh()
 
 	plainText := stripANSIFromVM(text)
@@ -46,7 +50,7 @@ func (v *VM) ApplyHighlights(text string) string {
 				continue
 			}
 			matched := text[rawStart:rawEnd]
-			restore := activeANSIAt(text, rawEnd)
+			restore := activeANSIAtWithBase(text, rawEnd, baseANSI)
 			text = text[:rawStart] + ansi + matched + resetANSI() + restore + text[rawEnd:]
 		}
 	}
@@ -129,7 +133,12 @@ type ansiState struct {
 }
 
 func activeANSIAt(raw string, offset int) string {
+	return activeANSIAtWithBase(raw, offset, "")
+}
+
+func activeANSIAtWithBase(raw string, offset int, baseANSI string) string {
 	var state ansiState
+	applyANSISequence(&state, baseANSI)
 	for i := 0; i < len(raw) && i < offset; {
 		if raw[i] != 0x1b || i+1 >= len(raw) || raw[i+1] != '[' {
 			_, size := utf8.DecodeRuneInString(raw[i:])
@@ -153,6 +162,28 @@ func activeANSIAt(raw string, offset int) string {
 	}
 
 	return state.ansi()
+}
+
+func applyANSISequence(state *ansiState, raw string) {
+	for i := 0; i < len(raw); {
+		if raw[i] != 0x1b || i+1 >= len(raw) || raw[i+1] != '[' {
+			_, size := utf8.DecodeRuneInString(raw[i:])
+			if size <= 0 {
+				break
+			}
+			i += size
+			continue
+		}
+		end := i + 2
+		for end < len(raw) && raw[end] != 'm' {
+			end++
+		}
+		if end >= len(raw) {
+			break
+		}
+		state.apply(raw[i+2 : end])
+		i = end + 1
+	}
 }
 
 func (s *ansiState) apply(params string) {
