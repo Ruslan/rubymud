@@ -10,6 +10,8 @@ Use this when you need to inspect runtime data in SQLite.
 
 ## Quick start
 
+Interactive shell:
+
 ```bash
 sqlite3 "data/mudhost.db"
 ```
@@ -18,6 +20,20 @@ One-shot query:
 
 ```bash
 sqlite3 "data/mudhost.db" "SELECT 1;"
+```
+
+Executing query with dot-commands (e.g. formatting/mode options) in one-shot mode:
+
+> [!IMPORTANT]
+> Do NOT mix dot-commands (like `.mode line`) and SQL statements in a single string argument (e.g., `sqlite3 db ".mode line\nSELECT ..."`). SQLite treats the entire argument as a single SQL block and will fail on dot-commands.
+> Instead, use one of the following:
+
+```bash
+# Option A: Use dedicated CLI flags (like -line, -column, -header)
+sqlite3 -line "data/mudhost.db" "SELECT * FROM log_entries LIMIT 1;"
+
+# Option B: Pipe dot-commands and SQL statements via stdin
+echo -e ".mode line\nSELECT * FROM log_entries LIMIT 1;" | sqlite3 "data/mudhost.db"
 ```
 
 ## Useful tables

@@ -196,10 +196,7 @@ func (s *Session) processLine(line string) {
 	}
 
 	phaseStartedAt = time.Now()
-	baseANSI := s.getANSICarry(routing.TargetBuffer)
-	highlighted := s.vm.ApplyHighlightsWithBase(displayRaw, baseANSI)
-	highlighted = preserveOriginalTailANSI(processed, highlighted)
-	s.setANSICarry(routing.TargetBuffer, activeSGRAtEnd(highlighted))
+	highlighted := s.renderHighlightedForBuffer(routing.TargetBuffer, displayRaw, processed)
 	highlightDuration += time.Since(phaseStartedAt)
 
 	phaseStartedAt = time.Now()
@@ -219,8 +216,9 @@ func (s *Session) processLine(line string) {
 			copyEntry := entry
 			copyEntry.ID = copyID
 			copyEntry.Buffer = copyBuffer
+			copyHighlighted := s.renderHighlightedForBuffer(copyBuffer, displayRaw, processed)
 			phaseStartedAt = time.Now()
-			s.broadcastEntryWithTextAt(copyEntry, highlighted, lineStartedAt)
+			s.broadcastEntryWithTextAt(copyEntry, copyHighlighted, lineStartedAt)
 			wsQueueDuration += time.Since(phaseStartedAt)
 		}
 	}
@@ -235,9 +233,7 @@ func (s *Session) processLine(line string) {
 		if err == nil {
 			echoEntry := storage.LogEntry{ID: echoID, Buffer: echo.TargetBuffer, RawText: echo.Text, PlainText: echoPlain}
 			phaseStartedAt = time.Now()
-			echoBaseANSI := s.getANSICarry(echo.TargetBuffer)
-			echoHighlighted := s.vm.ApplyHighlightsWithBase(echo.Text, echoBaseANSI)
-			s.setANSICarry(echo.TargetBuffer, activeSGRAtEnd(echoHighlighted))
+			echoHighlighted := s.renderHighlightedForBuffer(echo.TargetBuffer, echo.Text, echo.Text)
 			highlightDuration += time.Since(phaseStartedAt)
 			phaseStartedAt = time.Now()
 			s.broadcastEntryWithTextAt(echoEntry, echoHighlighted, lineStartedAt)
@@ -270,13 +266,21 @@ func (s *Session) setANSICarry(buffer, ansi string) {
 	s.ansiCarry[buffer] = ansi
 }
 
-func preserveOriginalTailANSI(originalRaw, transformedRaw string) string {
-	originalTail := activeSGRAtEnd(originalRaw)
-	transformedTail := activeSGRAtEnd(transformedRaw)
+func preserveOriginalTailANSIWithBase(originalRaw, transformedRaw, baseANSI string) string {
+	originalTail := activeSGRAtEndWithBase(originalRaw, baseANSI)
+	transformedTail := activeSGRAtEndWithBase(transformedRaw, baseANSI)
 	if transformedTail == originalTail {
 		return transformedRaw
 	}
 	return transformedRaw + "\x1b[0m" + originalTail
+}
+
+func (s *Session) renderHighlightedForBuffer(buffer, displayRaw, originalRaw string) string {
+	baseANSI := s.getANSICarry(buffer)
+	highlighted := s.vm.ApplyHighlightsWithBase(displayRaw, baseANSI)
+	highlighted = preserveOriginalTailANSIWithBase(originalRaw, highlighted, baseANSI)
+	s.setANSICarry(buffer, activeSGRAtEndWithBase(highlighted, baseANSI))
+	return highlighted
 }
 
 type sgrState struct {
@@ -292,7 +296,17 @@ type sgrState struct {
 }
 
 func activeSGRAtEnd(raw string) string {
+	return activeSGRAtEndWithBase(raw, "")
+}
+
+func activeSGRAtEndWithBase(raw, baseANSI string) string {
 	var state sgrState
+	applySGRSequence(&state, baseANSI)
+	applySGRSequence(&state, raw)
+	return state.ansi()
+}
+
+func applySGRSequence(state *sgrState, raw string) {
 	for i := 0; i < len(raw); {
 		if raw[i] != 0x1b || i+1 >= len(raw) || raw[i+1] != '[' {
 			_, size := utf8.DecodeRuneInString(raw[i:])
@@ -312,7 +326,6 @@ func activeSGRAtEnd(raw string) string {
 		state.apply(raw[i+2 : end])
 		i = end + 1
 	}
-	return state.ansi()
 }
 
 func (s *sgrState) apply(params string) {

@@ -477,6 +477,190 @@ func TestHighlightRestoresInheritedOuterColorAcrossLines(t *testing.T) {
 	}
 }
 
+func TestHighlightRepro_786729_786731_MagentaStrazhnik(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles failed: %v", err)
+	}
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+
+	sess := &Session{
+		sessionID: 1,
+		conn:      &recordingConn{},
+		store:     store,
+		vm:        v,
+		clients:   map[int]clientSink{},
+	}
+
+	if err := sess.SendCommand("#highlight {magenta} {стражник}", "input"); err != nil {
+		t.Fatalf("SendCommand(#highlight): %v", err)
+	}
+
+	var out []string
+	sess.AttachClient("test", func(msg ServerMsg) error {
+		if msg.Type != "output" {
+			return nil
+		}
+		for _, e := range msg.Entries {
+			out = append(out, e.Text)
+		}
+		return nil
+	})
+
+	sess.beginOutputBatch()
+	sess.processLine("\x1b[1;33m\x1b[1;31mНадменный эльф игнорирует Вас.")
+	sess.processLine("Наемный стражник проходит мимо.")
+	sess.processLine("Толстый стражник стоит здесь, опираясь на алебарду.")
+	sess.flushOutputBatch()
+
+	if len(out) < 3 {
+		t.Fatalf("expected at least 3 broadcasted lines, got %d (%q)", len(out), out)
+	}
+
+	second := out[1]
+	if !strings.Contains(second, "\x1b[35mстражник\x1b[0m\x1b[1;31m") {
+		t.Fatalf("expected magenta highlight with restored inherited red on second line, got %q", second)
+	}
+	if !strings.Contains(second, "\x1b[1;31m проходит мимо.") {
+		t.Fatalf("expected second line tail text to remain inherited red, got %q", second)
+	}
+
+	third := out[2]
+	if !strings.Contains(third, "\x1b[35mстражник\x1b[0m\x1b[1;31m") {
+		t.Fatalf("expected magenta highlight with restored inherited red on third line, got %q", third)
+	}
+	if !strings.Contains(third, "\x1b[1;31m стоит здесь") {
+		t.Fatalf("expected third line tail text to remain inherited red, got %q", third)
+	}
+}
+
+func TestHighlightAtEndOfLinePreservesCarryToNextLine(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles failed: %v", err)
+	}
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+
+	sess := &Session{
+		sessionID: 1,
+		conn:      &recordingConn{},
+		store:     store,
+		vm:        v,
+		clients:   map[int]clientSink{},
+	}
+
+	if err := sess.SendCommand("#highlight {magenta} {стражник}", "input"); err != nil {
+		t.Fatalf("SendCommand(#highlight): %v", err)
+	}
+
+	var out []string
+	sess.AttachClient("test", func(msg ServerMsg) error {
+		if msg.Type != "output" {
+			return nil
+		}
+		for _, e := range msg.Entries {
+			out = append(out, e.Text)
+		}
+		return nil
+	})
+
+	sess.beginOutputBatch()
+	sess.processLine("\x1b[1;31mПрефикс")
+	sess.processLine("Толстый стражник")
+	sess.processLine("Еще один стражник идет")
+	sess.flushOutputBatch()
+
+	if len(out) < 3 {
+		t.Fatalf("expected at least 3 broadcasted lines, got %d (%q)", len(out), out)
+	}
+
+	second := out[1]
+	if !strings.Contains(second, "\x1b[35mстражник\x1b[0m\x1b[1;31m") {
+		t.Fatalf("expected end-of-line highlight to restore inherited red, got %q", second)
+	}
+
+	third := out[2]
+	if !strings.Contains(third, "\x1b[35mстражник\x1b[0m\x1b[1;31m") {
+		t.Fatalf("expected carry to survive into next line and restore red after highlight, got %q", third)
+	}
+	if !strings.Contains(third, "\x1b[1;31m идет") {
+		t.Fatalf("expected third line tail to remain red, got %q", third)
+	}
+}
+
+func TestHighlightCarryIsIndependentForCopyBuffer(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles failed: %v", err)
+	}
+	if err := store.CreateTrigger(storage.TriggerRule{
+		ProfileID:    1,
+		Pattern:      `копия`,
+		Command:      "",
+		Enabled:      true,
+		TargetBuffer: "kills",
+		BufferAction: "copy",
+	}); err != nil {
+		t.Fatalf("CreateTrigger(copy): %v", err)
+	}
+
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+
+	sess := &Session{sessionID: 1, conn: &recordingConn{}, store: store, vm: v, clients: map[int]clientSink{}}
+	if err := sess.SendCommand("#highlight {magenta} {стражник}", "input"); err != nil {
+		t.Fatalf("SendCommand(#highlight): %v", err)
+	}
+
+	mainOut := []string{}
+	killsOut := []string{}
+	sess.AttachClient("test", func(msg ServerMsg) error {
+		if msg.Type != "output" {
+			return nil
+		}
+		for _, e := range msg.Entries {
+			if e.Buffer == "kills" {
+				killsOut = append(killsOut, e.Text)
+			} else {
+				mainOut = append(mainOut, e.Text)
+			}
+		}
+		return nil
+	})
+
+	sess.beginOutputBatch()
+	sess.processLine("\x1b[1;31mГлавный красный")
+	sess.processLine("строка без копии")
+	sess.processLine("здесь копия и стражник")
+	sess.processLine("следом стражник")
+	sess.flushOutputBatch()
+
+	if len(mainOut) < 4 {
+		t.Fatalf("expected 4 main lines, got %d (%q)", len(mainOut), mainOut)
+	}
+	if len(killsOut) < 1 {
+		t.Fatalf("expected copied line in kills buffer, got %d (%q)", len(killsOut), killsOut)
+	}
+
+	if !strings.Contains(mainOut[3], "\x1b[35mстражник\x1b[0m\x1b[1;31m") {
+		t.Fatalf("expected main buffer to keep inherited red before 4th line highlight, got %q", mainOut[3])
+	}
+	if !strings.Contains(killsOut[0], "\x1b[35mстражник\x1b[0m") {
+		t.Fatalf("expected copied line to contain highlighted стражник, got %q", killsOut[0])
+	}
+	if strings.Contains(killsOut[0], "\x1b[1;31m") {
+		t.Fatalf("expected copied buffer not to inherit main red carry, got %q", killsOut[0])
+	}
+}
+
 func newTestStore(t *testing.T) *storage.Store {
 	t.Helper()
 
