@@ -40,6 +40,8 @@ func (v *VM) compileEffectivePattern(template, effective string) *regexp.Regexp 
 }
 
 func (v *VM) CheckGag(plainText string) (storage.LogOverlay, bool) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	v.ensureFresh()
 	for i := range v.substitutes {
 		rule := &v.substitutes[i]
@@ -74,6 +76,8 @@ func (v *VM) CheckGag(plainText string) (storage.LogOverlay, bool) {
 }
 
 func (v *VM) ApplySubsAndCollectOverlays(rawText, plainText string) (string, string, []storage.LogOverlay) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	v.ensureFresh()
 	displayRaw := rawText
 	displayPlain := plainText

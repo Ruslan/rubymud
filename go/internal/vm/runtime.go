@@ -32,10 +32,14 @@ func New(store *storage.Store, sessionID int64) *VM {
 }
 
 func (v *VM) SetTimerControl(tc TimerControl) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	v.timerCtrl = tc
 }
 
 func (v *VM) SetTTS(fn func(string)) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	v.ttsFn = fn
 	v.ttsCustom = true
 }
@@ -49,6 +53,12 @@ func (v *VM) primaryProfileID() int64 {
 }
 
 func (v *VM) Reload() error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return v.reloadLocked()
+}
+
+func (v *VM) reloadLocked() error {
 	if v.store == nil {
 		return nil
 	}
@@ -132,10 +142,13 @@ func (v *VM) Reload() error {
 // ReloadFromStore reloads raw rules from the backing store and rebuilds all
 // compiled caches so that external/UI edits are visible immediately.
 func (v *VM) ReloadFromStore() error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+
 	if v.store == nil {
 		return nil
 	}
-	if err := v.Reload(); err != nil {
+	if err := v.reloadLocked(); err != nil {
 		return err
 	}
 	v.loadedRulesVersion = v.rulesVersion
@@ -148,7 +161,7 @@ func (v *VM) ensureFresh() {
 		return
 	}
 	if v.store != nil {
-		if err := v.Reload(); err != nil {
+		if err := v.reloadLocked(); err != nil {
 			// Runtime must continue operating even if refresh fails.
 			log.Printf("vm reload error: %v", err)
 			return
@@ -181,8 +194,44 @@ func (v *VM) rebuildCaches() {
 	v.effectivePatternCache = make(map[string]*regexp.Regexp)
 }
 
-func (v *VM) Aliases() []storage.AliasRule          { return v.aliases }
-func (v *VM) Variables() map[string]string          { return v.variables }
-func (v *VM) Triggers() []storage.TriggerRule       { return v.triggers }
-func (v *VM) Highlights() []storage.HighlightRule   { return v.highlights }
-func (v *VM) Substitutes() []storage.SubstituteRule { return v.substitutes }
+func (v *VM) Aliases() []storage.AliasRule {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	out := make([]storage.AliasRule, len(v.aliases))
+	copy(out, v.aliases)
+	return out
+}
+
+func (v *VM) Variables() map[string]string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	out := make(map[string]string, len(v.variables))
+	for k, val := range v.variables {
+		out[k] = val
+	}
+	return out
+}
+
+func (v *VM) Triggers() []storage.TriggerRule {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	out := make([]storage.TriggerRule, len(v.triggers))
+	copy(out, v.triggers)
+	return out
+}
+
+func (v *VM) Highlights() []storage.HighlightRule {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	out := make([]storage.HighlightRule, len(v.highlights))
+	copy(out, v.highlights)
+	return out
+}
+
+func (v *VM) Substitutes() []storage.SubstituteRule {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	out := make([]storage.SubstituteRule, len(v.substitutes))
+	copy(out, v.substitutes)
+	return out
+}

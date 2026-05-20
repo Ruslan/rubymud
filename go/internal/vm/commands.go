@@ -15,11 +15,15 @@ func (v *VM) ProcessInput(input string) []string {
 }
 
 func (v *VM) ProcessInputDetailed(input string) []Result {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	v.ensureFresh()
 	return v.evalLine(input, 0, nil)
 }
 
 func (v *VM) ProcessInputWithCaptures(input string, captures []string) []Result {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	v.ensureFresh()
 	return v.evalLine(input, 0, captures)
 }

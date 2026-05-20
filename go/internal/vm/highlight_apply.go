@@ -11,6 +11,8 @@ func (v *VM) ApplyHighlights(text string) string {
 }
 
 func (v *VM) ApplyHighlightsWithBase(text, baseANSI string) string {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	v.ensureFresh()
 
 	plainText := stripANSIFromVM(text)

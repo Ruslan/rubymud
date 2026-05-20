@@ -2,6 +2,7 @@ package vm
 
 import (
 	"regexp"
+	"sync"
 
 	"rubymud/go/internal/storage"
 )
@@ -70,6 +71,7 @@ type compiledHighlight struct {
 }
 
 type VM struct {
+	mu                    sync.Mutex
 	store                 *storage.Store
 	sessionID             int64
 	aliases               []storage.AliasRule

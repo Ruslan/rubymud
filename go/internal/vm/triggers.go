@@ -8,6 +8,8 @@ import (
 var triggerCaptureRef = regexp.MustCompile(`%(\d+)`)
 
 func (v *VM) MatchTriggers(plainText string) ([]Effect, RoutingInfo) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
 	v.ensureFresh()
 
 	var effects []Effect
@@ -76,8 +78,10 @@ func (v *VM) ApplyEffects(effects []Effect, entryID int64, buffer string, sendFn
 				}
 			}
 		case "button":
-			if err := v.store.AppendButtonOverlay(e.LogEntryID, e.Label, e.Command); err != nil {
-				log.Printf("button overlay error: %v", err)
+			if v.store != nil {
+				if err := v.store.AppendButtonOverlay(e.LogEntryID, e.Label, e.Command); err != nil {
+					log.Printf("button overlay error: %v", err)
+				}
 			}
 			buttons = append(buttons, e)
 		}
