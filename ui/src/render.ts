@@ -76,6 +76,28 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     }
   }
 
+  function addCurrentPaneBuffers(target: Set<string>) {
+    for (const col of layout.columns) {
+      for (const pane of col.panes) {
+        if (pane.buffer) {
+          target.add(pane.buffer);
+        }
+      }
+    }
+  }
+
+  function setAvailableBuffers(names: string[]) {
+    knownBuffers.clear();
+    knownBuffers.add('main');
+    for (const name of names) {
+      if (name) {
+        knownBuffers.add(name);
+      }
+    }
+    addCurrentPaneBuffers(knownBuffers);
+    updateAllSelects();
+  }
+
   function saveLayout() {
     localStorage.setItem('pane-layout', JSON.stringify(layout));
   }
@@ -383,7 +405,11 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
   function updateSelectOptions(select: HTMLSelectElement, selectedValue: string) {
     select.innerHTML = '';
-    const sortedBuffers = Array.from(knownBuffers).sort();
+    const options = new Set(knownBuffers);
+    if (selectedValue) {
+      options.add(selectedValue);
+    }
+    const sortedBuffers = Array.from(options).sort();
     for (const buf of sortedBuffers) {
       const opt = document.createElement('option');
       opt.value = buf;
@@ -569,9 +595,6 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
   function clearOutput() {
     bufferData.clear();
-    knownBuffers.clear();
-    knownBuffers.add('main');
-    // Preserve bindings — they will be re-populated as entries arrive in restore_begin.
     renderedPanes.forEach(pane => {
       pane.outputEl.innerHTML = '';
       updateScrollButtonVisibility(pane);
@@ -981,6 +1004,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     appendEntry,
     appendEntries,
     clearOutput,
+    setAvailableBuffers,
     renderHotkeys,
     renderVariables,
     renderGroups,

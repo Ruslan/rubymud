@@ -466,6 +466,7 @@ function attachSocketHandlers(target: WebSocket) {
       });
       state.restoreInProgress = true;
       renderer.clearOutput();
+      renderer.setAvailableBuffers(Object.keys(message.buffers || {}));
       history.merge(message.history || []);
       configuredHotkeys = message.hotkeys || [];
       renderer.renderHotkeys(configuredHotkeys);
