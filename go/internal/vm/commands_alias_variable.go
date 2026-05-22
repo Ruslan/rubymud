@@ -96,18 +96,23 @@ func (v *VM) cmdVariable(rest string, depth int) []Result {
 		return echoResults([]string{fmt.Sprintf("#variable: %s not found", name)}, depth)
 	}
 
+	normalizedName := strings.TrimSpace(name)
+	if err := storage.ValidateVariableName(normalizedName); err != nil {
+		return echoResults([]string{"#variable: invalid name; use {kast2} and reference it as $kast2"}, depth)
+	}
+
 	if v.store != nil {
-		if err := v.store.SetVariable(v.sessionID, name, value); err != nil {
+		if err := v.store.SetVariable(v.sessionID, normalizedName, value); err != nil {
 			return echoResults([]string{fmt.Sprintf("#variable: save error: %v", err)}, depth)
 		}
 		v.rulesVersion++
 		v.ensureFresh()
 	} else {
-		v.variables[name] = value
+		v.variables[normalizedName] = value
 		v.rulesVersion++
 	}
 
-	return echoResults([]string{fmt.Sprintf("#variable {%s} = {%s}", name, value)}, depth)
+	return echoResults([]string{fmt.Sprintf("#variable {%s} = {%s}", normalizedName, value)}, depth)
 }
 
 func (v *VM) cmdUnvariable(rest string, depth int) []Result {

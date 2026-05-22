@@ -1,5 +1,25 @@
 package storage
 
+import (
+	"errors"
+	"fmt"
+	"strings"
+)
+
+var ErrInvalidVariableName = errors.New("invalid variable name")
+var ErrVariableNotFound = errors.New("variable not found")
+
+func ValidateVariableName(name string) error {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
+		return ErrInvalidVariableName
+	}
+	if strings.HasPrefix(trimmed, "$") {
+		return fmt.Errorf("%w: variable name must not start with '$'", ErrInvalidVariableName)
+	}
+	return nil
+}
+
 type Variable struct {
 	SessionID int64      `gorm:"primaryKey" json:"session_id"`
 	Scope     string     `gorm:"primaryKey;default:'session'" json:"scope"`
@@ -28,6 +48,9 @@ func (s *Store) LoadVariables(sessionID int64) (map[string]string, error) {
 }
 
 func (s *Store) SetVariable(sessionID int64, key, value string) error {
+	if err := ValidateVariableName(key); err != nil {
+		return err
+	}
 	v := Variable{
 		SessionID: sessionID,
 		Scope:     "session",
@@ -39,5 +62,12 @@ func (s *Store) SetVariable(sessionID int64, key, value string) error {
 }
 
 func (s *Store) DeleteVariable(sessionID int64, key string) error {
-	return s.db.Where("session_id = ? AND scope = 'session' AND key = ?", sessionID, key).Delete(&Variable{}).Error
+	result := s.db.Where("session_id = ? AND scope = 'session' AND key = ?", sessionID, key).Delete(&Variable{})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrVariableNotFound
+	}
+	return nil
 }

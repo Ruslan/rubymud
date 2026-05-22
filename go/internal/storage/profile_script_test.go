@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -149,6 +150,23 @@ func TestImportProfileScript_DeepIntegration(t *testing.T) {
 	}
 	if len(ps2.Substitutes) != 2 || ps2.Substitutes[0].Pattern != "$target1" || !ps2.Substitutes[1].IsGag {
 		t.Errorf("Exported substitute rules mismatch: %+v", ps2.Substitutes)
+	}
+}
+
+func TestImportProfileScript_RejectsDollarPrefixedDeclaredVariable(t *testing.T) {
+	s := newProfileTestStore(t)
+
+	ps, err := ParseProfileScript("#nop Profile: BadVars\n#var {$bad} {1}\n")
+	if err != nil {
+		t.Fatalf("ParseProfileScript: %v", err)
+	}
+
+	_, err = s.ImportProfileScript(ps)
+	if err == nil {
+		t.Fatalf("expected ImportProfileScript to reject dollar-prefixed declared variable")
+	}
+	if !errors.Is(err, ErrInvalidVariableName) {
+		t.Fatalf("expected ErrInvalidVariableName, got %v", err)
 	}
 }
 

@@ -484,23 +484,37 @@
     const method = isUpdate ? 'PUT' : 'POST';
     const body = domain === 'variables' ? { key: newVarKey, value: newVarValue } : item;
 
-    await fetch(url, {
+    const resp = await fetch(url, {
       method,
       headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
       body: JSON.stringify(body)
     });
+    if (!resp.ok) {
+      formError = await resp.text() || `Failed to save ${domain}.`;
+      return;
+    }
     resetFn();
     await fetchData();
   }
 
   function validateItem(domain: string, item: any): string {
-    if (domain === 'variables') return !newVarKey.trim() ? 'Variable key is required.' : '';
+    if (domain === 'variables') {
+      const key = newVarKey.trim();
+      if (!key) return 'Variable key is required.';
+      if (key.startsWith('$')) return "Variable key cannot start with '$'.";
+      return '';
+    }
     if (domain === 'aliases') return !item.name?.trim() ? 'Alias name is required.' : (!item.template?.trim() ? 'Alias template is required.' : '');
     if (domain === 'triggers') return !item.pattern?.trim() ? 'Trigger pattern is required.' : (!item.command?.trim() ? 'Trigger command is required.' : '');
     if (domain === 'subs') return !item.pattern?.trim() ? 'Substitution pattern is required.' : '';
     if (domain === 'highlights') return !item.pattern?.trim() ? 'Highlight pattern is required.' : '';
     if (domain === 'hotkeys') return !item.shortcut?.trim() ? 'Shortcut is required.' : (!item.command?.trim() ? 'Command is required.' : '');
-    if (domain === 'declared_variables') return !item.name?.trim() ? 'Variable name is required.' : '';
+    if (domain === 'declared_variables') {
+      const name = item.name?.trim() || '';
+      if (!name) return 'Variable name is required.';
+      if (name.startsWith('$')) return "Variable name cannot start with '$'.";
+      return '';
+    }
     if (domain === 'sessions') return !item.name?.trim() ? 'Session name is required.' : (!item.mud_host?.trim() ? 'MUD host is required.' : (!item.mud_port ? 'MUD port is required.' : ''));
     if (domain === 'profiles') return !item.name?.trim() ? 'Profile name is required.' : '';
     return '';
@@ -519,7 +533,11 @@
         const endpoint = domain === 'declared_variables' ? 'variables' : domain;
         url = `/api/profiles/${selectedProfileID}/${endpoint}/${id}`;
     }
-    await fetch(url, { method: 'DELETE', headers: { 'X-Session-Token': token } });
+    const resp = await fetch(url, { method: 'DELETE', headers: { 'X-Session-Token': token } });
+    if (!resp.ok) {
+      formError = await resp.text() || `Failed to delete ${domain.slice(0, -1)}.`;
+      return;
+    }
     await fetchData();
   }
 

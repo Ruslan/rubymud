@@ -2,6 +2,8 @@ package storage
 
 import "errors"
 
+var ErrProfileVariableNotFound = errors.New("profile variable not found")
+
 func (s *Store) ListProfileVariables(profileID int64) ([]ProfileVariable, error) {
 	var vars []ProfileVariable
 	err := s.db.Where("profile_id = ?", profileID).Order("position ASC").Find(&vars).Error
@@ -9,6 +11,10 @@ func (s *Store) ListProfileVariables(profileID int64) ([]ProfileVariable, error)
 }
 
 func (s *Store) CreateProfileVariable(profileID int64, name, defaultValue, description string) (ProfileVariable, error) {
+	if err := ValidateVariableName(name); err != nil {
+		return ProfileVariable{}, err
+	}
+
 	var maxPos int
 	s.db.Model(&ProfileVariable{}).Where("profile_id = ?", profileID).Select("COALESCE(MAX(position), 0)").Scan(&maxPos)
 
@@ -25,6 +31,10 @@ func (s *Store) CreateProfileVariable(profileID int64, name, defaultValue, descr
 }
 
 func (s *Store) UpdateProfileVariable(pv ProfileVariable) error {
+	if err := ValidateVariableName(pv.Name); err != nil {
+		return err
+	}
+
 	pv.UpdatedAt = nowSQLiteTime()
 	result := s.db.Model(&ProfileVariable{}).
 		Where("id = ? AND profile_id = ?", pv.ID, pv.ProfileID).
@@ -39,7 +49,7 @@ func (s *Store) UpdateProfileVariable(pv ProfileVariable) error {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return errors.New("profile variable not found")
+		return ErrProfileVariableNotFound
 	}
 	return nil
 }
@@ -50,7 +60,7 @@ func (s *Store) DeleteProfileVariable(id, profileID int64) error {
 		return result.Error
 	}
 	if result.RowsAffected == 0 {
-		return errors.New("profile variable not found")
+		return ErrProfileVariableNotFound
 	}
 	return nil
 }

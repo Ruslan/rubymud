@@ -92,3 +92,36 @@ func TestVariableInTriggerCommand(t *testing.T) {
 		t.Errorf("$таргет in trigger command = %v, want [у крыса]", commands)
 	}
 }
+
+func TestCmdVariableRejectsDollarPrefixedNameOnSet(t *testing.T) {
+	v := New(nil, 1)
+	results := v.dispatchCommand("#var {$bad} {1}", 0, nil)
+
+	if len(results) == 0 {
+		t.Fatalf("expected error result from #var set")
+	}
+	if results[0].Kind != ResultEcho {
+		t.Fatalf("expected echo result, got %q", results[0].Kind)
+	}
+	if results[0].Text == "" {
+		t.Fatalf("expected non-empty error message")
+	}
+	if _, ok := v.variables["$bad"]; ok {
+		t.Fatalf("$bad variable should not be created")
+	}
+}
+
+func TestCmdVariableRejectsWhitespaceNameOnSet(t *testing.T) {
+	v := New(nil, 1)
+	results := v.dispatchCommand("#var {   } {1}", 0, nil)
+
+	if len(results) == 0 {
+		t.Fatalf("expected error result from #var set")
+	}
+	if results[0].Kind != ResultEcho {
+		t.Fatalf("expected echo result, got %q", results[0].Kind)
+	}
+	if _, ok := v.variables["   "]; ok {
+		t.Fatalf("whitespace-only variable should not be created")
+	}
+}

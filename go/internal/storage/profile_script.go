@@ -762,6 +762,9 @@ func (s *Store) ImportProfileScript(ps *ProfileScript) (Profile, error) {
 	}
 
 	for _, dv := range ps.DeclaredVariables {
+		if err := ValidateVariableName(dv.Name); err != nil {
+			return Profile{}, err
+		}
 		dv.ProfileID = p.ID
 		dv.UpdatedAt = nowSQLiteTime()
 		if err := tx.Create(&dv).Error; err != nil {

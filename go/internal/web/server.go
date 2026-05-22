@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -407,7 +408,12 @@ func (s *Server) setVariable(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	v.Key = strings.TrimSpace(v.Key)
 	if err := s.store.SetVariable(id, v.Key, v.Value); err != nil {
+		if errors.Is(err, storage.ErrInvalidVariableName) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -423,12 +429,20 @@ func (s *Server) deleteVariable(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	key := chi.URLParam(r, "key")
+	key, err := url.PathUnescape(chi.URLParam(r, "key"))
+	if err != nil {
+		http.Error(w, "invalid key", http.StatusBadRequest)
+		return
+	}
 	if key == "" {
 		http.Error(w, "missing key", http.StatusBadRequest)
 		return
 	}
 	if err := s.store.DeleteVariable(id, key); err != nil {
+		if errors.Is(err, storage.ErrVariableNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1889,8 +1903,13 @@ func (s *Server) createProfileVariable(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	v.Name = strings.TrimSpace(v.Name)
 	res, err := s.store.CreateProfileVariable(pid, v.Name, v.DefaultValue, v.Description)
 	if err != nil {
+		if errors.Is(err, storage.ErrInvalidVariableName) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1920,7 +1939,16 @@ func (s *Server) updateProfileVariable(w http.ResponseWriter, r *http.Request) {
 	}
 	v.ID = id
 	v.ProfileID = pid
+	v.Name = strings.TrimSpace(v.Name)
 	if err := s.store.UpdateProfileVariable(v); err != nil {
+		if errors.Is(err, storage.ErrInvalidVariableName) {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if errors.Is(err, storage.ErrProfileVariableNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -1942,6 +1970,10 @@ func (s *Server) deleteProfileVariable(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := s.store.DeleteProfileVariable(id, pid); err != nil {
+		if errors.Is(err, storage.ErrProfileVariableNotFound) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

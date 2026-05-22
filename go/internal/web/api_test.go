@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 	"unsafe"
 
 	"github.com/glebarez/sqlite"
@@ -75,6 +76,92 @@ func TestVariablesAPI(t *testing.T) {
 	// 3. Verify VM reloaded
 	if v := sess.Variables()["test_var"]; v != "test_val" {
 		t.Fatalf("VM variable = %q, want %q", v, "test_val")
+	}
+}
+
+func TestVariablesAPIRejectsDollarPrefixedName(t *testing.T) {
+	s, sess := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	sessionID := sess.SessionID()
+	payload, _ := json.Marshal(map[string]string{
+		"key":   "$bad",
+		"value": "test_val",
+	})
+	url := fmt.Sprintf("%s/api/sessions/%d/variables", ts.URL, sessionID)
+	req, err := newAuthenticatedRequest(http.MethodPost, url, bytes.NewBuffer(payload), s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(POST %s): %v", url, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("POST %s status = %d, want 400", url, resp.StatusCode)
+	}
+}
+
+func TestVariablesAPIDeleteNotFound(t *testing.T) {
+	s, sess := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	sessionID := sess.SessionID()
+	url := fmt.Sprintf("%s/api/sessions/%d/variables/%s", ts.URL, sessionID, "missing_var")
+	req, err := newAuthenticatedRequest(http.MethodDelete, url, nil, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(DELETE %s): %v", url, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE %s: %v", url, err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("DELETE %s status = %d, want 404", url, resp.StatusCode)
+	}
+}
+
+func TestVariablesAPIDeletesExistingDollarPrefixedName(t *testing.T) {
+	s, sess := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	sessionID := sess.SessionID()
+	if err := s.store.DB().Create(&storage.Variable{
+		SessionID: sessionID,
+		Scope:     "session",
+		Key:       "$kast2",
+		Value:     "Бриган",
+		UpdatedAt: storage.SQLiteTime{Time: time.Now().UTC()},
+	}).Error; err != nil {
+		t.Fatalf("insert legacy dollar-prefixed variable: %v", err)
+	}
+
+	url := fmt.Sprintf("%s/api/sessions/%d/variables/%%24kast2", ts.URL, sessionID)
+	req, err := newAuthenticatedRequest(http.MethodDelete, url, nil, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(DELETE %s): %v", url, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE %s: %v", url, err)
+	}
+	if resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("DELETE %s status = %d, want 204: %s", url, resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var count int64
+	if err := s.store.DB().Model(&storage.Variable{}).
+		Where("session_id = ? AND scope = 'session' AND key = ?", sessionID, "$kast2").
+		Count(&count).Error; err != nil {
+		t.Fatalf("count legacy dollar-prefixed variable: %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("legacy dollar-prefixed variable still exists after DELETE")
 	}
 }
 
@@ -147,6 +234,51 @@ func TestAliasesAPI(t *testing.T) {
 	}
 	if resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("DELETE status = %d, want 204", resp.StatusCode)
+	}
+}
+
+func TestProfileVariablesAPIUpdateNotFound(t *testing.T) {
+	s, _ := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	url := fmt.Sprintf("%s/api/profiles/1/variables/999999", ts.URL)
+	payload, _ := json.Marshal(map[string]any{
+		"name":          "ok_name",
+		"default_value": "value",
+		"description":   "desc",
+		"position":      1,
+	})
+	req, err := newAuthenticatedRequest(http.MethodPut, url, bytes.NewBuffer(payload), s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(PUT %s): %v", url, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT %s: %v", url, err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("PUT %s status = %d, want 404", url, resp.StatusCode)
+	}
+}
+
+func TestProfileVariablesAPIDeleteNotFound(t *testing.T) {
+	s, _ := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	url := fmt.Sprintf("%s/api/profiles/1/variables/999999", ts.URL)
+	req, err := newAuthenticatedRequest(http.MethodDelete, url, nil, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(DELETE %s): %v", url, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE %s: %v", url, err)
+	}
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("DELETE %s status = %d, want 404", url, resp.StatusCode)
 	}
 }
 
