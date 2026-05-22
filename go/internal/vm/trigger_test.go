@@ -391,3 +391,52 @@ func TestTriggerVarInPatternReloadFromStoreVariableChange(t *testing.T) {
 		t.Fatalf("old stored $lider=Игрок should no longer match after reload, got %d effects", len(effects))
 	}
 }
+
+func TestActionVariableInPatternAndCommandBody(t *testing.T) {
+	v := New(nil, 1)
+	v.ProcessInputDetailed("#variable {mob} {Гоблин}")
+	v.ProcessInputDetailed("#action {$mob игнорирует} {миг $mob}")
+
+	if len(v.triggers) != 1 {
+		t.Fatalf("expected one trigger, got %d", len(v.triggers))
+	}
+	if v.triggers[0].Pattern != `$mob игнорирует` {
+		t.Fatalf("#action should preserve pattern template, got %q", v.triggers[0].Pattern)
+	}
+	if v.triggers[0].Command != `миг $mob` {
+		t.Fatalf("#action should preserve command template, got %q", v.triggers[0].Command)
+	}
+
+	effects, _ := v.MatchTriggers("Гоблин игнорирует")
+	if len(effects) != 1 {
+		t.Fatalf("trigger with $mob=Гоблин should match, got %d effects", len(effects))
+	}
+
+	var sent []string
+	v.ApplyEffects(effects, 0, "main", func(cmd string, _ int64, _ string) error {
+		sent = append(sent, cmd)
+		return nil
+	}, func(Result) {})
+	if len(sent) != 1 || sent[0] != "миг Гоблин" {
+		t.Fatalf("ApplyEffects sent %v, want [миг Гоблин]", sent)
+	}
+
+	v.ProcessInputDetailed("#variable {mob} {Орк}")
+	effects, _ = v.MatchTriggers("Орк игнорирует")
+	if len(effects) != 1 {
+		t.Fatalf("trigger should rebuild for updated $mob=Орк, got %d effects", len(effects))
+	}
+	sent = nil
+	v.ApplyEffects(effects, 0, "main", func(cmd string, _ int64, _ string) error {
+		sent = append(sent, cmd)
+		return nil
+	}, func(Result) {})
+	if len(sent) != 1 || sent[0] != "миг Орк" {
+		t.Fatalf("ApplyEffects after $mob update sent %v, want [миг Орк]", sent)
+	}
+
+	effects, _ = v.MatchTriggers("Гоблин игнорирует")
+	if len(effects) != 0 {
+		t.Fatalf("old $mob=Гоблин should no longer match, got %d effects", len(effects))
+	}
+}
