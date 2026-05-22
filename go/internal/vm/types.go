@@ -62,30 +62,37 @@ type TimerControl interface {
 }
 
 type compiledTrigger struct {
-	re   *regexp.Regexp
-	rule storage.TriggerRule
+	matcher CompiledMatcher
+	rule    storage.TriggerRule
 }
 
 type compiledHighlight struct {
-	ansi string
+	matcher CompiledMatcher
+	ansi    string
+	rule    storage.HighlightRule
+}
+
+type compiledSubstitute struct {
+	matcher CompiledMatcher
+	rule    storage.SubstituteRule
 }
 
 type VM struct {
-	mu                    sync.Mutex
-	store                 *storage.Store
-	sessionID             int64
-	aliases               []storage.AliasRule
-	triggers              []storage.TriggerRule
-	highlights            []storage.HighlightRule
-	substitutes           []storage.SubstituteRule
-	variables             map[string]string
-	varPattern            *regexp.Regexp
-	ttsFn                 func(string)
-	ttsCustom             bool
-	timerCtrl             TimerControl
-	rulesVersion          int64
-	loadedRulesVersion    int64
-	compiledTriggers      []compiledTrigger
-	compiledHighlights    []compiledHighlight
-	effectivePatternCache map[string]*regexp.Regexp
+	mu                  sync.Mutex
+	store               *storage.Store
+	sessionID           int64
+	aliases             []storage.AliasRule
+	triggers            []storage.TriggerRule
+	highlights          []storage.HighlightRule
+	substitutes         []storage.SubstituteRule
+	variables           map[string]string
+	varPattern          *regexp.Regexp
+	ttsFn               func(string)
+	ttsCustom           bool
+	timerCtrl           TimerControl
+	rulesVersion        int64
+	loadedRulesVersion  int64
+	compiledTriggers    []compiledTrigger
+	compiledHighlights  []compiledHighlight
+	compiledSubstitutes []compiledSubstitute
 }

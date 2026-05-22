@@ -29,6 +29,20 @@ The engine aims for **TinTin++ compatibility** at the syntax level. This allows 
 - **Wildcards**: `%0`-%`9` (capture), `%%` (no-capture), `^` (start of line).
 - **Regex**: Support for PCRE-style regex via `/pattern/` (JMC style) or `$pattern` (Tortilla style).
 
+## Pattern Template Matchers
+
+Pattern-based rules (`#action`, `#sub`, `#gag`, `#highlight`) must store the user-authored pattern template and use the shared compiled matcher layer.
+
+- Do not expand `$var` when saving pattern rules.
+- Pattern variables are resolved during matcher compilation, not on every incoming line.
+- Variable values inside patterns must be treated as literals with `regexp.QuoteMeta`.
+- Undefined `$var` in pattern templates expands to an empty string.
+- Variable changes rebuild compiled matchers; do not add ad-hoc regex caches in individual consumers.
+- MUD-style editor patterns such as `%1 hits %2` should first be treated as a UI/editor projection to stored regex when possible.
+- Do not add a native non-regex matcher unless benchmarks show the compiled regex path is still a bottleneck.
+
+Keep the matcher abstraction minimal. Prefer `CompiledMatcher` with a regex field while storage and runtime remain regex-based.
+
 ## Key Components
 
 - **`go/internal/vm`**: Core parser and evaluator for commands and expressions.

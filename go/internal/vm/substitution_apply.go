@@ -2,7 +2,6 @@ package vm
 
 import (
 	"encoding/json"
-	"log"
 	"regexp"
 	"strconv"
 
@@ -25,50 +24,34 @@ type gagPayload struct {
 	EffectivePattern string `json:"effective_pattern"`
 }
 
-func (v *VM) compileEffectivePattern(template, effective string) *regexp.Regexp {
-	if re, ok := v.effectivePatternCache[effective]; ok {
-		return re
-	}
-	re, err := regexp.Compile(effective)
-	if err != nil {
-		log.Printf("pattern compile error template=%q effective=%q: %v", template, effective, err)
-		v.effectivePatternCache[effective] = nil
-		return nil
-	}
-	v.effectivePatternCache[effective] = re
-	return re
-}
-
 func (v *VM) CheckGag(plainText string) (storage.LogOverlay, bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.ensureFresh()
-	for i := range v.substitutes {
-		rule := &v.substitutes[i]
-		if !rule.Enabled || !rule.IsGag {
+	for i := range v.compiledSubstitutes {
+		cs := &v.compiledSubstitutes[i]
+		if !cs.rule.Enabled || !cs.rule.IsGag {
 			continue
 		}
-		effectivePattern := v.substitutePatternVars(rule.Pattern)
-		re := v.compileEffectivePattern(rule.Pattern, effectivePattern)
-		if re == nil {
+		if cs.matcher.Regex == nil {
 			continue
 		}
-		matches := re.FindAllStringIndex(plainText, -1)
+		matches := cs.matcher.Regex.FindAllStringIndex(plainText, -1)
 		for _, loc := range matches {
 			if loc[0] == loc[1] {
 				continue
 			}
 			payload, _ := json.Marshal(gagPayload{
-				RuleID:           rule.ID,
-				PatternTemplate:  rule.Pattern,
-				EffectivePattern: effectivePattern,
+				RuleID:           cs.rule.ID,
+				PatternTemplate:  cs.rule.Pattern,
+				EffectivePattern: cs.matcher.EffectivePattern,
 			})
 			return storage.LogOverlay{
 				OverlayType: "gag",
 				Layer:       0,
 				PayloadJSON: string(payload),
 				SourceType:  "substitute_rule",
-				SourceID:    strconv.FormatInt(rule.ID, 10),
+				SourceID:    strconv.FormatInt(cs.rule.ID, 10),
 			}, true
 		}
 	}
@@ -84,17 +67,15 @@ func (v *VM) ApplySubsAndCollectOverlays(rawText, plainText string) (string, str
 	var overlays []storage.LogOverlay
 	layer := 1
 
-	for i := range v.substitutes {
-		rule := &v.substitutes[i]
-		if !rule.Enabled || rule.IsGag {
+	for i := range v.compiledSubstitutes {
+		cs := &v.compiledSubstitutes[i]
+		if !cs.rule.Enabled || cs.rule.IsGag {
 			continue
 		}
-		effectivePattern := v.substitutePatternVars(rule.Pattern)
-		re := v.compileEffectivePattern(rule.Pattern, effectivePattern)
-		if re == nil {
+		if cs.matcher.Regex == nil {
 			continue
 		}
-		matches := re.FindAllStringSubmatchIndex(displayPlain, -1)
+		matches := cs.matcher.Regex.FindAllStringSubmatchIndex(displayPlain, -1)
 		if len(matches) == 0 {
 			continue
 		}
@@ -110,15 +91,15 @@ func (v *VM) ApplySubsAndCollectOverlays(rawText, plainText string) (string, str
 				continue
 			}
 
-			replacementTemplate := v.substituteVars(rule.Replacement)
+			replacementTemplate := v.substituteVars(cs.rule.Replacement)
 			replacementRaw := expandSubstitutionCaptures(replacementTemplate, displayPlain, loc)
 			replacementPlain := stripANSIFromVM(replacementRaw)
 			payload, _ := json.Marshal(substitutionPayload{
 				ReplacementRaw:   replacementRaw,
 				ReplacementPlain: replacementPlain,
-				RuleID:           rule.ID,
-				PatternTemplate:  rule.Pattern,
-				EffectivePattern: effectivePattern,
+				RuleID:           cs.rule.ID,
+				PatternTemplate:  cs.rule.Pattern,
+				EffectivePattern: cs.matcher.EffectivePattern,
 			})
 			startOffset := start
 			endOffset := end
@@ -129,7 +110,7 @@ func (v *VM) ApplySubsAndCollectOverlays(rawText, plainText string) (string, str
 				EndOffset:   &endOffset,
 				PayloadJSON: string(payload),
 				SourceType:  "substitute_rule",
-				SourceID:    strconv.FormatInt(rule.ID, 10),
+				SourceID:    strconv.FormatInt(cs.rule.ID, 10),
 			})
 			layer++
 
@@ -139,16 +120,6 @@ func (v *VM) ApplySubsAndCollectOverlays(rawText, plainText string) (string, str
 	}
 
 	return displayRaw, displayPlain, overlays
-}
-
-func (v *VM) substitutePatternVars(template string) string {
-	return v.varPattern.ReplaceAllStringFunc(template, func(match string) string {
-		name := match[1:]
-		if value, ok := v.variables[name]; ok {
-			return regexp.QuoteMeta(value)
-		}
-		return regexp.QuoteMeta(match)
-	})
 }
 
 func expandSubstitutionCaptures(template, plainText string, indices []int) string {

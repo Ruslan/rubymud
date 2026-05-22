@@ -16,26 +16,19 @@ func (v *VM) ApplyHighlightsWithBase(text, baseANSI string) string {
 	v.ensureFresh()
 
 	plainText := stripANSIFromVM(text)
-	for i := range v.highlights {
-		rule := &v.highlights[i]
-		if !rule.Enabled {
+	for i := range v.compiledHighlights {
+		ch := &v.compiledHighlights[i]
+		if !ch.rule.Enabled {
 			continue
 		}
-		if i >= len(v.compiledHighlights) {
+		if ch.ansi == "" {
 			continue
 		}
-		ansi := v.compiledHighlights[i].ansi
-		if ansi == "" {
-			continue
-		}
-
-		effectivePattern := v.substitutePatternVars(rule.Pattern)
-		re := v.compileEffectivePattern(rule.Pattern, effectivePattern)
-		if re == nil {
+		if ch.matcher.Regex == nil {
 			continue
 		}
 
-		allLocs := re.FindAllStringIndex(plainText, -1)
+		allLocs := ch.matcher.Regex.FindAllStringIndex(plainText, -1)
 		if len(allLocs) == 0 {
 			continue
 		}
@@ -53,7 +46,7 @@ func (v *VM) ApplyHighlightsWithBase(text, baseANSI string) string {
 			}
 			matched := text[rawStart:rawEnd]
 			restore := activeANSIAtWithBase(text, rawEnd, baseANSI)
-			text = text[:rawStart] + ansi + matched + resetANSI() + restore + text[rawEnd:]
+			text = text[:rawStart] + ch.ansi + matched + resetANSI() + restore + text[rawEnd:]
 		}
 	}
 	return text

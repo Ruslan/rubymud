@@ -19,11 +19,11 @@ func (v *VM) MatchTriggers(plainText string) ([]Effect, RoutingInfo) {
 		if !ct.rule.Enabled {
 			continue
 		}
-		if ct.re == nil {
+		if ct.matcher.Regex == nil {
 			continue
 		}
 
-		matches := ct.re.FindStringSubmatch(plainText)
+		matches := ct.matcher.Regex.FindStringSubmatch(plainText)
 		if matches == nil {
 			continue
 		}

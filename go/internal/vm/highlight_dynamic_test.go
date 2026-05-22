@@ -65,7 +65,7 @@ func TestDynamicHighlightVariableChange(t *testing.T) {
 	}
 }
 
-func TestDynamicHighlightCacheCorrectness(t *testing.T) {
+func TestDynamicHighlightCompiledMatcherReusedWhenFresh(t *testing.T) {
 	v := New(nil, 1)
 	v.variables["enemy"] = "Крыса"
 	v.highlights = []storage.HighlightRule{
@@ -75,16 +75,16 @@ func TestDynamicHighlightCacheCorrectness(t *testing.T) {
 	v.loadedRulesVersion = 1
 
 	v.ApplyHighlights("Атакует Крыса!")
-	cacheSize1 := len(v.effectivePatternCache)
+	if len(v.compiledHighlights) != 1 || v.compiledHighlights[0].matcher.Regex == nil {
+		t.Fatal("expected highlight matcher to be compiled")
+	}
+	first := v.compiledHighlights[0].matcher.Regex
 
 	v.ApplyHighlights("Еще Крыса!")
-	cacheSize2 := len(v.effectivePatternCache)
+	second := v.compiledHighlights[0].matcher.Regex
 
-	if cacheSize1 != cacheSize2 {
-		t.Errorf("expected effectivePatternCache size to remain %d, got %d", cacheSize1, cacheSize2)
-	}
-	if cacheSize1 != 1 {
-		t.Errorf("expected cache size to be 1, got %d", cacheSize1)
+	if first != second {
+		t.Errorf("expected compiled highlight matcher to be reused while VM is fresh")
 	}
 }
 
@@ -117,8 +117,8 @@ func TestDynamicHighlightUnknownVariable(t *testing.T) {
 	v.loadedRulesVersion = 1
 
 	got := v.ApplyHighlights("literal $unknown text")
-	if !strings.Contains(got, "\x1b[31m$unknown\x1b[0m") {
-		t.Errorf("expected literal '$unknown' to be highlighted, got %q", got)
+	if strings.Contains(got, "\x1b[31m") {
+		t.Errorf("expected undefined variable $unknown to expand to empty string and NOT match, got %q", got)
 	}
 }
 
@@ -142,8 +142,8 @@ func TestDynamicHighlightUnvariable(t *testing.T) {
 	if strings.Contains(got2, "\x1b[31mКрыса\x1b[0m") {
 		t.Errorf("expected 'Крыса' NOT to be highlighted after unvariable, got %q", got2)
 	}
-	if !strings.Contains(got2, "\x1b[31m$enemy\x1b[0m") {
-		t.Errorf("expected literal '$enemy' to be highlighted after unvariable, got %q", got2)
+	if strings.Contains(got2, "\x1b[31m") {
+		t.Errorf("expected undefined variable after unvariable to expand to empty string and NOT match, got %q", got2)
 	}
 }
 

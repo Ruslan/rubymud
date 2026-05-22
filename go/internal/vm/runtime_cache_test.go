@@ -1,7 +1,6 @@
 package vm
 
 import (
-	"regexp"
 	"testing"
 
 	"rubymud/go/internal/storage"
@@ -94,8 +93,8 @@ func TestHighlightCachePrecomputesANSI(t *testing.T) {
 	if v.compiledHighlights[0].ansi == "" {
 		t.Fatal("expected precomputed ansi string")
 	}
-	if len(v.effectivePatternCache) == 0 {
-		t.Fatal("expected effective pattern to be cached")
+	if v.compiledHighlights[0].matcher.Regex == nil {
+		t.Fatal("expected highlight matcher to be compiled")
 	}
 
 	got2 := v.ApplyHighlights("test")
@@ -104,7 +103,7 @@ func TestHighlightCachePrecomputesANSI(t *testing.T) {
 	}
 }
 
-func TestEffectivePatternCacheForVariables(t *testing.T) {
+func TestCompiledSubstituteRebuildsForVariableChange(t *testing.T) {
 	v := New(nil, 1)
 	v.variables["target"] = "orc"
 	v.substitutes = []storage.SubstituteRule{
@@ -117,12 +116,12 @@ func TestEffectivePatternCacheForVariables(t *testing.T) {
 	if raw != "monster" || plain != "monster" {
 		t.Fatalf("first apply = %q/%q, want monster", raw, plain)
 	}
-	if len(v.effectivePatternCache) == 0 {
-		t.Fatal("expected effectivePatternCache to be populated")
+	if len(v.compiledSubstitutes) != 1 || v.compiledSubstitutes[0].matcher.Regex == nil {
+		t.Fatal("expected substitute matcher to be compiled")
 	}
 
 	v.variables["target"] = "goblin"
-	v.effectivePatternCache = make(map[string]*regexp.Regexp)
+	v.rulesVersion++
 
 	raw, plain, _ = v.ApplySubsAndCollectOverlays("goblin", "goblin")
 	if raw != "monster" || plain != "monster" {
@@ -130,7 +129,7 @@ func TestEffectivePatternCacheForVariables(t *testing.T) {
 	}
 }
 
-func TestVariableChangeClearsEffectivePatternCache(t *testing.T) {
+func TestVariableChangeRebuildsCompiledSubstitutes(t *testing.T) {
 	v := New(nil, 1)
 	v.variables["target"] = "orc"
 	v.substitutes = []storage.SubstituteRule{
@@ -140,17 +139,20 @@ func TestVariableChangeClearsEffectivePatternCache(t *testing.T) {
 	v.loadedRulesVersion = 1
 
 	v.ApplySubsAndCollectOverlays("orc", "orc")
-	if len(v.effectivePatternCache) == 0 {
-		t.Fatal("expected cache populated")
-	}
+	first := v.compiledSubstitutes[0].matcher.EffectivePattern
 
 	v.ProcessInputDetailed("#variable {target} {goblin}")
-	if len(v.effectivePatternCache) != 0 {
-		t.Fatalf("expected cache cleared after variable change, got %d entries", len(v.effectivePatternCache))
+	raw, plain, _ := v.ApplySubsAndCollectOverlays("goblin", "goblin")
+	if raw != "monster" || plain != "monster" {
+		t.Fatalf("apply after variable change = %q/%q, want monster", raw, plain)
+	}
+	second := v.compiledSubstitutes[0].matcher.EffectivePattern
+	if first == second {
+		t.Fatalf("expected compiled matcher to rebuild with new effective pattern, still %q", second)
 	}
 }
 
-func TestRebuildCachesClearsEffectivePatternCache(t *testing.T) {
+func TestRebuildCachesCompilesSubstitutes(t *testing.T) {
 	v := New(nil, 1)
 	v.substitutes = []storage.SubstituteRule{
 		{ID: 1, Pattern: "foo", Replacement: "bar", Enabled: true},
@@ -159,14 +161,14 @@ func TestRebuildCachesClearsEffectivePatternCache(t *testing.T) {
 	v.loadedRulesVersion = 1
 
 	v.ApplySubsAndCollectOverlays("foo", "foo")
-	if len(v.effectivePatternCache) == 0 {
-		t.Fatal("expected cache populated")
+	if len(v.compiledSubstitutes) != 1 || v.compiledSubstitutes[0].matcher.Regex == nil {
+		t.Fatal("expected substitute matcher compiled")
 	}
 
 	v.rulesVersion = 3
 	v.ensureFresh()
-	if len(v.effectivePatternCache) != 0 {
-		t.Fatalf("expected cache cleared after rebuild, got %d entries", len(v.effectivePatternCache))
+	if len(v.compiledSubstitutes) != 1 || v.compiledSubstitutes[0].matcher.Regex == nil {
+		t.Fatalf("expected substitute matcher after rebuild, got %+v", v.compiledSubstitutes)
 	}
 }
 

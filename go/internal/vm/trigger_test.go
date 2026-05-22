@@ -249,3 +249,145 @@ func TestArcticTriggerCancelStand(t *testing.T) {
 		t.Errorf("cancel;stand expansion = %v, want [cancel, stand]", commands)
 	}
 }
+
+func TestTriggerVarInPatternUndefinedExpandsEmpty(t *testing.T) {
+	v := New(nil, 1)
+	v.triggers = []storage.TriggerRule{
+		{Pattern: `^$lider сказал$`, Command: "echo matched", Enabled: true},
+	}
+	v.ensureFresh()
+
+	effects, _ := v.MatchTriggers(` сказал`)
+	if len(effects) != 1 {
+		t.Fatalf("undefined $lider should expand to empty string and match empty prefix, got %d effects", len(effects))
+	}
+
+	effects, _ = v.MatchTriggers(`$lider сказал`)
+	if len(effects) != 0 {
+		t.Errorf("undefined $lider should not match literal '$lider', got %d effects", len(effects))
+	}
+}
+
+func TestTriggerVarInPatternWithVarDefined(t *testing.T) {
+	v := New(nil, 1)
+	v.variables["lider"] = "Игрок"
+	v.triggers = []storage.TriggerRule{
+		{Pattern: `^$lider сказа(л|ла) группе: "сост"$`, Command: "echo matched", Enabled: true},
+	}
+	v.ensureFresh()
+
+	effects, _ := v.MatchTriggers(`Игрок сказал группе: "сост"`)
+	if len(effects) != 1 {
+		t.Fatalf("trigger with $lider=Игрок should match, got %d effects", len(effects))
+	}
+	if effects[0].Command != "echo matched" {
+		t.Errorf("command = %q, want %q", effects[0].Command, "echo matched")
+	}
+
+	effects, _ = v.MatchTriggers(`Игрок сказала группе: "сост"`)
+	if len(effects) != 1 {
+		t.Errorf("said 'сказала' should also match (л|ла), got %d effects", len(effects))
+	}
+
+	effects, _ = v.MatchTriggers(`Босс сказал группе: "сост"`)
+	if len(effects) != 0 {
+		t.Errorf("should NOT match with wrong name, got %d effects", len(effects))
+	}
+}
+
+func TestTriggerVarInPatternViaActionCommand(t *testing.T) {
+	v := New(nil, 1)
+	v.variables["lider"] = "Босс"
+
+	v.dispatchCommand("#action {^$lider сказа(л|ла) группе: \"сост\"$} {echo ok}", 0, nil)
+	if len(v.triggers) != 1 {
+		t.Fatalf("expected one trigger, got %d", len(v.triggers))
+	}
+	if v.triggers[0].Pattern != `^$lider сказа(л|ла) группе: "сост"$` {
+		t.Fatalf("#action should preserve pattern template, got %q", v.triggers[0].Pattern)
+	}
+	v.ensureFresh()
+
+	effects, _ := v.MatchTriggers(`Босс сказал группе: "сост"`)
+	if len(effects) != 1 {
+		t.Fatalf("trigger via #action with $lider=Босс should match, got %d effects", len(effects))
+	}
+}
+
+func TestTriggerVarInPatternRebuildsAfterVariableChange(t *testing.T) {
+	v := New(nil, 1)
+	v.variables["lider"] = "Игрок"
+	v.triggers = []storage.TriggerRule{
+		{Pattern: `^$lider сказал$`, Command: "echo matched", Enabled: true},
+	}
+
+	effects, _ := v.MatchTriggers(`Игрок сказал`)
+	if len(effects) != 1 {
+		t.Fatalf("initial $lider=Игрок should match, got %d effects", len(effects))
+	}
+
+	v.ProcessInputDetailed("#variable {lider} {Босс}")
+
+	effects, _ = v.MatchTriggers(`Босс сказал`)
+	if len(effects) != 1 {
+		t.Fatalf("updated $lider=Босс should match, got %d effects", len(effects))
+	}
+	effects, _ = v.MatchTriggers(`Игрок сказал`)
+	if len(effects) != 0 {
+		t.Fatalf("old $lider=Игрок should no longer match, got %d effects", len(effects))
+	}
+}
+
+func TestTriggerVarInPatternQuotesVariableLiteral(t *testing.T) {
+	v := New(nil, 1)
+	v.variables["lider"] = "A.B"
+	v.triggers = []storage.TriggerRule{
+		{Pattern: `^$lider says$`, Command: "echo matched", Enabled: true},
+	}
+
+	effects, _ := v.MatchTriggers(`A.B says`)
+	if len(effects) != 1 {
+		t.Fatalf("literal variable value should match, got %d effects", len(effects))
+	}
+
+	effects, _ = v.MatchTriggers(`AxB says`)
+	if len(effects) != 0 {
+		t.Fatalf("quoted variable value should not act as regex wildcard, got %d effects", len(effects))
+	}
+}
+
+func TestTriggerVarInPatternReloadFromStoreVariableChange(t *testing.T) {
+	store := newRuntimeTestStore(t)
+	v := New(store, 1)
+
+	if err := store.SaveTrigger(1, `^$lider сказал$`, "echo matched", false, "default"); err != nil {
+		t.Fatalf("SaveTrigger: %v", err)
+	}
+	if err := store.SetVariable(1, "lider", "Игрок"); err != nil {
+		t.Fatalf("SetVariable: %v", err)
+	}
+	if err := v.ReloadFromStore(); err != nil {
+		t.Fatalf("ReloadFromStore: %v", err)
+	}
+
+	effects, _ := v.MatchTriggers(`Игрок сказал`)
+	if len(effects) != 1 {
+		t.Fatalf("stored $lider=Игрок should match, got %d effects", len(effects))
+	}
+
+	if err := store.SetVariable(1, "lider", "Босс"); err != nil {
+		t.Fatalf("SetVariable: %v", err)
+	}
+	if err := v.ReloadFromStore(); err != nil {
+		t.Fatalf("ReloadFromStore after variable change: %v", err)
+	}
+
+	effects, _ = v.MatchTriggers(`Босс сказал`)
+	if len(effects) != 1 {
+		t.Fatalf("stored $lider=Босс should match after reload, got %d effects", len(effects))
+	}
+	effects, _ = v.MatchTriggers(`Игрок сказал`)
+	if len(effects) != 0 {
+		t.Fatalf("old stored $lider=Игрок should no longer match after reload, got %d effects", len(effects))
+	}
+}

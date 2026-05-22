@@ -24,7 +24,6 @@ func (v *VM) cmdAction(rest string, depth int) []Result {
 	}
 
 	pattern, afterPattern := splitBraceArg(rest)
-	pattern = v.substituteVars(pattern)
 	command, afterCommand := splitBraceArg(afterPattern)
 	group, afterGroup := splitBraceArg(afterCommand)
 	group = v.substituteVars(group)

@@ -81,7 +81,7 @@ func TestApplySubsANSIPreservation(t *testing.T) {
 	}
 }
 
-func TestApplySubsUnknownVariableStaysLiteral(t *testing.T) {
+func TestApplySubsUnknownVariableExpandsEmptyAndDoesNotMatch(t *testing.T) {
 	v := New(nil, 0)
 	// $unknown is not in v.variables
 	v.substitutes = []storage.SubstituteRule{{
@@ -90,12 +90,13 @@ func TestApplySubsUnknownVariableStaysLiteral(t *testing.T) {
 		Replacement: "found $unknown",
 		Enabled:     true,
 	}}
+	v.rulesVersion = 2
+	v.loadedRulesVersion = 1
 
 	raw := "$unknown text"
 	displayRaw, _, _ := v.ApplySubsAndCollectOverlays(raw, raw)
-	want := "found $unknown text"
-	if displayRaw != want {
-		t.Fatalf("unknown variable display = %q, want %q", displayRaw, want)
+	if displayRaw != raw {
+		t.Fatalf("undefined pattern variable display = %q, want unchanged %q", displayRaw, raw)
 	}
 }
 

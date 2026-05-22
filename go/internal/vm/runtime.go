@@ -11,13 +11,12 @@ import (
 
 func New(store *storage.Store, sessionID int64) *VM {
 	v := &VM{
-		store:                 store,
-		sessionID:             sessionID,
-		variables:             make(map[string]string),
-		varPattern:            regexp.MustCompile(`\$([\p{L}\p{N}_]+)`),
-		rulesVersion:          1,
-		loadedRulesVersion:    0,
-		effectivePatternCache: make(map[string]*regexp.Regexp),
+		store:              store,
+		sessionID:          sessionID,
+		variables:          make(map[string]string),
+		varPattern:         regexp.MustCompile(`\$([\p{L}\p{N}_]+)`),
+		rulesVersion:       1,
+		loadedRulesVersion: 0,
 	}
 
 	if runtime.GOOS == "darwin" {
@@ -172,26 +171,38 @@ func (v *VM) ensureFresh() {
 }
 
 func (v *VM) rebuildCaches() {
+	matcherCache := make(map[string]*regexp.Regexp)
+
 	v.compiledTriggers = v.compiledTriggers[:0]
 	for i := range v.triggers {
 		t := &v.triggers[i]
-		ct := compiledTrigger{rule: *t}
-		if re, err := regexp.Compile(t.Pattern); err == nil {
-			ct.re = re
-		} else {
-			log.Printf("trigger pattern compile error %q: %v", t.Pattern, err)
+		ct := compiledTrigger{
+			rule:    *t,
+			matcher: v.compileMatcherTemplate(t.Pattern, matcherCache),
 		}
 		v.compiledTriggers = append(v.compiledTriggers, ct)
 	}
 
-	v.compiledHighlights = make([]compiledHighlight, len(v.highlights))
+	v.compiledHighlights = make([]compiledHighlight, 0, len(v.highlights))
 	for i := range v.highlights {
-		v.compiledHighlights[i] = compiledHighlight{
-			ansi: highlightToANSI(&v.highlights[i]),
+		h := &v.highlights[i]
+		ch := compiledHighlight{
+			rule:    *h,
+			ansi:    highlightToANSI(h),
+			matcher: v.compileMatcherTemplate(h.Pattern, matcherCache),
 		}
+		v.compiledHighlights = append(v.compiledHighlights, ch)
 	}
 
-	v.effectivePatternCache = make(map[string]*regexp.Regexp)
+	v.compiledSubstitutes = make([]compiledSubstitute, 0, len(v.substitutes))
+	for i := range v.substitutes {
+		sub := &v.substitutes[i]
+		cs := compiledSubstitute{
+			rule:    *sub,
+			matcher: v.compileMatcherTemplate(sub.Pattern, matcherCache),
+		}
+		v.compiledSubstitutes = append(v.compiledSubstitutes, cs)
+	}
 }
 
 func (v *VM) Aliases() []storage.AliasRule {

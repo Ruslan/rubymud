@@ -2,7 +2,6 @@ package vm
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"rubymud/go/internal/storage"
@@ -102,11 +101,10 @@ func (v *VM) cmdVariable(rest string, depth int) []Result {
 			return echoResults([]string{fmt.Sprintf("#variable: save error: %v", err)}, depth)
 		}
 		v.rulesVersion++
-		v.effectivePatternCache = make(map[string]*regexp.Regexp)
 		v.ensureFresh()
 	} else {
 		v.variables[name] = value
-		v.effectivePatternCache = make(map[string]*regexp.Regexp)
+		v.rulesVersion++
 	}
 
 	return echoResults([]string{fmt.Sprintf("#variable {%s} = {%s}", name, value)}, depth)
@@ -122,11 +120,12 @@ func (v *VM) cmdUnvariable(rest string, depth int) []Result {
 			return echoResults([]string{fmt.Sprintf("#unvariable: error: %v", err)}, depth)
 		}
 		v.rulesVersion++
-		v.effectivePatternCache = make(map[string]*regexp.Regexp)
 		v.ensureFresh()
+		delete(v.variables, name)
+	} else {
+		delete(v.variables, name)
+		v.rulesVersion++
 	}
-	delete(v.variables, name)
-	v.effectivePatternCache = make(map[string]*regexp.Regexp)
 	return echoResults([]string{fmt.Sprintf("#unvariable: %s removed", name)}, depth)
 }
 
