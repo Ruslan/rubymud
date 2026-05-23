@@ -5,31 +5,33 @@ Use this when you need to interact with the project via MCP or modify the MCP se
 ## Server Implementation
 
 - **Location**: `go/internal/web/mcp.go`
-- **Endpoint**: `/mcp` (accessible via HTTP POST).
+- **Endpoint**: `POST /mcp` (Streamable HTTP, no auth for local access).
 
-## Available Tools
+## Available Tools (9 total)
 
-### MUD Interaction
-- `mud_send_command`: Sends a command to the active MUD session and returns the synchronous response.
-- `mud_get_output`: Returns the most recent N lines of output from a specific buffer.
-- `mud_get_output_range`: Returns a specific range of log entries by ID.
-- `mud_search`: Searches log entries using plain text or FTS5.
+### Session Interaction
+- `mud_list_sessions`: Lists all configured sessions with connection status.
+- `mud_get_output`: Returns the most recent N lines of output (default 100).
+- `mud_get_output_range`: Returns log entries before a given ID (upward pagination).
+- `mud_search`: Full-text search across session logs with surrounding context.
+- `mud_send_command`: Sends a command to a MUD session.
 
 ### State Management
-- `mud_get_variables`: Lists all current variables for a session.
-- `mud_set_variable`: Updates or creates a variable.
-- `mud_get_session_info`: Returns current connection status and session details.
+- `mud_get_variables`: Lists all resolved variables for a session.
+- `mud_set_variable`: Updates or creates a session variable.
+- `mud_get_aliases`: Lists all aliases active for a session.
+- `mud_get_triggers`: Lists all triggers active for a session.
 
 ## Continuity Support
 
-The MCP server supports `last_seen_log_id` to provide continuity. When the model sends a command, it can see what happened in the game since its last turn.
+The server tracks `last_seen_log_id` per session. After sending a command, the model can request output since its last turn.
 
 ## Authentication
 
-If configured, MCP requests require a `Authorization: Bearer <token>` header.
+MCP endpoint is outside the `X-Session-Token` middleware for local-first access.
 
 ## Usage in Clients
 
 To connect from Claude Desktop or other MCP clients:
 1. Ensure `mudhost` is running.
-2. Use the `/mcp` URL as the server transport (Note: standard MCP usually uses stdio or SSE; this implementation uses a custom HTTP-based bridge).
+2. Configure HTTP transport pointing to `http://localhost:PORT/mcp`.

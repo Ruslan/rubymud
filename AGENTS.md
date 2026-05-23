@@ -6,7 +6,7 @@ This repository is `rubymud`, a local-first MUD host and browser client.
 - **Backend**: Go (located in `go/`). Primary entry point: `go/cmd/mudhost/main.go`.
 - **Runtime Data**: Lives in `data/`.
 - **Main DB file**: `data/mudhost.db` (SQLite).
-- **Migration**: The project was migrated from Ruby to Go; ignore `server.rb` and `Gemfile` for current development unless specifically asked.
+- **Migration**: The project was migrated from Ruby to Go. Legacy Ruby files are in `legacy_ruby/` — ignore for current development unless specifically asked.
 
 ## Domain Documentation
 Read these guides to understand specific project domains:
