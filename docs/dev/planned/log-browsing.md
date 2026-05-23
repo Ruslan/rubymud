@@ -7,7 +7,7 @@ Add scalable log browsing for long-running sessions:
 1. virtual scrolling / windowed rendering for log output
 2. server-side search across session logs
 3. a dedicated searchable log view that does not overload the live game UI
-4. export of selected historical logs to self-contained HTML
+4. export of selected historical logs to self-contained HTML or TXT
 
 This milestone is about making long sessions and historical investigation practical without turning the main play screen into a heavy management interface or a general observability product.
 
@@ -27,6 +27,7 @@ As a result, users can play live, but cannot comfortably:
 2. search for past combat lines, loot, commands, or chat
 3. inspect old context without loading too much DOM into the main game screen
 4. save memorable runs, raids, or roleplay sessions as a portable archive
+5. inspect sent commands together with received network output
 
 ---
 
@@ -113,7 +114,8 @@ Behavior:
 3. primary response should be a match list, not a fully expanded archive view
 4. each match should include enough metadata for a `grep -n` style result row: id, time, buffer, and text preview
 5. response should expose whether more results are available
-6. matching by both plain log text and command overlays is in scope because storage already trends that way
+6. matching by both received MUD output and sent player commands is in scope
+7. search results must use canonical network-level input/output text, not display text modified by highlights or substitutions
 
 Recommended follow-up endpoint:
 
@@ -177,9 +179,9 @@ Recommended endpoint shape:
 GET /api/sessions/:id/logs?buffer=main&before_id=12345&limit=200
 ```
 
-### 5. HTML log export
+### 5. HTML/TXT log export
 
-Add a way to export a selected time range of session logs to self-contained HTML.
+Add a way to export a selected time range of session logs to self-contained HTML or plain text.
 
 Recommended UI location:
 
@@ -192,7 +194,7 @@ Recommended export inputs:
 2. optional buffer filter
 3. time `from`
 4. time `to`
-5. optional include command overlays / buttons toggle
+5. optional include sent commands toggle
 6. optional title for the exported page
 
 Recommended endpoint shape:
@@ -204,12 +206,28 @@ GET /api/sessions/:id/logs/export?from=2026-04-25T18:00:00Z&to=2026-04-25T23:30:
 Behavior:
 
 1. export is server-side
-2. output is a single self-contained HTML file
-3. styling is embedded inline in the document, either via one `<style>` block or inline `style="..."` attributes
+2. output is either a single self-contained HTML file or a TXT file
+3. HTML styling is embedded inline in the document, either via one `<style>` block or inline `style="..."` attributes
 4. exported file must not depend on app assets, external CSS, or runtime API availability
-5. ANSI/highlighted text should be preserved in a readable static form as closely as practical
-6. export should be suitable for archiving memorable sessions such as raids, quests, or roleplay logs
-7. if the selected time range is large, generation may be streamed or downloaded as an attachment without loading the whole export into the browser DOM first
+5. export uses canonical network-level input/output, not the live display result
+6. received MUD output is exported as-is except for preserving network ANSI colors in HTML where practical
+7. sent player commands may be included and should be visibly distinguished from received output, for example with a CSS class/label in HTML and a simple prefix in TXT
+8. highlights, substitutions, gags, buttons, and other display overlays are not applied in export
+9. TXT export follows the same canonical-input/output rule as HTML export; it should not contain highlight/substitution results
+10. export should be suitable for archiving memorable sessions such as raids, quests, or roleplay logs
+11. if the selected time range is large, generation may be streamed or downloaded as an attachment without loading the whole export into the browser DOM first
+
+### 6. Canonical admin log viewing
+
+Settings log search and log viewing should show the same canonical network-level stream used by export.
+
+Required behavior:
+
+1. received MUD output is shown without applying current highlights or substitutions
+2. sent player commands are searchable and visible in results/context
+3. sent commands should be visually distinguishable from received output in the admin UI
+4. admin log viewing must not replay the live presentation pipeline
+5. admin search should not match text that only exists because of a substitution or highlight overlay
 
 ---
 
@@ -249,7 +267,7 @@ Add read-only HTTP endpoints for:
 1. match-list search
 2. context fetch around a selected match
 3. paged history fetch
-4. HTML export by time range
+4. HTML/TXT export by time range
 
 Prefer HTTP over websocket for this feature because:
 
@@ -268,7 +286,7 @@ Add a new Svelte tab with:
 5. empty state
 6. pagination / load more
 7. virtualization/windowing
-8. export controls for time-range HTML download
+8. export controls for time-range HTML/TXT download
 
 ### Live UI
 
@@ -290,10 +308,13 @@ Allowed scope here:
 5. Results can be paged to older matches using a cursor.
 6. Settings log results remain responsive when many matches are present because rendering is virtualized/windowed.
 7. A user can browse older paged history in Settings even without a search query.
-8. A user can export a chosen time range of logs to a self-contained HTML file.
-9. Exported HTML preserves readable styling without depending on external assets.
+8. A user can export a chosen time range of logs to a self-contained HTML or TXT file.
+9. Exported HTML preserves readable network ANSI colors without depending on external assets.
 10. The live game UI remains focused on play and does not gain a large embedded search/export workflow.
 11. Existing live output behavior continues to work without regression.
+12. Search and admin log viewing include sent player commands.
+13. Search, admin log viewing, and export do not apply highlights or substitutions.
+14. Sent commands are visibly distinguished from received MUD output in admin viewing and export.
 
 ---
 
@@ -305,7 +326,7 @@ If this milestone needs internal sequencing, the best order is:
 2. add match-list search API reusing storage primitives
 3. add context endpoint around a selected match
 4. add basic Settings log-search tab without virtualization
-5. add HTML export endpoint and basic export controls
+5. add HTML/TXT export endpoint and basic export controls
 6. add virtualization/windowing once real result shapes are visible
 
 ---

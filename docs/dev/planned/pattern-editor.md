@@ -12,9 +12,11 @@ RubyMUD already has a regex-backed `CompiledMatcher` layer. Adding a second nati
 
 ## Decision
 
-Regex remains the canonical storage and runtime language.
+Regex remains the canonical runtime language.
 
-The UI may provide a WYSIWYG/simple pattern editor, but it must compile to the same stored regex template that the VM already uses.
+The user-facing syntax must be explicit and persisted. RubyMUD should not guess whether a rule should be shown as regex or as a simple pattern.
+
+The UI may provide a WYSIWYG/simple pattern editor, but it must compile to the same runtime regex template that the VM already uses.
 
 ```text
 User-facing simple pattern: %1 ударил %2
@@ -23,6 +25,13 @@ Runtime matcher:            Go regexp after $var expansion
 ```
 
 This is not a commitment to full TinTin++ syntax. It is a small editor DSL that generates Go-compatible regex.
+
+Key product rule:
+
+1. If the user entered a simple pattern, keep showing it as a simple pattern.
+2. If the user entered a regex, keep showing it as a regex.
+3. Do not silently convert `(.+)` into `%1` for display.
+4. Conversion previews are allowed, but representation changes must be user-driven.
 
 ## Research Findings
 
@@ -60,12 +69,15 @@ RubyMUD should support only the subset it can compile to safe, linear-time Go re
 
 ## Storage And Runtime
 
-Storage remains unchanged:
+Runtime storage remains regex-backed, but authoring metadata should be persisted:
 
 ```text
-trigger_rules.pattern = regex template string
-substitute_rules.pattern = regex template string
-highlight_rules.pattern = regex template string
+trigger_rules.pattern = compiled regex template string
+substitute_rules.pattern = compiled regex template string
+highlight_rules.pattern = compiled regex template string
+
+pattern_syntax = "regex" | "simple"
+pattern_source = original user-authored regex or simple pattern
 ```
 
 Runtime remains unchanged:
@@ -116,6 +128,35 @@ Invalid or unsupported in V1:
 
 The UI should validate this before conversion.
 
+## Explicit Syntax Modes
+
+RubyMUD should expose two explicit authoring modes:
+
+1. `simple` - `%1`/`%2` style pattern syntax for common MUD triggers
+2. `regex` - raw Go-compatible regex template syntax
+
+Settings UI behavior:
+
+1. use a visible mode selector, such as `Pattern` / `Regex`
+2. keep the user's selected mode when reopening a rule
+3. show the compiled regex preview for `simple` mode before save
+4. do not auto-switch modes based on whether a regex is projectable to a simple pattern
+5. allow an explicit "Convert to Pattern" / "Convert to Regex" action later if useful, but never do it silently
+
+Console/import/export behavior:
+
+1. plain pattern text means `simple` syntax
+2. `/.../` means `regex` syntax
+3. `/.../` is primarily for console commands and `.tt` import/export, not required as the main Settings UI affordance
+4. literal `/` escaping rules are needed only inside `/.../` regex syntax
+
+Examples:
+
+```text
+#act {%1 ударил %2} {помочь %1}       ;; simple pattern
+#act {/^(.*?) ударил (.*)$/} {помочь %1} ;; regex
+```
+
 ## Simple Pattern To Regex
 
 Convert simple pattern to a stable regex template.
@@ -139,8 +180,21 @@ Rules:
 3. `%%` becomes literal `%`.
 4. `%N` before later pattern content becomes `(.*?)`.
 5. Final `%N` before the end anchor becomes `(.*)`.
-6. Add `^` and `$` anchors by default.
+6. Anchoring must be explicit in the product model, not hidden.
 7. Reject non-sequential capture numbers.
+
+Initial recommendation for V1:
+
+1. expose `match from start` and `match to end` checkboxes in Settings for simple patterns
+2. default `match from start` to enabled for new simple patterns because broad MUD triggers are risky and surprising
+3. default `match to end` to disabled unless user asks for strict full-line matching
+4. store the resulting compiled regex in `pattern`, while preserving the original pattern and mode in `pattern_source` / `pattern_syntax`
+5. when importing JMC-style patterns, do not assume start anchoring unless the imported pattern explicitly contains `^`
+
+Open compatibility question:
+
+1. verify TinTin++ default anchoring behavior for `%1`-style patterns before finalizing import semantics
+2. JMC requires explicit `^` when the user wants start-of-line matching, so JMC import should respect that
 
 The TinTin++-style lazy/greedy split matters:
 
@@ -154,7 +208,9 @@ If RubyMUD later decides captures must be non-empty, use `(.+?)` for middle capt
 
 ## Regex To Simple Projection
 
-The UI may project compatible regex templates back to simple patterns.
+Projection is optional and must not control normal display mode.
+
+The UI may offer an explicit conversion action for compatible regex templates, but it should not automatically project regex templates back to simple patterns just because it can.
 
 Examples:
 
@@ -193,7 +249,7 @@ Not compatible:
 6. Nested groups.
 7. Lookarounds or other PCRE-only syntax.
 
-If a regex is not compatible, the UI should show regex mode only.
+If a regex is not compatible, explicit conversion to Simple mode should be disabled with an explanation.
 
 The converter must be conservative. If unsure, return incompatible and keep regex mode.
 
@@ -227,15 +283,16 @@ Do not accept embedded fragments that Go `regexp` cannot compile.
 
 For each pattern rule:
 
-1. Try `regex -> simple pattern` projection.
-2. If compatible, show both Simple and Regex modes.
-3. If incompatible, show Regex mode and explain that Simple mode cannot represent this regex.
-4. When editing Simple mode, save only the generated regex template to storage.
-5. Show generated regex preview before save.
+1. Load and display the persisted `pattern_syntax` and `pattern_source`.
+2. If `pattern_syntax = simple`, show Pattern mode and a generated regex preview.
+3. If `pattern_syntax = regex`, show Regex mode.
+4. Do not infer display mode from the stored regex.
+5. When editing Simple mode, save both the generated regex template and the original simple source.
+6. When editing Regex mode, save the regex as both runtime pattern and regex source.
 
-No generated regex needs to be stored separately.
+The generated regex remains the runtime pattern.
 
-No `pattern_syntax` column is required for this version.
+`pattern_syntax` and `pattern_source` are required to preserve user intent and avoid surprising display changes.
 
 ## Backend Helpers
 
@@ -248,7 +305,60 @@ func SimplePatternToRegex(pattern string) (string, error)
 func RegexToSimplePattern(pattern string) (string, bool)
 ```
 
+`RegexToSimplePattern` is for explicit conversion only. It is not for deciding how an existing rule should be displayed.
+
 The UI can either call a small API endpoint or use a mirrored TypeScript implementation. If mirrored, tests must keep Go and TypeScript behavior aligned.
+
+## Preview Semantics
+
+Settings preview must use RubyMUD runtime pattern semantics, not browser JavaScript `RegExp` semantics.
+
+Current risk example:
+
+```text
+(?i)$target1
+```
+
+This is valid for Go `regexp` after RubyMUD `$target1` expansion, but browser-side `new RegExp("(?i)$target1", "g")` is invalid because JavaScript does not support Go-style inline `(?i)` flags. A UI preview column that reports `(invalid regex)` for this pattern is misleading if the backend/runtime accepts it.
+
+Preview requirements:
+
+1. do not use JS `RegExp` as the source of truth for RubyMUD pattern validity
+2. preview must account for `$var` pattern-template expansion
+3. preview must accept Go regexp syntax that RubyMUD runtime accepts, including inline flags such as `(?i)`
+4. if the UI cannot run the real matcher locally, it should call a backend preview/validation endpoint
+5. if backend preview is not available yet, show `Preview unavailable` or `Cannot preview in browser`, not `(invalid regex)`, for patterns that may be valid in RubyMUD but invalid in JS
+
+Recommended backend endpoint shape:
+
+```text
+POST /api/patterns/preview
+```
+
+Request:
+
+```json
+{
+  "syntax": "regex",
+  "pattern": "(?i)$target1",
+  "sample": "Тартис стоит здесь.",
+  "profile_id": 1,
+  "rule_type": "substitution"
+}
+```
+
+Response:
+
+```json
+{
+  "valid": true,
+  "matched": true,
+  "effective_pattern": "(?i)Тартис",
+  "captures": []
+}
+```
+
+Exact API shape can change during implementation, but validation/preview must run through the same Go-side pattern compiler/matcher used by live rules.
 
 ## Runtime Impact
 
@@ -266,7 +376,7 @@ This feature is about editing and compatibility, not a new matching engine.
 
 Add conversion tests for:
 
-1. `%1 ударил %2` -> `^(.*?) ударил (.*)$`.
+1. simple `%1 ударил %2` compiles to the expected regex according to selected anchor options.
 2. `$lider сказал %1` preserves `$lider` and converts `%1`.
 3. `Вы получили %1 опыта.` escapes literal punctuation correctly.
 4. `%% загрузки: %1` handles literal `%`.
@@ -277,6 +387,20 @@ Add conversion tests for:
 9. Character classes are rejected as incompatible in V1.
 10. Non-sequential captures in Simple input are rejected.
 11. PCRE-only syntax is rejected or fails validation before save.
+
+Add persistence/display tests for:
+
+1. a rule authored as regex `(.+)` reopens in Regex mode, not Pattern mode
+2. a rule authored as simple `%1` reopens in Pattern mode
+3. `/.../` console/import syntax is stored as `pattern_syntax = regex`
+4. non-`/.../` console/import syntax is stored as `pattern_syntax = simple`
+
+Add preview/runtime parity tests for:
+
+1. `(?i)$target1` is not reported as invalid only because JS `RegExp` cannot parse it
+2. `$target1` expansion is included in preview matching
+3. backend preview validity matches live `CompiledMatcher` validity
+4. UI displays `Preview unavailable` instead of `(invalid regex)` when browser-only preview cannot safely evaluate a RubyMUD pattern
 
 Add UI tests if the Settings UI exposes the editor in the same task.
 
@@ -300,8 +424,6 @@ Only add a native matcher if benchmark data justifies a second runtime matching 
 Mudlet's explicit substring/exact modes are worth considering separately as future performance features, but they should be modeled as explicit rule modes, not hidden behind the Simple editor.
 
 ## Non-Goals
-
-Do not add a new storage column.
 
 Do not add a second native matcher runtime.
 
