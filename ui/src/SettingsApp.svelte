@@ -240,21 +240,33 @@
   let aliases: Alias[] = [];
   const defaultAlias = (): Alias => ({ name: '', template: '', enabled: true, group_name: '' });
   let aliasEditor: Alias = defaultAlias();
+  let editingAliasID: number | null = null;
+  let editingAliasDraft: Alias = defaultAlias();
+  let inlineAliasError = '';
 
   // Triggers State
   let triggers: Trigger[] = [];
   const defaultTrigger = (): Trigger => ({ name: '', pattern: '', command: '', enabled: true, is_button: false, stop_after_match: false, group_name: '', target_buffer: '', buffer_action: '' });
   let triggerEditor: Trigger = defaultTrigger();
+  let editingTriggerID: number | null = null;
+  let editingTriggerDraft: Trigger = defaultTrigger();
+  let inlineTriggerError = '';
 
   // Highlights State
   let highlights: Highlight[] = [];
   const defaultHighlight = (): Highlight => ({ pattern: '', fg: '', bg: '', bold: false, faint: false, italic: false, underline: false, strikethrough: false, blink: false, reverse: false, enabled: true, group_name: '' });
   let highlightEditor: Highlight = defaultHighlight();
+  let editingHighlightID: number | null = null;
+  let editingHighlightDraft: Highlight = defaultHighlight();
+  let inlineHighlightError = '';
 
   // Substitutions State
   let subs: Substitute[] = [];
   const defaultSub = (): Substitute => ({ pattern: '', replacement: '', is_gag: false, enabled: true, group_name: '' });
   let subEditor: Substitute = defaultSub();
+  let editingSubID: number | null = null;
+  let editingSubDraft: Substitute = defaultSub();
+  let inlineSubError = '';
   let subPreviewText = 'foo bar';
 
   // Hotkeys State
@@ -495,6 +507,167 @@
       return;
     }
     resetFn();
+    await fetchData();
+  }
+
+  function startInlineAliasEdit(alias: Alias) {
+    if (alias.id === undefined) return;
+    if (editingAliasID !== null && editingAliasID !== alias.id && !confirm('Discard unsaved alias changes?')) return;
+    inlineAliasError = '';
+    editingAliasID = alias.id;
+    editingAliasDraft = { ...alias };
+  }
+
+  function cancelInlineAliasEdit() {
+    inlineAliasError = '';
+    editingAliasID = null;
+    editingAliasDraft = defaultAlias();
+  }
+
+  function validateInlinePosition(label: string, item: { position?: number }): string {
+    const position = Number(item.position);
+    if (!Number.isInteger(position) || position <= 0) {
+      return `${label} position must be a positive whole number.`;
+    }
+    item.position = position;
+    return '';
+  }
+
+  async function saveInlineAliasEdit() {
+    if (!selectedProfileID || editingAliasDraft.id === undefined) return;
+    const positionError = validateInlinePosition('Alias', editingAliasDraft);
+    if (positionError) { inlineAliasError = positionError; return; }
+    const validationError = validateItem('aliases', editingAliasDraft);
+    if (validationError) { inlineAliasError = validationError; return; }
+
+    inlineAliasError = '';
+    formError = '';
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const resp = await fetch(`/api/profiles/${selectedProfileID}/aliases/${editingAliasDraft.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+      body: JSON.stringify(editingAliasDraft),
+    });
+    if (!resp.ok) {
+      inlineAliasError = await resp.text() || 'Failed to save alias.';
+      return;
+    }
+    cancelInlineAliasEdit();
+    await fetchData();
+  }
+
+  function startInlineTriggerEdit(trigger: Trigger) {
+    if (trigger.id === undefined) return;
+    if (editingTriggerID !== null && editingTriggerID !== trigger.id && !confirm('Discard unsaved trigger changes?')) return;
+    inlineTriggerError = '';
+    editingTriggerID = trigger.id;
+    editingTriggerDraft = { ...trigger };
+  }
+
+  function cancelInlineTriggerEdit() {
+    inlineTriggerError = '';
+    editingTriggerID = null;
+    editingTriggerDraft = defaultTrigger();
+  }
+
+  async function saveInlineTriggerEdit() {
+    if (!selectedProfileID || editingTriggerDraft.id === undefined) return;
+    const positionError = validateInlinePosition('Trigger', editingTriggerDraft);
+    if (positionError) { inlineTriggerError = positionError; return; }
+    const validationError = validateItem('triggers', editingTriggerDraft);
+    if (validationError) { inlineTriggerError = validationError; return; }
+
+    inlineTriggerError = '';
+    formError = '';
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const resp = await fetch(`/api/profiles/${selectedProfileID}/triggers/${editingTriggerDraft.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+      body: JSON.stringify(editingTriggerDraft),
+    });
+    if (!resp.ok) {
+      inlineTriggerError = await resp.text() || 'Failed to save trigger.';
+      return;
+    }
+    cancelInlineTriggerEdit();
+    await fetchData();
+  }
+
+  function startInlineSubEdit(sub: Substitute) {
+    if (sub.id === undefined) return;
+    if (editingSubID !== null && editingSubID !== sub.id && !confirm('Discard unsaved substitution changes?')) return;
+    inlineSubError = '';
+    editingSubID = sub.id;
+    editingSubDraft = { ...sub };
+  }
+
+  function cancelInlineSubEdit() {
+    inlineSubError = '';
+    editingSubID = null;
+    editingSubDraft = defaultSub();
+  }
+
+  async function saveInlineSubEdit() {
+    if (!selectedProfileID || editingSubDraft.id === undefined) return;
+    const positionError = validateInlinePosition('Substitution', editingSubDraft);
+    if (positionError) { inlineSubError = positionError; return; }
+    const validationError = validateItem('subs', editingSubDraft);
+    if (validationError) { inlineSubError = validationError; return; }
+
+    inlineSubError = '';
+    formError = '';
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const resp = await fetch(`/api/profiles/${selectedProfileID}/subs/${editingSubDraft.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+      body: JSON.stringify(editingSubDraft),
+    });
+    if (!resp.ok) {
+      inlineSubError = await resp.text() || 'Failed to save substitution.';
+      return;
+    }
+    cancelInlineSubEdit();
+    await fetchData();
+  }
+
+  function startInlineHighlightEdit(highlight: Highlight) {
+    if (highlight.id === undefined) return;
+    if (editingHighlightID !== null && editingHighlightID !== highlight.id && !confirm('Discard unsaved highlight changes?')) return;
+    inlineHighlightError = '';
+    editingHighlightID = highlight.id;
+    editingHighlightDraft = { ...highlight };
+  }
+
+  function cancelInlineHighlightEdit() {
+    inlineHighlightError = '';
+    editingHighlightID = null;
+    editingHighlightDraft = defaultHighlight();
+  }
+
+  async function saveInlineHighlightEdit() {
+    if (!selectedProfileID || editingHighlightDraft.id === undefined) return;
+    const positionError = validateInlinePosition('Highlight', editingHighlightDraft);
+    if (positionError) { inlineHighlightError = positionError; return; }
+    const validationError = validateItem('highlights', editingHighlightDraft);
+    if (validationError) { inlineHighlightError = validationError; return; }
+
+    inlineHighlightError = '';
+    formError = '';
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const resp = await fetch(`/api/profiles/${selectedProfileID}/highlights/${editingHighlightDraft.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+      body: JSON.stringify(editingHighlightDraft),
+    });
+    if (!resp.ok) {
+      inlineHighlightError = await resp.text() || 'Failed to save highlight.';
+      return;
+    }
+    cancelInlineHighlightEdit();
     await fetchData();
   }
 
@@ -1126,8 +1299,8 @@
           <input type="text" bind:value={aliasEditor.template} placeholder="Template" required />
           <input type="text" bind:value={aliasEditor.group_name} placeholder="Group Name" />
           <label class="checkbox-label"><input type="checkbox" bind:checked={aliasEditor.enabled} /> Enabled</label>
-          <button class="btn-primary" on:click={() => saveItem('aliases', aliasEditor, () => aliasEditor = defaultAlias())}>
-            {aliasEditor.id ? 'Update' : 'Add'}
+          <button class="btn-primary" on:click={() => saveItem('aliases', { ...aliasEditor, id: undefined, position: undefined }, () => aliasEditor = defaultAlias())}>
+            Add
           </button>
         </div>
       </div>
@@ -1137,22 +1310,46 @@
           {#each aliases as a, i}
             <tr>
               <td class="order-cell">
-                 <button class="btn-icon" disabled={i === 0} on:click={() => moveRule('aliases', a, -1)}>▲</button>
-                 <button class="btn-icon" disabled={i === aliases.length - 1} on:click={() => moveRule('aliases', a, 1)}>▼</button>
+                 <button class="btn-icon" disabled={editingAliasID === a.id || i === 0} on:click={() => moveRule('aliases', a, -1)}>▲</button>
+                 <button class="btn-icon" disabled={editingAliasID === a.id || i === aliases.length - 1} on:click={() => moveRule('aliases', a, 1)}>▼</button>
               </td>
               <td>
                 <label class="toggle-label">
-                  <input type="checkbox" checked={a.enabled} on:change={(event) => toggleItem('aliases', a, (event.currentTarget as HTMLInputElement).checked)} />
+                  <input type="checkbox" checked={a.enabled} disabled={editingAliasID === a.id} on:change={(event) => toggleItem('aliases', a, (event.currentTarget as HTMLInputElement).checked)} />
                   <span class="status-dot {a.enabled ? 'on' : 'off'}" title={a.enabled ? 'Enabled' : 'Disabled'}></span>
                 </label>
               </td>
               <td class="key-cell">{a.name}</td><td class="value-cell">{a.template}</td>
               <td class="dim-cell">{a.group_name || '-'}</td>
               <td class="actions-cell">
-                <button class="btn-link" on:click={() => aliasEditor = { ...a }}>Edit</button>
-                <button class="btn-link btn-danger" on:click={() => deleteItem('aliases', a.id!)}>Delete</button>
+                {#if editingAliasID === a.id}
+                  <span class="editing-indicator">Editing…</span>
+                {:else}
+                  <button class="btn-link" on:click={() => startInlineAliasEdit(a)}>Edit</button>
+                  <button class="btn-link btn-danger" on:click={() => deleteItem('aliases', a.id!)}>Delete</button>
+                {/if}
               </td>
             </tr>
+            {#if editingAliasID === a.id}
+              <tr class="inline-edit-row">
+                <td colspan="6">
+                  <div class="inline-edit-panel">
+                    <div class="inline-edit-grid">
+                      <label>Position <input class="inline-position-input" type="number" bind:value={editingAliasDraft.position} aria-label="Alias position" /></label>
+                      <label>Name <input type="text" bind:value={editingAliasDraft.name} aria-label="Alias name" /></label>
+                      <label class="inline-field-wide">Template <input type="text" bind:value={editingAliasDraft.template} aria-label="Alias template" /></label>
+                      <label>Group <input type="text" bind:value={editingAliasDraft.group_name} aria-label="Alias group" /></label>
+                      <label class="checkbox-label inline-checkbox"><input type="checkbox" bind:checked={editingAliasDraft.enabled} /> Enabled</label>
+                    </div>
+                    <div class="inline-edit-actions">
+                      <button class="btn-primary" on:click={saveInlineAliasEdit}>Save</button>
+                      <button class="btn-link" on:click={cancelInlineAliasEdit}>Cancel</button>
+                    </div>
+                    {#if inlineAliasError}<div class="form-error inline-error">{inlineAliasError}</div>{/if}
+                  </div>
+                </td>
+              </tr>
+            {/if}
           {/each}
         </tbody>
       </table>
@@ -1177,8 +1374,8 @@
             <label class="checkbox-label"><input type="checkbox" bind:checked={triggerEditor.enabled} /> Enabled</label>
             <label class="checkbox-label"><input type="checkbox" bind:checked={triggerEditor.is_button} /> Is Button</label>
             <label class="checkbox-label"><input type="checkbox" bind:checked={triggerEditor.stop_after_match} /> Stop After Match</label>
-            <button class="btn-primary" on:click={() => saveItem('triggers', triggerEditor, () => triggerEditor = defaultTrigger())}>
-              {triggerEditor.id ? 'Update' : 'Add'}
+            <button class="btn-primary" on:click={() => saveItem('triggers', { ...triggerEditor, id: undefined, position: undefined }, () => triggerEditor = defaultTrigger())}>
+              Add
             </button>
           </div>
         </div>
@@ -1189,13 +1386,13 @@
           {#each triggers as t, i}
             <tr>
               <td class="order-cell">
-                 <button class="btn-icon" disabled={i === 0} on:click={() => moveRule('triggers', t, -1)}>▲</button>
-                 <button class="btn-icon" disabled={i === triggers.length - 1} on:click={() => moveRule('triggers', t, 1)}>▼</button>
+                 <button class="btn-icon" disabled={editingTriggerID === t.id || i === 0} on:click={() => moveRule('triggers', t, -1)}>▲</button>
+                 <button class="btn-icon" disabled={editingTriggerID === t.id || i === triggers.length - 1} on:click={() => moveRule('triggers', t, 1)}>▼</button>
               </td>
               <td class="flags-cell">
                 <div class="flags-wrapper">
                   <label class="toggle-label" title="Enabled">
-                    <input type="checkbox" checked={t.enabled} on:change={(event) => toggleItem('triggers', t, (event.currentTarget as HTMLInputElement).checked)} />
+                    <input type="checkbox" checked={t.enabled} disabled={editingTriggerID === t.id} on:change={(event) => toggleItem('triggers', t, (event.currentTarget as HTMLInputElement).checked)} />
                     <span class={t.enabled ? 'flag-on' : 'flag-off'}>●</span>
                   </label>
                   {#if t.is_button}<span class="flag-icon" title="Is Button">⚡</span>{/if}
@@ -1214,10 +1411,46 @@
               </td>
               <td class="dim-cell">{t.group_name || '-'}</td>
               <td class="actions-cell">
-                <button class="btn-link" on:click={() => triggerEditor = { ...t }}>Edit</button>
-                <button class="btn-link btn-danger" on:click={() => deleteItem('triggers', t.id!)}>Delete</button>
+                {#if editingTriggerID === t.id}
+                  <span class="editing-indicator">Editing…</span>
+                {:else}
+                  <button class="btn-link" on:click={() => startInlineTriggerEdit(t)}>Edit</button>
+                  <button class="btn-link btn-danger" on:click={() => deleteItem('triggers', t.id!)}>Delete</button>
+                {/if}
               </td>
             </tr>
+            {#if editingTriggerID === t.id}
+              <tr class="inline-edit-row">
+                <td colspan="6">
+                  <div class="inline-edit-panel">
+                    <div class="inline-edit-grid">
+                      <label>Position <input class="inline-position-input" type="number" bind:value={editingTriggerDraft.position} aria-label="Trigger position" /></label>
+                      <label>Name <input type="text" bind:value={editingTriggerDraft.name} aria-label="Trigger name" placeholder="Name" /></label>
+                      <label class="inline-field-wide">Pattern <input type="text" bind:value={editingTriggerDraft.pattern} aria-label="Trigger pattern" /></label>
+                      <label class="inline-field-wide">Command <input type="text" bind:value={editingTriggerDraft.command} aria-label="Trigger command" /></label>
+                      <label>Group <input type="text" bind:value={editingTriggerDraft.group_name} aria-label="Trigger group" /></label>
+                      <label>Routing
+                        <select bind:value={editingTriggerDraft.buffer_action} aria-label="Trigger buffer action">
+                          <option value="">No Routing</option>
+                          <option value="move">Move</option>
+                          <option value="copy">Copy</option>
+                          <option value="echo">Echo</option>
+                        </select>
+                      </label>
+                      <label>Target Buffer <input type="text" bind:value={editingTriggerDraft.target_buffer} aria-label="Trigger target buffer" placeholder="Target Buffer" disabled={!editingTriggerDraft.buffer_action} /></label>
+                      <label class="checkbox-label inline-checkbox"><input type="checkbox" bind:checked={editingTriggerDraft.enabled} /> Enabled</label>
+                      <label class="checkbox-label inline-checkbox"><input type="checkbox" bind:checked={editingTriggerDraft.is_button} /> Button</label>
+                      <label class="checkbox-label inline-checkbox"><input type="checkbox" bind:checked={editingTriggerDraft.stop_after_match} /> Stop after match</label>
+                    </div>
+                    <div class="inline-edit-actions">
+                      <button class="btn-primary" on:click={saveInlineTriggerEdit}>Save</button>
+                      <button class="btn-link" on:click={cancelInlineTriggerEdit}>Cancel</button>
+                    </div>
+                    {#if inlineTriggerError}<div class="form-error inline-error">{inlineTriggerError}</div>{/if}
+                  </div>
+                </td>
+              </tr>
+            {/if}
           {/each}
         </tbody>
       </table>
@@ -1239,8 +1472,8 @@
             <label class="checkbox-label"><input type="checkbox" bind:checked={subEditor.enabled} /> Enabled</label>
             <label class="checkbox-label"><input type="checkbox" bind:checked={subEditor.is_gag} /> Gag</label>
             <span class="sub-preview">Preview: {previewSubstitution(subEditor)}</span>
-            <button class="btn-primary" on:click={() => saveItem('subs', subEditor, () => subEditor = defaultSub())}>
-              {subEditor.id ? 'Update' : 'Add'}
+            <button class="btn-primary" on:click={() => saveItem('subs', { ...subEditor, id: undefined, position: undefined }, () => subEditor = defaultSub())}>
+              Add
             </button>
           </div>
         </div>
@@ -1251,13 +1484,13 @@
           {#each subs as sub, i}
             <tr class:gag-row={sub.is_gag}>
               <td class="order-cell">
-                 <button class="btn-icon" disabled={i === 0} on:click={() => moveRule('subs', sub, -1)}>▲</button>
-                 <button class="btn-icon" disabled={i === subs.length - 1} on:click={() => moveRule('subs', sub, 1)}>▼</button>
+                 <button class="btn-icon" disabled={editingSubID === sub.id || i === 0} on:click={() => moveRule('subs', sub, -1)}>▲</button>
+                 <button class="btn-icon" disabled={editingSubID === sub.id || i === subs.length - 1} on:click={() => moveRule('subs', sub, 1)}>▼</button>
               </td>
               <td class="flags-cell">
                 <div class="flags-wrapper">
                   <label class="toggle-label" title="Enabled">
-                    <input type="checkbox" checked={sub.enabled} on:change={(event) => toggleItem('subs', sub, (event.currentTarget as HTMLInputElement).checked)} />
+                    <input type="checkbox" checked={sub.enabled} disabled={editingSubID === sub.id} on:change={(event) => toggleItem('subs', sub, (event.currentTarget as HTMLInputElement).checked)} />
                     <span class={sub.enabled ? 'flag-on' : 'flag-off'}>●</span>
                   </label>
                   {#if sub.is_gag}<span class="flag-icon" title="Gag">GAG</span>{/if}
@@ -1268,10 +1501,36 @@
               <td class="dim-cell">{sub.group_name || '-'}</td>
               <td class="value-cell">{previewSubstitution(sub)}</td>
               <td class="actions-cell">
-                <button class="btn-link" on:click={() => subEditor = { ...sub }}>Edit</button>
-                <button class="btn-link btn-danger" on:click={() => deleteItem('subs', sub.id!)}>Delete</button>
+                {#if editingSubID === sub.id}
+                  <span class="editing-indicator">Editing…</span>
+                {:else}
+                  <button class="btn-link" on:click={() => startInlineSubEdit(sub)}>Edit</button>
+                  <button class="btn-link btn-danger" on:click={() => deleteItem('subs', sub.id!)}>Delete</button>
+                {/if}
               </td>
             </tr>
+            {#if editingSubID === sub.id}
+              <tr class="inline-edit-row">
+                <td colspan="7">
+                  <div class="inline-edit-panel">
+                    <div class="inline-edit-grid">
+                      <label>Position <input class="inline-position-input" type="number" bind:value={editingSubDraft.position} aria-label="Substitution position" /></label>
+                      <label class="inline-field-wide">Pattern <input type="text" bind:value={editingSubDraft.pattern} aria-label="Substitution pattern" /></label>
+                      <label class="inline-field-wide">Replacement <input type="text" bind:value={editingSubDraft.replacement} aria-label="Substitution replacement" disabled={editingSubDraft.is_gag} /></label>
+                      <label>Group <input type="text" bind:value={editingSubDraft.group_name} aria-label="Substitution group" /></label>
+                      <label class="checkbox-label inline-checkbox"><input type="checkbox" bind:checked={editingSubDraft.enabled} /> Enabled</label>
+                      <label class="checkbox-label inline-checkbox"><input type="checkbox" bind:checked={editingSubDraft.is_gag} /> Gag</label>
+                      <div class="inline-field-wide sub-preview">Preview: {previewSubstitution(editingSubDraft)}</div>
+                    </div>
+                    <div class="inline-edit-actions">
+                      <button class="btn-primary" on:click={saveInlineSubEdit}>Save</button>
+                      <button class="btn-link" on:click={cancelInlineSubEdit}>Cancel</button>
+                    </div>
+                    {#if inlineSubError}<div class="form-error inline-error">{inlineSubError}</div>{/if}
+                  </div>
+                </td>
+              </tr>
+            {/if}
           {/each}
         </tbody>
       </table>
@@ -1338,8 +1597,8 @@
             <label class="checkbox-label"><input type="checkbox" bind:checked={highlightEditor.strikethrough} /> Strikethrough</label>
             <label class="checkbox-label"><input type="checkbox" bind:checked={highlightEditor.blink} /> Blink</label>
             <label class="checkbox-label"><input type="checkbox" bind:checked={highlightEditor.reverse} /> Reverse</label>
-            <button class="btn-primary" on:click={() => saveItem('highlights', highlightEditor, () => highlightEditor = defaultHighlight())}>
-              {highlightEditor.id ? 'Update' : 'Add'}
+            <button class="btn-primary" on:click={() => saveItem('highlights', { ...highlightEditor, id: undefined, position: undefined }, () => highlightEditor = defaultHighlight())}>
+              Add
             </button>
           </div>
         </div>
@@ -1350,12 +1609,12 @@
           {#each highlights as h, i}
             <tr>
               <td class="order-cell">
-                 <button class="btn-icon" disabled={i === 0} on:click={() => moveRule('highlights', h, -1)}>▲</button>
-                 <button class="btn-icon" disabled={i === highlights.length - 1} on:click={() => moveRule('highlights', h, 1)}>▼</button>
+                 <button class="btn-icon" disabled={editingHighlightID === h.id || i === 0} on:click={() => moveRule('highlights', h, -1)}>▲</button>
+                 <button class="btn-icon" disabled={editingHighlightID === h.id || i === highlights.length - 1} on:click={() => moveRule('highlights', h, 1)}>▼</button>
               </td>
               <td>
                 <label class="toggle-label">
-                  <input type="checkbox" checked={h.enabled} on:change={(event) => toggleItem('highlights', h, (event.currentTarget as HTMLInputElement).checked)} />
+                  <input type="checkbox" checked={h.enabled} disabled={editingHighlightID === h.id} on:change={(event) => toggleItem('highlights', h, (event.currentTarget as HTMLInputElement).checked)} />
                   <span class="status-dot {h.enabled ? 'on' : 'off'}" title={h.enabled ? 'Enabled' : 'Disabled'}></span>
                 </label>
               </td>
@@ -1381,10 +1640,42 @@
                 </span>
               </td>
               <td class="actions-cell">
-                <button class="btn-link" on:click={() => highlightEditor = { ...h }}>Edit</button>
-                <button class="btn-link btn-danger" on:click={() => deleteItem('highlights', h.id!)}>Delete</button>
+                {#if editingHighlightID === h.id}
+                  <span class="editing-indicator">Editing…</span>
+                {:else}
+                  <button class="btn-link" on:click={() => startInlineHighlightEdit(h)}>Edit</button>
+                  <button class="btn-link btn-danger" on:click={() => deleteItem('highlights', h.id!)}>Delete</button>
+                {/if}
               </td>
             </tr>
+            {#if editingHighlightID === h.id}
+              <tr class="inline-edit-row">
+                <td colspan="7">
+                  <div class="inline-edit-panel">
+                    <div class="inline-edit-grid">
+                      <label>Position <input class="inline-position-input" type="number" bind:value={editingHighlightDraft.position} aria-label="Highlight position" /></label>
+                      <label class="inline-field-wide">Pattern <input type="text" bind:value={editingHighlightDraft.pattern} aria-label="Highlight pattern" /></label>
+                      <label>Foreground <input type="text" bind:value={editingHighlightDraft.fg} aria-label="Highlight foreground" placeholder="FG" /></label>
+                      <label>Background <input type="text" bind:value={editingHighlightDraft.bg} aria-label="Highlight background" placeholder="BG" /></label>
+                      <label>Group <input type="text" bind:value={editingHighlightDraft.group_name} aria-label="Highlight group" /></label>
+                      <label class="checkbox-label inline-checkbox"><input type="checkbox" bind:checked={editingHighlightDraft.enabled} /> Enabled</label>
+                      <label class="checkbox-label inline-checkbox"><input type="checkbox" bind:checked={editingHighlightDraft.bold} /> Bold</label>
+                      <label class="checkbox-label inline-checkbox"><input type="checkbox" bind:checked={editingHighlightDraft.faint} /> Faint</label>
+                      <label class="checkbox-label inline-checkbox"><input type="checkbox" bind:checked={editingHighlightDraft.italic} /> Italic</label>
+                      <label class="checkbox-label inline-checkbox"><input type="checkbox" bind:checked={editingHighlightDraft.underline} /> Underline</label>
+                      <label class="checkbox-label inline-checkbox"><input type="checkbox" bind:checked={editingHighlightDraft.strikethrough} /> Strike</label>
+                      <label class="checkbox-label inline-checkbox"><input type="checkbox" bind:checked={editingHighlightDraft.blink} /> Blink</label>
+                      <label class="checkbox-label inline-checkbox"><input type="checkbox" bind:checked={editingHighlightDraft.reverse} /> Reverse</label>
+                    </div>
+                    <div class="inline-edit-actions">
+                      <button class="btn-primary" on:click={saveInlineHighlightEdit}>Save</button>
+                      <button class="btn-link" on:click={cancelInlineHighlightEdit}>Cancel</button>
+                    </div>
+                    {#if inlineHighlightError}<div class="form-error inline-error">{inlineHighlightError}</div>{/if}
+                  </div>
+                </td>
+              </tr>
+            {/if}
           {/each}
         </tbody>
       </table>
@@ -2017,6 +2308,17 @@
   .color-preview { display: flex; align-items: center; gap: 4px; }
   .color-chip { width: 12px; height: 12px; border-radius: 2px; border: 1px solid #444; }
   .actions-cell { white-space: nowrap; }
+  .inline-edit-row td { background: rgba(52, 152, 219, 0.06); padding: 12px 16px 16px; }
+  .inline-edit-panel { background: #15191f; border: 1px solid #30363d; border-radius: 8px; padding: 14px; }
+  .inline-edit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; align-items: end; }
+  .inline-edit-grid label:not(.checkbox-label) { display: flex; flex-direction: column; gap: 6px; color: #9ba3af; font-size: 0.8rem; }
+  .inline-edit-grid input, .inline-edit-grid select { width: 100%; box-sizing: border-box; }
+  .inline-field-wide { grid-column: span 2; }
+  .inline-checkbox { align-self: center; min-height: 36px; }
+  .inline-edit-actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+  .inline-error { margin: 12px 0 0; }
+  .inline-position-input { max-width: 120px; }
+  .editing-indicator { color: #9ba3af; font-size: 0.85rem; font-style: italic; }
   .toggle-label { display: inline-flex; align-items: center; gap: 8px; }
   .btn-link { background: none; border: none; color: #3498db; cursor: pointer; padding: 0; font-size: 0.9rem; }
   .btn-link:hover { text-decoration: underline; }

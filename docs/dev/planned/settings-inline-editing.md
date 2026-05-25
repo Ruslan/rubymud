@@ -53,6 +53,28 @@ Keyboard behavior:
 2. `Ctrl+Enter` or `Cmd+Enter` saves multiline fields if practical
 3. tab order should stay inside the row in a predictable way
 
+## Current Implementation Status
+
+Implemented in the first slices:
+
+1. aliases
+2. triggers
+3. substitutions
+4. highlights
+
+Deferred follow-up sections:
+
+1. hotkeys
+2. declared variables
+3. timers/tickers, if needed later
+4. profile/session forms, only if they become painful
+
+Hotkeys follow-up requirement:
+
+1. Inline hotkey editing must include a shortcut capture action for existing hotkeys, not only manual text editing.
+2. The capture interaction should preserve the existing hotkey fields while replacing only the shortcut value.
+3. Cancel must discard a captured-but-unsaved shortcut.
+
 ## Scope By Rule Type
 
 Start with the highest-volume rule lists:
@@ -106,6 +128,13 @@ Highlights:
 4. enabled
 
 If a row has complex editing needs, it may expose an `Advanced` action that opens the existing full editor, but common edits should stay inline.
+
+Hotkeys:
+
+1. shortcut
+2. command
+3. mobile row/order if already exposed
+4. shortcut capture while editing an existing row
 
 ## Implementation Direction
 
