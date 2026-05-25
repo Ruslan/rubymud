@@ -2,6 +2,7 @@ package vm
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
 	"rubymud/go/internal/storage"
@@ -73,9 +74,15 @@ func (v *VM) cmdUnalias(rest string, depth int) []Result {
 
 func (v *VM) cmdVariable(rest string, depth int) []Result {
 	if rest == "" {
+		var names []string
+		for k := range v.variables {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+
 		var lines []string
-		for k, val := range v.variables {
-			lines = append(lines, fmt.Sprintf("#variable {%s} = {%s}", k, val))
+		for _, name := range names {
+			lines = append(lines, fmt.Sprintf("#variable {%s} = {%s}", name, v.variables[name]))
 		}
 		if len(lines) == 0 {
 			lines = append(lines, "#variable: no variables defined")

@@ -6,6 +6,14 @@ import (
 	"rubymud/go/internal/storage"
 )
 
+func resultTexts(results []Result) []string {
+	texts := make([]string, 0, len(results))
+	for _, result := range results {
+		texts = append(texts, result.Text)
+	}
+	return texts
+}
+
 func TestSubstituteVars(t *testing.T) {
 	v := New(nil, 1)
 	v.variables["двуруч"] = "фламберг"
@@ -55,6 +63,89 @@ func TestCmdVariableBracesStripped(t *testing.T) {
 	result := v.substituteVars("взя $weapon")
 	if result != "взя фламберг" {
 		t.Errorf("$weapon substitution should be 'взя фламберг', got %q", result)
+	}
+}
+
+func TestCmdVariableListsVariablesSortedByName(t *testing.T) {
+	v := New(nil, 1)
+	v.variables["zeta"] = "last"
+	v.variables["alpha"] = "first"
+	v.variables["middle"] = "mid"
+
+	results := v.dispatchCommand("#var", 0, nil)
+	got := resultTexts(results)
+	want := []string{
+		"#variable {alpha} = {first}",
+		"#variable {middle} = {mid}",
+		"#variable {zeta} = {last}",
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("#var returned %d lines, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("#var line %d = %q, want %q (all lines: %v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+func TestCmdVariableGetterShowsCurrentValue(t *testing.T) {
+	v := New(nil, 1)
+	v.variables["kast1"] = "Тартис"
+
+	results := v.dispatchCommand("#var {kast1}", 0, nil)
+	got := resultTexts(results)
+	want := []string{"#variable {kast1} = {Тартис}"}
+
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("#var getter = %v, want %v", got, want)
+	}
+}
+
+func TestCmdVariableAliasGetterSetterWithEmptyPercentZero(t *testing.T) {
+	v := New(nil, 1)
+	v.dispatchCommand("#alias {каст1} {#var {kast1} {%0}}", 0, nil)
+
+	setResults := v.ProcessInputDetailed("каст1 Тартис")
+	if got := v.variables["kast1"]; got != "Тартис" {
+		t.Fatalf("alias setter stored %q, want %q", got, "Тартис")
+	}
+	if got := resultTexts(setResults); len(got) != 1 || got[0] != "#variable {kast1} = {Тартис}" {
+		t.Fatalf("alias setter results = %v, want variable echo", got)
+	}
+
+	getResults := v.ProcessInputDetailed("каст1")
+	if got := v.variables["kast1"]; got != "Тартис" {
+		t.Fatalf("alias getter with empty %%0 changed value to %q, want %q", got, "Тартис")
+	}
+	if got := resultTexts(getResults); len(got) != 1 || got[0] != "#variable {kast1} = {Тартис}" {
+		t.Fatalf("alias getter results = %v, want current variable echo", got)
+	}
+}
+
+func TestCmdVariableDoesNotSetEmptyExpandedValue(t *testing.T) {
+	v := New(nil, 1)
+	v.variables["name"] = "existing"
+
+	results := v.dispatchCommand("#var {name} {}", 0, nil)
+	if got := v.variables["name"]; got != "existing" {
+		t.Fatalf("#var empty value stored %q, want existing value unchanged", got)
+	}
+	if got := resultTexts(results); len(got) != 1 || got[0] != "#variable {name} = {existing}" {
+		t.Fatalf("#var empty value results = %v, want getter echo", got)
+	}
+}
+
+func TestCmdVariableNormalNonEmptyAssignmentStillWorks(t *testing.T) {
+	v := New(nil, 1)
+
+	results := v.dispatchCommand("#var {name} {value}", 0, nil)
+	if got := v.variables["name"]; got != "value" {
+		t.Fatalf("#var non-empty assignment stored %q, want %q", got, "value")
+	}
+	if got := resultTexts(results); len(got) != 1 || got[0] != "#variable {name} = {value}" {
+		t.Fatalf("#var non-empty assignment results = %v, want assignment echo", got)
 	}
 }
 
