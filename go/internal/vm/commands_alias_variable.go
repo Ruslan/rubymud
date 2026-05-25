@@ -98,9 +98,9 @@ func (v *VM) cmdVariable(rest string, depth int) []Result {
 
 	if value == "" {
 		if val, ok := v.variables[name]; ok {
-			return echoResults([]string{fmt.Sprintf("#variable {%s} = {%s}", name, val)}, depth)
+			return inputEchoResults([]string{fmt.Sprintf("#variable {%s} = {%s}", name, val)}, depth)
 		}
-		return echoResults([]string{fmt.Sprintf("#variable: %s not found", name)}, depth)
+		return inputEchoResults([]string{fmt.Sprintf("#variable: %s not found", name)}, depth)
 	}
 
 	normalizedName := strings.TrimSpace(name)

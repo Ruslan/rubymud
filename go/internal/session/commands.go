@@ -54,7 +54,7 @@ func (s *Session) SendCommand(command string, source string) error {
 	echoMessages := make([]echoMsg, 0)
 	commands := make([]string, 0)
 	for _, r := range results {
-		if r.IsInternal && (r.Depth > 0 || source != "input") {
+		if r.IsInternal && (source != "input" || (r.Depth > 0 && !r.ShowOnInput)) {
 			continue
 		}
 		switch r.Kind {

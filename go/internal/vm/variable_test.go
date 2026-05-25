@@ -14,6 +14,17 @@ func resultTexts(results []Result) []string {
 	return texts
 }
 
+func inputVisibleTexts(results []Result) []string {
+	texts := make([]string, 0, len(results))
+	for _, result := range results {
+		if result.IsInternal && result.Depth > 0 && !result.ShowOnInput {
+			continue
+		}
+		texts = append(texts, result.Text)
+	}
+	return texts
+}
+
 func TestSubstituteVars(t *testing.T) {
 	v := New(nil, 1)
 	v.variables["двуруч"] = "фламберг"
@@ -114,6 +125,9 @@ func TestCmdVariableAliasGetterSetterWithEmptyPercentZero(t *testing.T) {
 	if got := resultTexts(setResults); len(got) != 1 || got[0] != "#variable {kast1} = {Тартис}" {
 		t.Fatalf("alias setter results = %v, want variable echo", got)
 	}
+	if got := inputVisibleTexts(setResults); len(got) != 0 {
+		t.Fatalf("alias setter input-visible results = %v, want hidden nested setter echo", got)
+	}
 
 	getResults := v.ProcessInputDetailed("каст1")
 	if got := v.variables["kast1"]; got != "Тартис" {
@@ -121,6 +135,9 @@ func TestCmdVariableAliasGetterSetterWithEmptyPercentZero(t *testing.T) {
 	}
 	if got := resultTexts(getResults); len(got) != 1 || got[0] != "#variable {kast1} = {Тартис}" {
 		t.Fatalf("alias getter results = %v, want current variable echo", got)
+	}
+	if got := inputVisibleTexts(getResults); len(got) != 1 || got[0] != "#variable {kast1} = {Тартис}" {
+		t.Fatalf("alias getter input-visible results = %v, want current variable echo", got)
 	}
 }
 
@@ -134,6 +151,9 @@ func TestCmdVariableDoesNotSetEmptyExpandedValue(t *testing.T) {
 	}
 	if got := resultTexts(results); len(got) != 1 || got[0] != "#variable {name} = {existing}" {
 		t.Fatalf("#var empty value results = %v, want getter echo", got)
+	}
+	if !results[0].IsInternal || !results[0].ShowOnInput {
+		t.Fatalf("#var empty value getter should remain internal but input-visible, got: %+v", results[0])
 	}
 }
 

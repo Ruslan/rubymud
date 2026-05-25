@@ -81,6 +81,89 @@ func TestSendCommandEmptyOtherSourceDoesNothing(t *testing.T) {
 	}
 }
 
+func TestSendCommandAliasVarGetterShowsForInputOnly(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles failed: %v", err)
+	}
+	conn := &recordingConn{}
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+
+	sess := &Session{
+		sessionID: 1,
+		conn:      conn,
+		store:     store,
+		vm:        v,
+		clients:   map[int]clientSink{},
+	}
+
+	var out []string
+	sess.AttachClient("test", func(msg ServerMsg) error {
+		if msg.Type != "output" {
+			return nil
+		}
+		for _, entry := range msg.Entries {
+			out = append(out, entry.Text)
+		}
+		return nil
+	})
+
+	if err := sess.SendCommand("#var {direct} {value}", "input"); err != nil {
+		t.Fatalf("SendCommand(direct setter): %v", err)
+	}
+	if len(out) != 1 || out[0] != "#variable {direct} = {value}" {
+		t.Fatalf("direct setter output = %v, want variable echo", out)
+	}
+
+	out = nil
+	if err := sess.SendCommand("#var {direct}", "input"); err != nil {
+		t.Fatalf("SendCommand(direct getter): %v", err)
+	}
+	if len(out) != 1 || out[0] != "#variable {direct} = {value}" {
+		t.Fatalf("direct getter output = %v, want variable echo", out)
+	}
+
+	out = nil
+	if err := sess.SendCommand("#alias {каст1} {#var {kast1} {%0}}", "input"); err != nil {
+		t.Fatalf("SendCommand(alias): %v", err)
+	}
+	out = nil
+
+	if err := sess.SendCommand("каст1 Тартис", "input"); err != nil {
+		t.Fatalf("SendCommand(alias setter): %v", err)
+	}
+	if len(out) != 0 {
+		t.Fatalf("input alias setter output = %v, want hidden nested setter echo", out)
+	}
+	vars := sess.vm.Variables()
+	if got := vars["kast1"]; got != "Тартис" {
+		t.Fatalf("alias setter stored %q, want %q", got, "Тартис")
+	}
+
+	out = nil
+	if err := sess.SendCommand("каст1", "input"); err != nil {
+		t.Fatalf("SendCommand(alias getter): %v", err)
+	}
+	if len(out) != 1 || out[0] != "#variable {kast1} = {Тартис}" {
+		t.Fatalf("input alias getter output = %v, want current variable echo", out)
+	}
+	vars = sess.vm.Variables()
+	if got := vars["kast1"]; got != "Тартис" {
+		t.Fatalf("alias getter changed value to %q, want %q", got, "Тартис")
+	}
+
+	out = nil
+	if err := sess.SendCommand("каст1", "trigger"); err != nil {
+		t.Fatalf("SendCommand(non-input alias getter): %v", err)
+	}
+	if len(out) != 0 {
+		t.Fatalf("non-input alias getter output = %v, want hidden internal echo", out)
+	}
+}
+
 func TestSendCommandUnknownHashCommandPassesThrough(t *testing.T) {
 	store := newTestStore(t)
 	conn := &recordingConn{}

@@ -42,6 +42,7 @@ type Result struct {
 	TargetBuffer string
 	IsInternal   bool
 	Depth        int
+	ShowOnInput  bool
 }
 
 type TimerControl interface {

@@ -251,6 +251,14 @@ func echoResults(lines []string, depth int) []Result {
 	}
 	return results
 }
+
+func inputEchoResults(lines []string, depth int) []Result {
+	results := make([]Result, 0, len(lines))
+	for _, line := range lines {
+		results = append(results, Result{Text: line, Kind: ResultEcho, IsInternal: true, Depth: depth, ShowOnInput: true})
+	}
+	return results
+}
 func isCodeBearingCommand(stmt string) bool {
 	cmds := []string{"#if", "#alias", "#ali", "#action", "#act", "#hotkey", "#hot", "#tickat", "#delay", "#ticker", "#sub", "#substitute", "#gag", "#unsub"}
 	for _, c := range cmds {
