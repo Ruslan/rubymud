@@ -1,0 +1,36 @@
+:root,
+:root[data-ansi-theme="classic"] {
+  --ansi-black-fg: #8b98a7;
+  --ansi-red-fg: #f7768e;
+  --ansi-green-fg: #9ece6a;
+  --ansi-yellow-fg: #e0af68;
+  --ansi-blue-fg: #7aa2f7;
+  --ansi-magenta-fg: #bb9af7;
+  --ansi-cyan-fg: #7dcfff;
+  --ansi-white-fg: #e8edf2;
+  --ansi-bright-black-fg: #8b98a7;
+  --ansi-bright-red-fg: #ff899d;
+  --ansi-bright-green-fg: #b4f071;
+  --ansi-bright-yellow-fg: #f7c97f;
+  --ansi-bright-blue-fg: #8db0ff;
+  --ansi-bright-magenta-fg: #c7a6ff;
+  --ansi-bright-cyan-fg: #9fe3ff;
+  --ansi-bright-white-fg: #f7fbff;
+
+  --ansi-black-bg: #1f252c;
+  --ansi-red-bg: #5a2630;
+  --ansi-green-bg: #2f4a27;
+  --ansi-yellow-bg: #5a4726;
+  --ansi-blue-bg: #2b3f63;
+  --ansi-magenta-bg: #4a3465;
+  --ansi-cyan-bg: #224b5a;
+  --ansi-white-bg: #bcc6d0;
+  --ansi-bright-black-bg: #1f252c;
+  --ansi-bright-red-bg: #6b2e3a;
+  --ansi-bright-green-bg: #355329;
+  --ansi-bright-yellow-bg: #6a5428;
+  --ansi-bright-blue-bg: #314a73;
+  --ansi-bright-magenta-bg: #573d77;
+  --ansi-bright-cyan-bg: #29596a;
+  --ansi-bright-white-bg: #d8e0e8;
+}

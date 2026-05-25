@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AnsiUp } from 'ansi_up';
 
+import { applyAnsiTheme } from './ansi';
 import { getAppElements } from './dom';
 import { createRenderer } from './render';
 
@@ -55,6 +56,27 @@ afterEach(() => {
   localStorage.clear();
   document.body.innerHTML = '';
   vi.restoreAllMocks();
+});
+
+describe('renderer ANSI theme refresh', () => {
+  it('re-renders buffered entries when ANSI theme changes', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    applyAnsiTheme('classic');
+
+    renderer.appendEntries([{ id: 1, text: '\x1b[1;31mbold red\x1b[0m', buffer: 'main' }]);
+    const output = document.querySelector<HTMLElement>('.pane-output');
+    expect(output?.innerHTML).toContain('ansi-red-fg');
+    expect(output?.innerHTML).not.toContain('ansi-bright-red-fg');
+
+    applyAnsiTheme('high-contrast');
+    renderer.refreshAnsiTheme();
+
+    expect(output?.innerHTML).toContain('ansi-bright-red-fg');
+    expect(output?.innerHTML).not.toContain('ansi-red-fg');
+    expect(output?.textContent).toContain('bold red');
+    expect(output?.querySelector('[data-entry-id="1"]')).not.toBeNull();
+  });
 });
 
 describe('renderer buffer catalog', () => {

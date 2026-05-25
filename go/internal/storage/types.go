@@ -27,6 +27,7 @@ type SessionRecord struct {
 	MudPort               int         `json:"mud_port"`
 	Status                string      `json:"status"`
 	InitialCommands       string      `json:"initial_commands"`
+	AnsiTheme             string      `gorm:"default:classic" json:"ansi_theme"`
 	MCCPEnabled           int         `gorm:"default:1" json:"mccp_enabled"`
 	MCCPActive            bool        `gorm:"-" json:"mccp_active"`
 	MCCPCompressedBytes   uint64      `gorm:"-" json:"mccp_compressed_bytes"`

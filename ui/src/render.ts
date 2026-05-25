@@ -1,5 +1,6 @@
 import { AnsiUp } from 'ansi_up';
 
+import { currentAnsiTheme, renderAnsiHtml } from './ansi';
 import type { AppElements } from './dom';
 import type { Hotkey, LogEntry, ResolvedVariable, Variable, ButtonOverlay } from './types';
 import { fetchWithToken } from './dom';
@@ -997,6 +998,10 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     }
   }
 
+  function refreshAnsiTheme() {
+    renderedPanes.forEach((pane) => renderPaneBuffer(pane.node.id));
+  }
+
   // Expose API
   return {
     appendCommandHint,
@@ -1014,8 +1019,9 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     updateConnectionStatus,
     loadLayout,
     addColumnRight,
+    refreshAnsiTheme,
   };
 }
   function renderANSI(pane: RenderedPane, text: string): string {
-    return pane.ansiUp.ansi_to_html(text);
+    return renderAnsiHtml(pane.ansiUp, text, currentAnsiTheme());
   }

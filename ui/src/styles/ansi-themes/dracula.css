@@ -1,0 +1,37 @@
+/* iTerm2 Dracula
+   Source: https://raw.githubusercontent.com/mbadolato/iTerm2-Color-Schemes/master/schemes/Dracula.itermcolors */
+:root[data-ansi-theme="dracula"] {
+  --ansi-black-fg: #21222c;
+  --ansi-red-fg: #ff5555;
+  --ansi-green-fg: #50fa7b;
+  --ansi-yellow-fg: #f1fa8c;
+  --ansi-blue-fg: #bd93f9;
+  --ansi-magenta-fg: #ff79c6;
+  --ansi-cyan-fg: #8be9fd;
+  --ansi-white-fg: #f8f8f2;
+  --ansi-bright-black-fg: #6272a4;
+  --ansi-bright-red-fg: #ff6e6e;
+  --ansi-bright-green-fg: #69ff94;
+  --ansi-bright-yellow-fg: #ffffa5;
+  --ansi-bright-blue-fg: #d6acff;
+  --ansi-bright-magenta-fg: #ff92df;
+  --ansi-bright-cyan-fg: #a4ffff;
+  --ansi-bright-white-fg: #ffffff;
+
+  --ansi-black-bg: #21222c;
+  --ansi-red-bg: #ff5555;
+  --ansi-green-bg: #50fa7b;
+  --ansi-yellow-bg: #f1fa8c;
+  --ansi-blue-bg: #bd93f9;
+  --ansi-magenta-bg: #ff79c6;
+  --ansi-cyan-bg: #8be9fd;
+  --ansi-white-bg: #f8f8f2;
+  --ansi-bright-black-bg: #6272a4;
+  --ansi-bright-red-bg: #ff6e6e;
+  --ansi-bright-green-bg: #69ff94;
+  --ansi-bright-yellow-bg: #ffffa5;
+  --ansi-bright-blue-bg: #d6acff;
+  --ansi-bright-magenta-bg: #ff92df;
+  --ansi-bright-cyan-bg: #a4ffff;
+  --ansi-bright-white-bg: #ffffff;
+}

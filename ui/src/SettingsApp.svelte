@@ -130,6 +130,7 @@
     mud_port: number;
     status: string;
     initial_commands: string;
+    ansi_theme: string;
     mccp_enabled: number;
     mccp_active?: boolean;
     mccp_compressed_bytes?: number;
@@ -215,7 +216,7 @@
 
   // Sessions State
   let sessions: Session[] = [];
-  const defaultSession = (): Partial<Session> => ({ name: '', mud_host: '', mud_port: 0, initial_commands: '', mccp_enabled: 1 });
+  const defaultSession = (): Partial<Session> => ({ name: '', mud_host: '', mud_port: 0, initial_commands: '', ansi_theme: 'classic', mccp_enabled: 1 });
   let sessionEditor: Partial<Session> = defaultSession();
   $: currentSession = sessions.find(s => s.id === selectedSessionID);
 
@@ -1676,6 +1677,16 @@
                 Enable MCCP2 compression
             </label>
         </div>
+        <div class="form-row" style="margin-top: 4px;">
+            <label for="ansi-theme" style="font-size: 0.85em; color: #8b949e;">ANSI color theme</label>
+            <select id="ansi-theme" bind:value={sessionEditor.ansi_theme}>
+                <option value="classic">Classic (default)</option>
+                <option value="high-contrast">High Contrast</option>
+                <option value="tango-dark">Tango Dark</option>
+                <option value="dracula">Dracula</option>
+                <option value="gruvbox-dark">Gruvbox Dark</option>
+            </select>
+        </div>
         {/if}
       </div>
       <table class="data-table">
@@ -1710,7 +1721,7 @@
                     <button class="btn-link" on:click={() => sessionAction('connect', s.id)}>Connect</button>
                 {/if}
                 <button class="btn-link" style="margin-left: 12px" on:click={() => { selectedSessionID = s.id; currentTab = 'variables'; }}>View</button>
-                <button class="btn-link" style="margin-left: 12px" on:click={() => sessionEditor = { ...s }}>Edit</button>
+                <button class="btn-link" style="margin-left: 12px" on:click={() => sessionEditor = { ...s, ansi_theme: s.ansi_theme || 'classic' }}>Edit</button>
                 <button class="btn-link btn-danger" style="margin-left: 12px" on:click={() => deleteItem('sessions', s.id)}>Delete</button>
               </td>
             </tr>

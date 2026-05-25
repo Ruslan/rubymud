@@ -1,0 +1,10 @@
+:root[data-ansi-theme="high-contrast"] {
+  --ansi-bright-black-fg: #c0cad6;
+  --ansi-bright-red-fg: #ff5555;
+  --ansi-bright-green-fg: #55ff55;
+  --ansi-bright-yellow-fg: #ffff55;
+  --ansi-bright-blue-fg: #7fa0ff;
+  --ansi-bright-magenta-fg: #ff55ff;
+  --ansi-bright-cyan-fg: #55ffff;
+  --ansi-bright-white-fg: #ffffff;
+}

@@ -1,6 +1,7 @@
 import './styles/main.css';
 import { AnsiUp } from 'ansi_up';
 
+import { applyAnsiTheme } from './ansi';
 import { getAppElements, fetchWithToken } from './dom';
 import { InputHistory } from './history';
 import { matchHotkey } from './hotkeys';
@@ -159,6 +160,7 @@ type SessionSummary = {
   name: string;
   mud_host: string;
   mud_port: number;
+  ansi_theme?: string;
 };
 
 function sessionTitle(session: SessionSummary): string {
@@ -167,12 +169,15 @@ function sessionTitle(session: SessionSummary): string {
   return `${session.mud_host}:${session.mud_port}`;
 }
 
-function updateDocumentTitle(sessions: SessionSummary[]) {
+function applyCurrentSessionSettings(sessions: SessionSummary[]) {
   if (!sessionID) return;
   const current = sessions.find((session) => session.id === sessionID);
   if (!current) return;
   document.title = sessionTitle(current);
+  applyAnsiTheme(current.ansi_theme);
 }
+
+applyAnsiTheme('classic');
 
 if (!params.get('session_id')) {
   fetchWithToken('/api/sessions')
@@ -198,11 +203,6 @@ let reconnectAttempts = 0;
 let lastHotkeysViewportWidth = currentHotkeysViewportWidth();
 let connectionStatus = 'connecting';
 logBoot('socket created', { readyState: socket.readyState, url: socket.url, sessionID });
-
-fetchWithToken('/api/sessions')
-  .then((res) => res.json())
-  .then((sessions: SessionSummary[]) => updateDocumentTitle(sessions))
-  .catch((err) => console.error('Failed to load sessions for title:', err));
 
 const history = new InputHistory();
 logBoot('history initialized');
@@ -379,6 +379,14 @@ const renderer = createRenderer({
 });
 renderer.loadLayout();
 logBoot('renderer initialized');
+
+fetchWithToken('/api/sessions')
+  .then((res) => res.json())
+  .then((sessions: SessionSummary[]) => {
+    applyCurrentSessionSettings(sessions);
+    renderer.refreshAnsiTheme();
+  })
+  .catch((err) => console.error('Failed to load sessions for settings:', err));
 
 function clearReconnectTimer() {
   if (reconnectTimer === null) {

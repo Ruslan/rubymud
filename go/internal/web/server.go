@@ -1582,9 +1582,10 @@ func (s *Server) listSessions(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	var payload struct {
-		Name string `json:"name"`
-		Host string `json:"mud_host"`
-		Port int    `json:"mud_port"`
+		Name      string `json:"name"`
+		Host      string `json:"mud_host"`
+		Port      int    `json:"mud_port"`
+		AnsiTheme string `json:"ansi_theme"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -1594,6 +1595,13 @@ func (s *Server) createSession(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if payload.AnsiTheme != "" {
+		record.AnsiTheme = storage.NormalizeAnsiTheme(payload.AnsiTheme)
+		if err := s.manager.UpdateSession(record); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)

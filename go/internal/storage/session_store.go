@@ -6,6 +6,19 @@ func (s *SessionRecord) TableName() string {
 	return "sessions"
 }
 
+func NormalizeAnsiTheme(theme string) string {
+	switch theme {
+	case "high-contrast", "tango-dark", "dracula", "gruvbox-dark":
+		return theme
+	default:
+		return "classic"
+	}
+}
+
+func normalizeSessionRecord(record *SessionRecord) {
+	record.AnsiTheme = NormalizeAnsiTheme(record.AnsiTheme)
+}
+
 func (s *Store) EnsureDefaultSession(host string, port int) (SessionRecord, error) {
 	var record SessionRecord
 	err := s.db.Where("name = ?", "default").Order("id ASC").First(&record).Error
@@ -17,6 +30,7 @@ func (s *Store) EnsureDefaultSession(host string, port int) (SessionRecord, erro
 			MudHost:         host,
 			MudPort:         port,
 			Status:          "disconnected",
+			AnsiTheme:       "classic",
 			MCCPEnabled:     1,
 			LastConnectedAt: now,
 		}
@@ -35,12 +49,14 @@ func (s *Store) EnsureDefaultSession(host string, port int) (SessionRecord, erro
 		return SessionRecord{}, err
 	}
 
+	normalizeSessionRecord(&record)
 	return record, nil
 }
 
 func (s *Store) GetSession(id int64) (SessionRecord, error) {
 	var record SessionRecord
 	err := s.db.First(&record, id).Error
+	normalizeSessionRecord(&record)
 	return record, err
 }
 
@@ -50,6 +66,7 @@ func (s *Store) CreateSession(name, host string, port int) (SessionRecord, error
 		MudHost:     host,
 		MudPort:     port,
 		Status:      "disconnected",
+		AnsiTheme:   "classic",
 		MCCPEnabled: 1,
 	}
 	err := s.db.Create(&record).Error
@@ -61,6 +78,7 @@ func (s *Store) CreateSession(name, host string, port int) (SessionRecord, error
 }
 
 func (s *Store) UpdateSession(record SessionRecord) error {
+	normalizeSessionRecord(&record)
 	return s.db.Save(&record).Error
 }
 
@@ -71,13 +89,16 @@ func (s *Store) DeleteSession(id int64) error {
 func (s *Store) ListSessions() ([]SessionRecord, error) {
 	var sessions []SessionRecord
 	err := s.db.Order("id ASC").Find(&sessions).Error
+	for i := range sessions {
+		normalizeSessionRecord(&sessions[i])
+	}
 	return sessions, err
 }
 
 func (s *Store) MarkSessionConnected(sessionID int64) error {
 	now := nowSQLiteTimePtr()
 	return s.db.Model(&SessionRecord{}).Where("id = ?", sessionID).Updates(map[string]any{
-		"status":          "connected",
+		"status":            "connected",
 		"last_connected_at": now,
 	}).Error
 }
