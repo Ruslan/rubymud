@@ -1,0 +1,42 @@
+.settings-section .description { color: #9ba3af; margin-bottom: 32px; }
+.settings-section .form-error { color: #ff7b72; margin-bottom: 12px; font-size: 0.9rem; }
+.settings-section .editor-box { background: #1a1d21; padding: 20px; border-radius: 8px; border: 1px solid #2d333b; margin-bottom: 32px; }
+.settings-section .form-grid { display: flex; flex-direction: column; gap: 12px; }
+.settings-section .form-row { display: flex; gap: 12px; align-items: center; }
+.settings-section .options-row { margin-top: 8px; border-top: 1px solid #2d333b; padding-top: 12px; flex-wrap: wrap; }
+.settings-section input[type="text"],
+.settings-section input[type="number"] { background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px 12px; border-radius: 6px; flex: 1; }
+.settings-section .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #9ba3af; cursor: pointer; }
+.settings-section .btn-primary { background: #3498db; color: white; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; }
+.settings-section .btn-primary:hover { background: #2980b9; }
+.settings-section .btn-link { background: none; border: none; color: #3498db; cursor: pointer; padding: 0; font-size: 0.9rem; }
+.settings-section .btn-link:hover { text-decoration: underline; }
+.settings-section .btn-danger { color: #e74c3c; margin-left: 12px; }
+.settings-section .data-table { width: 100%; border-collapse: collapse; }
+.settings-section .data-table th { text-align: left; padding: 12px; border-bottom: 2px solid #30363d; color: #9ba3af; font-size: 0.8rem; text-transform: uppercase; }
+.settings-section .data-table td { padding: 12px; border-bottom: 1px solid #21262d; font-size: 0.9rem; vertical-align: middle; }
+.settings-section .order-cell { text-align: center; }
+.settings-section .btn-icon { background: none; border: none; color: #9ba3af; cursor: pointer; padding: 2px 6px; border-radius: 4px; }
+.settings-section .btn-icon:hover:not(:disabled) { background: #2d333b; color: #e8edf2; }
+.settings-section .btn-icon:disabled { opacity: 0.3; cursor: not-allowed; }
+.settings-section .key-cell { font-family: monospace; color: #f39c12; font-weight: 600; }
+.settings-section .value-cell { color: #e8edf2; }
+.settings-section .dim-cell { color: #666; font-size: 0.8rem; }
+.settings-section .flags-cell { width: 80px; }
+.settings-section .flags-wrapper { display: flex; gap: 8px; align-items: center; font-size: 1.1rem; line-height: 1; }
+.settings-section .flag-on { color: #2ecc71; }
+.settings-section .flag-off { color: #444; }
+.settings-section .flag-icon { filter: grayscale(0.5); font-size: 0.9rem; }
+.settings-section .actions-cell { white-space: nowrap; }
+.settings-section .inline-edit-row td { background: rgba(52, 152, 219, 0.06); padding: 12px 16px 16px; }
+.settings-section .inline-edit-panel { background: #15191f; border: 1px solid #30363d; border-radius: 8px; padding: 14px; }
+.settings-section .inline-edit-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; align-items: end; }
+.settings-section .inline-edit-grid label:not(.checkbox-label) { display: flex; flex-direction: column; gap: 6px; color: #9ba3af; font-size: 0.8rem; }
+.settings-section .inline-edit-grid input { width: 100%; box-sizing: border-box; }
+.settings-section .inline-field-wide { grid-column: span 2; }
+.settings-section .inline-checkbox { align-self: center; min-height: 36px; }
+.settings-section .inline-edit-actions { display: flex; align-items: center; gap: 12px; margin-top: 14px; }
+.settings-section .inline-error { margin: 12px 0 0; }
+.settings-section .inline-position-input { max-width: 120px; }
+.settings-section .editing-indicator { color: #9ba3af; font-size: 0.85rem; font-style: italic; }
+.settings-section .toggle-label { display: inline-flex; align-items: center; gap: 8px; }
