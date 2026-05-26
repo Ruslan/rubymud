@@ -8,6 +8,7 @@
   import TimersSection from './settings/TimersSection.svelte';
   import GroupsSection from './settings/GroupsSection.svelte';
   import DeclaredVariablesSection from './settings/DeclaredVariablesSection.svelte';
+  import VariablesSection from './settings/VariablesSection.svelte';
   import type {
     Alias,
     Highlight,
@@ -24,12 +25,8 @@
     SessionProfile,
     Substitute,
     Trigger,
+    Variable,
   } from './settings/types';
-
-  interface Variable {
-    key: string;
-    value: string;
-  }
 
   let currentTab = window.location.hash.slice(1) || 'variables';
   let loading = true;
@@ -110,8 +107,12 @@
 
   // Variables State (Session-scoped)
   let variables: Variable[] = [];
+  const defaultVariable = (): Variable => ({ key: '', value: '' });
   let newVarKey = '';
   let newVarValue = '';
+  let editingVariableKey: string | null = null;
+  let editingVariableDraft: Variable = defaultVariable();
+  let inlineVariableError = '';
 
   // Aliases State
   let aliases: Alias[] = [];
@@ -413,6 +414,48 @@
     return '';
   }
 
+  function validateVariableKey(keyValue: string): string {
+    const key = keyValue.trim();
+    if (!key) return 'Variable key is required.';
+    if (key.startsWith('$')) return "Variable key cannot start with '$'.";
+    return '';
+  }
+
+  function startInlineVariableEdit(variable: Variable) {
+    if (editingVariableKey !== null && editingVariableKey !== variable.key && !confirm('Discard unsaved variable changes?')) return;
+    inlineVariableError = '';
+    editingVariableKey = variable.key;
+    editingVariableDraft = { ...variable };
+  }
+
+  function cancelInlineVariableEdit() {
+    inlineVariableError = '';
+    editingVariableKey = null;
+    editingVariableDraft = defaultVariable();
+  }
+
+  async function saveInlineVariableEdit() {
+    if (!selectedSessionID) return;
+    const validationError = validateVariableKey(editingVariableDraft.key);
+    if (validationError) { inlineVariableError = validationError; return; }
+
+    inlineVariableError = '';
+    formError = '';
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const resp = await fetch(`/api/sessions/${selectedSessionID}/variables`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+      body: JSON.stringify({ key: editingVariableDraft.key, value: editingVariableDraft.value }),
+    });
+    if (!resp.ok) {
+      inlineVariableError = await resp.text() || 'Failed to save variable.';
+      return;
+    }
+    cancelInlineVariableEdit();
+    await fetchData();
+  }
+
   async function saveInlineAliasEdit() {
     if (!selectedProfileID || editingAliasDraft.id === undefined) return;
     const positionError = validateInlinePosition('Alias', editingAliasDraft);
@@ -590,12 +633,7 @@
   }
 
   function validateItem(domain: string, item: any): string {
-    if (domain === 'variables') {
-      const key = newVarKey.trim();
-      if (!key) return 'Variable key is required.';
-      if (key.startsWith('$')) return "Variable key cannot start with '$'.";
-      return '';
-    }
+    if (domain === 'variables') return validateVariableKey(newVarKey);
     if (domain === 'aliases') return !item.name?.trim() ? 'Alias name is required.' : (!item.template?.trim() ? 'Alias template is required.' : '');
     if (domain === 'triggers') return !item.pattern?.trim() ? 'Trigger pattern is required.' : (!item.command?.trim() ? 'Trigger command is required.' : '');
     if (domain === 'subs') return !item.pattern?.trim() ? 'Substitution pattern is required.' : '';
@@ -1150,29 +1188,21 @@
     {/if}
 
     {#if currentTab === 'variables'}
-      <header class="content-header"><h2>Variables</h2><p class="description">State variables for {currentSession?.name || 'selected session'}.</p></header>
-      <div class="editor-box">
-        {#if formError}<div class="form-error">{formError}</div>{/if}
-        <div class="form-row">
-          <input type="text" bind:value={newVarKey} placeholder="Key" required />
-          <input type="text" bind:value={newVarValue} placeholder="Value" />
-          <button class="btn-primary" on:click={() => saveItem('variables', {}, () => { newVarKey = ''; newVarValue = ''; })}>Save</button>
-        </div>
-      </div>
-      <table class="data-table">
-        <thead><tr><th>Key</th><th>Value</th><th style="width: 140px">Actions</th></tr></thead>
-        <tbody>
-          {#each variables as v}
-            <tr>
-              <td class="key-cell">{v.key}</td><td class="value-cell">{v.value}</td>
-              <td class="actions-cell">
-                <button class="btn-link" on:click={() => { newVarKey = v.key; newVarValue = v.value; }}>Edit</button>
-                <button class="btn-link btn-danger" on:click={() => deleteItem('variables', v.key)}>Delete</button>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
+      <VariablesSection
+        currentSession={currentSession}
+        {formError}
+        {variables}
+        bind:newVarKey
+        bind:newVarValue
+        {editingVariableKey}
+        bind:editingVariableDraft
+        {inlineVariableError}
+        addVariable={() => saveItem('variables', {}, () => { newVarKey = ''; newVarValue = ''; })}
+        {startInlineVariableEdit}
+        deleteVariable={(key) => deleteItem('variables', key)}
+        {saveInlineVariableEdit}
+        {cancelInlineVariableEdit}
+      />
 
     {:else if currentTab === 'declared_variables'}
       <DeclaredVariablesSection

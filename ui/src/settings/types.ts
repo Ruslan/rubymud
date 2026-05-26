@@ -1,3 +1,8 @@
+export interface Variable {
+  key: string;
+  value: string;
+}
+
 export interface Profile {
   id: number;
   name: string;
