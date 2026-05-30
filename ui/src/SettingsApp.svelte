@@ -12,6 +12,7 @@
   import ProfilesSection from './settings/ProfilesSection.svelte';
   import SessionsSection from './settings/SessionsSection.svelte';
   import * as api from './settings/api';
+  import { duplicateHotkeyShortcutError } from './settings/hotkeyValidation';
   import type {
     Alias,
     Highlight,
@@ -161,6 +162,9 @@
   let hotkeys: Hotkey[] = [];
   const defaultHotkey = (): Hotkey => ({ shortcut: '', command: '', mobile_row: 0, mobile_order: 0 });
   let hotkeyEditor: Hotkey = defaultHotkey();
+  let editingHotkeyID: number | null = null;
+  let editingHotkeyDraft: Hotkey = defaultHotkey();
+  let inlineHotkeyError = '';
 
   // Profile Timers State
   let profileTimers: ProfileTimer[] = [];
@@ -541,6 +545,42 @@
       return;
     }
     cancelInlineHighlightEdit();
+    await fetchData();
+  }
+
+  async function addHotkey() {
+    const validationError = validateItem('hotkeys', hotkeyEditor) || duplicateHotkeyShortcutError(hotkeys, hotkeyEditor);
+    if (validationError) { formError = validationError; return; }
+    await saveItem('hotkeys', { ...hotkeyEditor, id: undefined, position: undefined }, () => hotkeyEditor = defaultHotkey());
+  }
+
+  function startInlineHotkeyEdit(hotkey: Hotkey) {
+    if (hotkey.id === undefined) return;
+    if (editingHotkeyID !== null && editingHotkeyID !== hotkey.id && !confirm('Discard unsaved hotkey changes?')) return;
+    inlineHotkeyError = '';
+    editingHotkeyID = hotkey.id;
+    editingHotkeyDraft = { ...hotkey };
+  }
+
+  function cancelInlineHotkeyEdit() {
+    inlineHotkeyError = '';
+    editingHotkeyID = null;
+    editingHotkeyDraft = defaultHotkey();
+  }
+
+  async function saveInlineHotkeyEdit() {
+    if (!selectedProfileID || editingHotkeyDraft.id === undefined) return;
+    const validationError = validateItem('hotkeys', editingHotkeyDraft) || duplicateHotkeyShortcutError(hotkeys, editingHotkeyDraft, editingHotkeyDraft.id);
+    if (validationError) { inlineHotkeyError = validationError; return; }
+
+    inlineHotkeyError = '';
+    formError = '';
+    const resp = await api.saveProfileRule(selectedProfileID, 'hotkeys', editingHotkeyDraft.id, editingHotkeyDraft);
+    if (!resp.ok) {
+      inlineHotkeyError = await resp.text() || 'Failed to save hotkey.';
+      return;
+    }
+    cancelInlineHotkeyEdit();
     await fetchData();
   }
 
@@ -1146,10 +1186,15 @@
         {formError}
         {hotkeys}
         bind:hotkeyEditor
-        saveHotkey={() => saveItem('hotkeys', hotkeyEditor, () => hotkeyEditor = defaultHotkey())}
+        {editingHotkeyID}
+        bind:editingHotkeyDraft
+        {inlineHotkeyError}
+        {addHotkey}
         moveHotkey={(hotkey, direction) => moveRule('hotkeys', hotkey, direction)}
-        editHotkey={(hotkey) => hotkeyEditor = { ...hotkey }}
+        {startInlineHotkeyEdit}
         deleteHotkey={(id) => deleteItem('hotkeys', id)}
+        {saveInlineHotkeyEdit}
+        {cancelInlineHotkeyEdit}
       />
 
     {:else if currentTab === 'timers'}
