@@ -112,7 +112,6 @@ export interface NamedColor {
 }
 
 export interface RuleGroupSummary {
-  domain: string;
   group_name: string;
   total_count: number;
   enabled_count: number;

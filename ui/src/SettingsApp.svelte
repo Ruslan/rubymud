@@ -669,10 +669,10 @@
     await fetchData();
   }
 
-  async function toggleGroup(domain: string, groupName: string, enabled: boolean) {
+  async function toggleGroup(groupName: string, enabled: boolean) {
     if (!selectedProfileID) return;
     formError = '';
-    await api.toggleProfileGroup(selectedProfileID, domain, groupName, enabled);
+    await api.toggleProfileGroup(selectedProfileID, groupName, enabled);
     await fetchData();
   }
 
@@ -939,29 +939,6 @@
     api.setAPIToken(appSettings.api_token);
   }
 
-  function titleCase(value: string): string {
-    return value.slice(0, 1).toUpperCase() + value.slice(1);
-  }
-
-  function formatTimerCycle(ms: number): string {
-    const seconds = Math.round(ms / 1000);
-    if (seconds >= 60) {
-      const minutes = Math.floor(seconds / 60);
-      const rest = seconds % 60;
-      return `${minutes}:${String(rest).padStart(2, '0')}`;
-    }
-    return `${seconds}s`;
-  }
-
-  function ruleCountForGroup(domain: string, groupName: string): number {
-    const normalized = groupName || 'default';
-    if (domain === 'aliases') return aliases.filter((item) => (item.group_name || 'default') === normalized).length;
-    if (domain === 'triggers') return triggers.filter((item) => (item.group_name || 'default') === normalized).length;
-    if (domain === 'subs') return subs.filter((item) => (item.group_name || 'default') === normalized).length;
-    if (domain === 'highlights') return highlights.filter((item) => (item.group_name || 'default') === normalized).length;
-    return 0;
-  }
-
   function previewSubstitution(rule: Substitute): string {
     if (!rule.pattern.trim()) return subPreviewText;
     try {
@@ -1195,8 +1172,6 @@
         currentProfile={currentProfile}
         {formError}
         {groups}
-        {titleCase}
-        {ruleCountForGroup}
         {toggleGroup}
       />
 

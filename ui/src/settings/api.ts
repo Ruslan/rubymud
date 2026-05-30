@@ -102,8 +102,8 @@ export function toggleProfileRule(profileID: number, domain: 'aliases' | 'trigge
   return putJSON(`/api/profiles/${profileID}/${domain}/${item.id}`, { ...item, enabled });
 }
 
-export function toggleProfileGroup(profileID: number, domain: string, groupName: string, enabled: boolean) {
-  return postJSON(`/api/profiles/${profileID}/groups/toggle`, { domain, group_name: groupName, enabled });
+export function toggleProfileGroup(profileID: number, groupName: string, enabled: boolean) {
+  return postJSON(`/api/profiles/${profileID}/groups/toggle`, { group_name: groupName, enabled });
 }
 
 export function saveProfileTimerRequest(profileID: number, timer: any) {
