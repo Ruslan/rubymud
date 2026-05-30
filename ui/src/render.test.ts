@@ -164,6 +164,27 @@ describe('renderer command trace reconciliation', () => {
     expect(document.querySelector('.output-line')?.textContent).not.toContain('#showme');
     expect(document.querySelector('.output-hint')).toBeNull();
   });
+
+  it('resolves a pending source hint without re-rendering the whole pane', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.appendEntries([
+      { id: 1, text: 'A goblin is here.', buffer: 'main' },
+      { id: 2, text: 'A troll is here.', buffer: 'main' },
+    ]);
+
+    const lineBefore = document.querySelector<HTMLElement>('[data-entry-id="2"]');
+    renderer.appendCommandHint('bash $t1', 'cmd-3');
+    expect(lineBefore?.querySelector('[data-client-command-id="cmd-3"]')).not.toBeNull();
+
+    renderer.resolveCommandTrace('cmd-3', ['bash troll']);
+
+    const lineAfter = document.querySelector<HTMLElement>('[data-entry-id="2"]');
+    expect(lineAfter).toBe(lineBefore);
+    expect(lineAfter?.textContent).toContain('-> bash troll');
+    expect(lineAfter?.textContent).not.toContain('bash $t1');
+    expect(lineAfter?.querySelector('[data-client-command-id="cmd-3"]')).toBeNull();
+  });
 });
 
 describe('renderer BEL metadata', () => {

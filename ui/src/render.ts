@@ -63,7 +63,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
   const knownBuffers = new Set<string>(['main']);
   const bufferData = new Map<string, LogEntry[]>();
-  const pendingCommandHints = new Map<string, { buffer: string; entry: LogEntry; source: string }>();
+  const pendingCommandHints = new Map<string, { buffer: string; entry: LogEntry; source: string; commandIndex: number }>();
   const renderedPanes = new Map<string, RenderedPane>();
 
   function getBufferData(name: string): LogEntry[] {
@@ -443,11 +443,9 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     linkifyHttpsUrls(span);
     line.appendChild(span);
 
+    const assignedPendingCommandIDs = new Set<string>();
     (entry.commands || []).forEach((command) => {
-      const hint = document.createElement('span');
-      hint.className = 'output-hint';
-      hint.textContent = `-> ${command}`;
-      line.appendChild(hint);
+      line.appendChild(createCommandHintElement(command, pendingCommandIDFor(entry, command, assignedPendingCommandIDs)));
     });
 
     if (entry.buttons && entry.buttons.length > 0) {
@@ -576,10 +574,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       if (pane.node.buffer === buffer) {
         const line = pane.outputEl.querySelector<HTMLElement>(`[data-entry-id="${entryId}"]`);
         if (line) {
-          const hint = document.createElement('span');
-          hint.className = 'output-hint';
-          hint.textContent = `-> ${command}`;
-          line.appendChild(hint);
+          line.appendChild(createCommandHintElement(command));
         }
       }
     }
@@ -589,30 +584,79 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     const buffer = 'main';
     const data = getBufferData(buffer);
     let pendingEntry: LogEntry | null = null;
+    let commandIndex = -1;
     if (data.length > 0) {
       const lastEntry = data[data.length - 1]!;
       lastEntry.commands = lastEntry.commands || [];
       lastEntry.commands.push(command);
+      commandIndex = lastEntry.commands.length - 1;
       pendingEntry = lastEntry;
     }
     if (clientCommandID && pendingEntry) {
-      pendingCommandHints.set(clientCommandID, { buffer, entry: pendingEntry, source: command });
+      pendingCommandHints.set(clientCommandID, { buffer, entry: pendingEntry, source: command, commandIndex });
     }
 
     renderedPanes.forEach(pane => {
       if (pane.node.buffer === buffer) {
         const line = pane.outputEl.lastElementChild;
         if (line) {
-          const hint = document.createElement('span');
-          hint.className = 'output-hint';
-          if (clientCommandID) {
-            hint.dataset['clientCommandId'] = clientCommandID;
-          }
-          hint.textContent = `-> ${command}`;
-          line.appendChild(hint);
+          line.appendChild(createCommandHintElement(command, clientCommandID));
         }
       }
     });
+  }
+
+  function createCommandHintElement(command: string, clientCommandID?: string): HTMLSpanElement {
+    const hint = document.createElement('span');
+    hint.className = 'output-hint';
+    if (clientCommandID) {
+      hint.dataset['clientCommandId'] = clientCommandID;
+    }
+    hint.textContent = `-> ${command}`;
+    return hint;
+  }
+
+  function pendingCommandIDFor(entry: LogEntry, command: string, assignedIDs: Set<string>): string | undefined {
+    for (const [id, pending] of pendingCommandHints) {
+      if (assignedIDs.has(id)) continue;
+      if (pending.entry === entry && pending.source === command) {
+        assignedIDs.add(id);
+        return id;
+      }
+    }
+    return undefined;
+  }
+
+  function replacePendingCommandHintInDOM(clientCommandID: string, buffer: string, commands: string[]): boolean {
+    let replaced = false;
+
+    renderedPanes.forEach(pane => {
+      if (pane.node.buffer !== buffer) {
+        return;
+      }
+
+      const hints = pane.outputEl.querySelectorAll<HTMLElement>(`[data-client-command-id="${clientCommandID}"]`);
+      if (!hints.length) {
+        return;
+      }
+
+      const shouldScroll = shouldStickToBottom(pane);
+      hints.forEach((hint) => {
+        const fragment = document.createDocumentFragment();
+        commands.forEach((command) => {
+          fragment.appendChild(createCommandHintElement(command));
+        });
+        hint.replaceWith(fragment);
+        replaced = true;
+      });
+
+      if (shouldScroll && !state.restoreInProgress) {
+        pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
+      }
+      updateScrollButtonVisibility(pane);
+    });
+
+    return replaced;
   }
 
   function resolveCommandTrace(clientCommandID: string, commands: string[]) {
@@ -621,12 +665,18 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     pendingCommandHints.delete(clientCommandID);
 
     pending.entry.commands = pending.entry.commands || [];
-    const sourceIndex = pending.entry.commands.indexOf(pending.source);
+    const sourceIndex = pending.entry.commands[pending.commandIndex] === pending.source
+      ? pending.commandIndex
+      : pending.entry.commands.indexOf(pending.source);
     const canonicalCommands = commands.filter((command) => command.trim() !== '');
     if (sourceIndex >= 0) {
       pending.entry.commands.splice(sourceIndex, 1, ...canonicalCommands);
     } else {
       pending.entry.commands.push(...canonicalCommands);
+    }
+
+    if (replacePendingCommandHintInDOM(clientCommandID, pending.buffer, canonicalCommands)) {
+      return;
     }
 
     renderedPanes.forEach(pane => {
