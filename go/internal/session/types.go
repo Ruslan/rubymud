@@ -23,11 +23,12 @@ type SettingsChangedJSON struct {
 }
 
 type ClientLogEntry struct {
-	ID       int64           `json:"id,omitempty"`
-	Text     string          `json:"text"`
-	Buffer   string          `json:"buffer,omitempty"`
-	Commands []string        `json:"commands,omitempty"`
-	Buttons  []ButtonOverlay `json:"buttons,omitempty"`
+	ID            int64           `json:"id,omitempty"`
+	Text          string          `json:"text"`
+	Buffer        string          `json:"buffer,omitempty"`
+	Commands      []string        `json:"commands,omitempty"`
+	Buttons       []ButtonOverlay `json:"buttons,omitempty"`
+	BellPositions []int           `json:"bell_positions,omitempty"`
 }
 
 type ButtonOverlay struct {

@@ -48,6 +48,7 @@ export interface LogEntry {
   buffer?: string;
   commands?: string[];
   buttons?: ButtonOverlay[];
+  bell_positions?: number[];
 }
 
 export interface ServerMessage {

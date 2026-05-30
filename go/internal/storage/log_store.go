@@ -316,7 +316,7 @@ func (s *Store) loadOverlays(entries []LogEntry) error {
 	}
 
 	var overlays []LogOverlay
-	err := s.db.Where("overlay_type IN ('command_hint', 'button', 'substitution', 'gag') AND log_entry_id IN ?", ids).
+	err := s.db.Where("overlay_type IN ('command_hint', 'button', 'substitution', 'gag', 'bell') AND log_entry_id IN ?", ids).
 		Order("id ASC").
 		Find(&overlays).Error
 	if err != nil {

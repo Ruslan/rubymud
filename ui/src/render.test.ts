@@ -29,7 +29,7 @@ function setupDOM() {
   `;
 }
 
-function createTestRenderer() {
+function createTestRenderer(state = { activePanel: null as const, restoreInProgress: false }) {
   setupDOM();
 
   return createRenderer({
@@ -39,7 +39,7 @@ function createTestRenderer() {
     requestVariables: vi.fn(),
     requestGroups: vi.fn(),
     toggleGroup: vi.fn(),
-    state: { activePanel: null, restoreInProgress: false },
+    state,
   });
 }
 
@@ -163,6 +163,35 @@ describe('renderer command trace reconciliation', () => {
 
     expect(document.querySelector('.output-line')?.textContent).not.toContain('#showme');
     expect(document.querySelector('.output-hint')).toBeNull();
+  });
+});
+
+describe('renderer BEL metadata', () => {
+  it('triggers visual bell for live entries with bell metadata', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    renderer.appendEntries([{ id: 1, text: '[BEL] alert', buffer: 'main', bell_positions: [0] }]);
+
+    expect(document.querySelector('.pane-output')?.classList.contains('visual-bell')).toBe(true);
+  });
+
+  it('does not trigger visual bell for literal backslash text without metadata', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    renderer.appendEntries([{ id: 1, text: '[\\x07] literal', buffer: 'main' }]);
+
+    expect(document.querySelector('.pane-output')?.classList.contains('visual-bell')).toBe(false);
+  });
+
+  it('does not replay visual bell while restoring entries', () => {
+    const renderer = createTestRenderer({ activePanel: null, restoreInProgress: true });
+    renderer.loadLayout();
+
+    renderer.appendEntries([{ id: 1, text: '[BEL] alert', buffer: 'main', bell_positions: [0] }]);
+
+    expect(document.querySelector('.pane-output')?.classList.contains('visual-bell')).toBe(false);
   });
 });
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -561,6 +562,194 @@ func TestLineWithUnclosedSubColorCanLeakToNextLine(t *testing.T) {
 	}
 	if strings.Contains(second, "\x1b[") {
 		t.Fatalf("expected second line payload to have no ANSI codes, got %q", second)
+	}
+}
+
+func TestProcessLineSanitizesBELAndBroadcastsMetadata(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles failed: %v", err)
+	}
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+	sess := &Session{sessionID: 1, conn: &recordingConn{}, store: store, vm: v, clients: map[int]clientSink{}}
+
+	var entries []ClientLogEntry
+	sess.AttachClient("test", func(msg ServerMsg) error {
+		if msg.Type == "output" {
+			entries = append(entries, msg.Entries...)
+		}
+		return nil
+	})
+
+	sess.processLine("[\a][*** system ***]")
+
+	if len(entries) != 1 {
+		t.Fatalf("broadcast entries = %d, want 1", len(entries))
+	}
+	if strings.Contains(entries[0].Text, "\a") {
+		t.Fatalf("broadcast text contains raw BEL: %q", entries[0].Text)
+	}
+	if !strings.Contains(entries[0].Text, "[BEL]") {
+		t.Fatalf("broadcast text = %q, want [BEL] marker", entries[0].Text)
+	}
+	if got, want := entries[0].BellPositions, []int{1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("bell positions = %v, want %v", got, want)
+	}
+
+	logs, err := store.RecentLogs(1, 1)
+	if err != nil {
+		t.Fatalf("RecentLogs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("logs = %d, want 1", len(logs))
+	}
+	if strings.Contains(logs[0].RawText, "\a") || strings.Contains(logs[0].PlainText, "\a") {
+		t.Fatalf("stored log contains raw BEL: raw=%q plain=%q", logs[0].RawText, logs[0].PlainText)
+	}
+	bellCount := 0
+	for _, overlay := range logs[0].Overlays {
+		if overlay.OverlayType == "bell" {
+			bellCount++
+		}
+	}
+	if bellCount != 1 {
+		t.Fatalf("bell overlay count = %d, want 1; overlays=%+v", bellCount, logs[0].Overlays)
+	}
+}
+
+func TestProcessLineBELIgnoresLiteralBackslashTextAndTracksMultipleBELs(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles failed: %v", err)
+	}
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+	sess := &Session{sessionID: 1, conn: &recordingConn{}, store: store, vm: v, clients: map[int]clientSink{}}
+
+	sess.processLine(`[\\x07] literal`)
+	sess.processLine("a\ab\a")
+
+	logs, err := store.RecentLogs(1, 2)
+	if err != nil {
+		t.Fatalf("RecentLogs: %v", err)
+	}
+	if len(logs) != 2 {
+		t.Fatalf("logs = %d, want 2", len(logs))
+	}
+	for _, overlay := range logs[0].Overlays {
+		if overlay.OverlayType == "bell" {
+			t.Fatalf("literal backslash text created bell overlay: %+v", logs[0].Overlays)
+		}
+	}
+	var positions []int
+	for _, overlay := range logs[1].Overlays {
+		if overlay.OverlayType == "bell" && overlay.StartOffset != nil {
+			positions = append(positions, *overlay.StartOffset)
+		}
+	}
+	if want := []int{1, 7}; !reflect.DeepEqual(positions, want) {
+		t.Fatalf("multiple BEL positions = %v, want %v", positions, want)
+	}
+}
+
+func TestProcessLineBELPositionsUseSanitizedPlainOffsets(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles failed: %v", err)
+	}
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+	sess := &Session{sessionID: 1, conn: &recordingConn{}, store: store, vm: v, clients: map[int]clientSink{}}
+
+	sess.processLine("Ж\x1b[31m\a!")
+
+	logs, err := store.RecentLogs(1, 1)
+	if err != nil {
+		t.Fatalf("RecentLogs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("logs = %d, want 1", len(logs))
+	}
+	if got, want := logs[0].PlainText, "Ж[BEL]!"; got != want {
+		t.Fatalf("plain text = %q, want %q", got, want)
+	}
+	var positions []int
+	for _, overlay := range logs[0].Overlays {
+		if overlay.OverlayType == "bell" && overlay.StartOffset != nil {
+			positions = append(positions, *overlay.StartOffset)
+		}
+	}
+	if want := []int{len("Ж")}; !reflect.DeepEqual(positions, want) {
+		t.Fatalf("BEL positions = %v, want sanitized plain byte offsets %v", positions, want)
+	}
+}
+
+func TestProcessLineBELInsideEscapeStillSanitizes(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles failed: %v", err)
+	}
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+	sess := &Session{sessionID: 1, conn: &recordingConn{}, store: store, vm: v, clients: map[int]clientSink{}}
+
+	sess.processLine("\x1b]0;Title\aAlert")
+
+	logs, err := store.RecentLogs(1, 1)
+	if err != nil {
+		t.Fatalf("RecentLogs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("logs = %d, want 1", len(logs))
+	}
+	if strings.Contains(logs[0].RawText, "\a") || strings.Contains(logs[0].PlainText, "\a") {
+		t.Fatalf("BEL inside escape leaked raw control char: raw=%q plain=%q", logs[0].RawText, logs[0].PlainText)
+	}
+	foundBell := false
+	for _, overlay := range logs[0].Overlays {
+		if overlay.OverlayType == "bell" {
+			foundBell = true
+		}
+	}
+	if !foundBell {
+		t.Fatalf("BEL inside escape did not create bell overlay: %+v", logs[0].Overlays)
+	}
+}
+
+func TestProcessLineNonBELControlInsideEscapeStillEscapes(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles failed: %v", err)
+	}
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+	sess := &Session{sessionID: 1, conn: &recordingConn{}, store: store, vm: v, clients: map[int]clientSink{}}
+
+	sess.processLine("\x1b]0;\x01Title")
+
+	logs, err := store.RecentLogs(1, 1)
+	if err != nil {
+		t.Fatalf("RecentLogs: %v", err)
+	}
+	if len(logs) != 1 {
+		t.Fatalf("logs = %d, want 1", len(logs))
+	}
+	if strings.Contains(logs[0].RawText, "\x01") || strings.Contains(logs[0].PlainText, "\x01") {
+		t.Fatalf("control char inside escape leaked raw byte: raw=%q plain=%q", logs[0].RawText, logs[0].PlainText)
+	}
+	if !strings.Contains(logs[0].RawText, "[\\x01]") {
+		t.Fatalf("raw text = %q, want escaped control marker", logs[0].RawText)
 	}
 }
 

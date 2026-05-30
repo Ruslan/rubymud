@@ -351,6 +351,37 @@ func TestSubstitutesAPI(t *testing.T) {
 	}
 }
 
+func TestRestoreStateIncludesBellPositions(t *testing.T) {
+	s, sess := setupTestServer(t)
+	start, end := 1, 6
+	if _, err := s.store.AppendLogEntryWithOverlays(sess.SessionID(), "main", "x[BEL]y", "x[BEL]y", []storage.LogOverlay{{
+		OverlayType: "bell",
+		StartOffset: &start,
+		EndOffset:   &end,
+		PayloadJSON: "{}",
+	}}); err != nil {
+		t.Fatalf("AppendLogEntryWithOverlays: %v", err)
+	}
+
+	var msg session.ServerMsg
+	if err := s.sendRestoreState(sess, func(next session.ServerMsg) error {
+		if next.Type == "restore_begin" {
+			msg = next
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("sendRestoreState: %v", err)
+	}
+
+	entries := msg.Buffers["main"]
+	if len(entries) != 1 {
+		t.Fatalf("restore main entries = %d, want 1", len(entries))
+	}
+	if got, want := entries[0].BellPositions, []int{1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("restore bell positions = %v, want %v", got, want)
+	}
+}
+
 func setupTestServer(t *testing.T) (*Server, *session.Session) {
 	dbName := uuid.New().String()
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", dbName)

@@ -115,7 +115,7 @@ func (s *Session) queueOrBroadcastAt(cle ClientLogEntry, lineStartedAt time.Time
 }
 
 func (s *Session) broadcastEntry(entry storage.LogEntry) {
-	cle := ClientLogEntry{ID: entry.ID, Text: entry.RawText, Buffer: entry.Buffer, Commands: entry.Commands}
+	cle := ClientLogEntry{ID: entry.ID, Text: entry.RawText, Buffer: entry.Buffer, Commands: entry.Commands, BellPositions: BellPositionsFromOverlays(entry.Overlays)}
 	for _, b := range entry.Buttons {
 		cle.Buttons = append(cle.Buttons, ButtonOverlay{Label: b.Label, Command: b.Command})
 	}
@@ -127,7 +127,7 @@ func (s *Session) broadcastEntryWithText(entry storage.LogEntry, text string) {
 }
 
 func (s *Session) broadcastEntryWithTextAt(entry storage.LogEntry, text string, lineStartedAt time.Time) {
-	cle := ClientLogEntry{ID: entry.ID, Text: text, Buffer: entry.Buffer, Commands: entry.Commands}
+	cle := ClientLogEntry{ID: entry.ID, Text: text, Buffer: entry.Buffer, Commands: entry.Commands, BellPositions: BellPositionsFromOverlays(entry.Overlays)}
 	for _, b := range entry.Buttons {
 		cle.Buttons = append(cle.Buttons, ButtonOverlay{Label: b.Label, Command: b.Command})
 	}

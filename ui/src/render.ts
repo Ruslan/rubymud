@@ -498,6 +498,13 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     updateScrollButtonVisibility(pane);
   }
 
+  function triggerVisualBell(element: HTMLElement) {
+    element.classList.remove('visual-bell');
+    // Force animation restart for repeated BEL entries in the same pane.
+    void element.offsetWidth;
+    element.classList.add('visual-bell');
+  }
+
   function appendEntries(entries: LogEntry[]) {
     if (entries.length === 0) return;
 
@@ -527,6 +534,9 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
             fragment.appendChild(createEntryDOM(entry, pane));
           }
           pane.outputEl.appendChild(fragment);
+          if (!state.restoreInProgress && bufferEntries.some(entry => (entry.bell_positions || []).length > 0)) {
+            triggerVisualBell(pane.outputEl);
+          }
 
           if (pane.outputEl.children.length > maxRenderedLines) {
             const excess = pane.outputEl.children.length - maxRenderedLines;

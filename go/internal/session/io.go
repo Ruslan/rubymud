@@ -135,7 +135,7 @@ func (s *Session) processLine(line string) {
 	s.mu.Unlock()
 
 	phaseStartedAt := time.Now()
-	processed := normalizeLine(line)
+	processed, bellOverlays := sanitizeLineControlsAndBEL(line)
 
 	plainText := stripANSI(processed)
 	parseDuration = time.Since(phaseStartedAt)
@@ -144,9 +144,10 @@ func (s *Session) processLine(line string) {
 
 	phaseStartedAt = time.Now()
 	if gagOverlay, gagged := s.vm.CheckGag(plainText); gagged {
+		overlays := append(cloneLogOverlays(bellOverlays), gagOverlay)
 		vmGagDuration += time.Since(phaseStartedAt)
 		dbStartedAt := time.Now()
-		if _, err := s.store.AppendLogEntryWithOverlays(s.sessionID, "main", processed, plainText, []storage.LogOverlay{gagOverlay}); err != nil {
+		if _, err := s.store.AppendLogEntryWithOverlays(s.sessionID, "main", processed, plainText, overlays); err != nil {
 			dbMainDuration += time.Since(dbStartedAt)
 			log.Printf("append gag log entry failed: %v", err)
 			s.finishLineLatency("gag_error", len(line), mudRTT, parseDuration, vmGagDuration, vmTriggersDuration, vmSubsDuration, dbMainDuration, dbExtraDuration, effectsDuration, highlightDuration, wsQueueDuration, time.Since(lineStartedAt))
@@ -169,10 +170,11 @@ func (s *Session) processLine(line string) {
 
 	phaseStartedAt = time.Now()
 	displayRaw, displayPlain, subOverlays := s.vm.ApplySubsAndCollectOverlays(processed, plainText)
+	overlays := append(cloneLogOverlays(bellOverlays), subOverlays...)
 	vmSubsDuration += time.Since(phaseStartedAt)
 
 	dbStartedAt := time.Now()
-	id, err := s.store.AppendLogEntryWithOverlays(s.sessionID, routing.TargetBuffer, processed, plainText, subOverlays)
+	id, err := s.store.AppendLogEntryWithOverlays(s.sessionID, routing.TargetBuffer, processed, plainText, overlays)
 	dbMainDuration += time.Since(dbStartedAt)
 	if err != nil {
 		log.Printf("append log entry failed: %v", err)
@@ -193,7 +195,7 @@ func (s *Session) processLine(line string) {
 	}
 	effectsDuration += time.Since(phaseStartedAt)
 
-	entry := storage.LogEntry{ID: id, Buffer: routing.TargetBuffer, RawText: processed, PlainText: plainText, DisplayRaw: displayRaw, DisplayPlain: displayPlain, Overlays: subOverlays}
+	entry := storage.LogEntry{ID: id, Buffer: routing.TargetBuffer, RawText: processed, PlainText: plainText, DisplayRaw: displayRaw, DisplayPlain: displayPlain, Overlays: overlays}
 	for _, b := range buttons {
 		entry.Buttons = append(entry.Buttons, storage.ButtonOverlay{Label: b.Label, Command: b.Command})
 	}
@@ -208,7 +210,7 @@ func (s *Session) processLine(line string) {
 
 	for _, copyBuffer := range routing.CopyBuffers {
 		dbStartedAt := time.Now()
-		copyID, err := s.store.AppendLogEntryWithOverlays(s.sessionID, copyBuffer, processed, plainText, cloneLogOverlays(subOverlays))
+		copyID, err := s.store.AppendLogEntryWithOverlays(s.sessionID, copyBuffer, processed, plainText, cloneLogOverlays(overlays))
 		dbExtraDuration += time.Since(dbStartedAt)
 		if err == nil {
 			for _, b := range entry.Buttons {
