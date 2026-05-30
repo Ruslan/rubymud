@@ -9,6 +9,8 @@
   import GroupsSection from './settings/GroupsSection.svelte';
   import DeclaredVariablesSection from './settings/DeclaredVariablesSection.svelte';
   import VariablesSection from './settings/VariablesSection.svelte';
+  import ProfilesSection from './settings/ProfilesSection.svelte';
+  import SessionsSection from './settings/SessionsSection.svelte';
   import type {
     Alias,
     Highlight,
@@ -92,6 +94,10 @@
   let sessions: Session[] = [];
   const defaultSession = (): Partial<Session> => ({ name: '', mud_host: '', mud_port: 0, initial_commands: '', ansi_theme: 'classic', mccp_enabled: 1 });
   let sessionEditor: Partial<Session> = defaultSession();
+  let editingSessionID: number | null = null;
+  let editingSessionDraft: Partial<Session> = defaultSession();
+  let inlineSessionError = '';
+  let sessionProfileToAddID: number | undefined = undefined;
   $: currentSession = sessions.find(s => s.id === selectedSessionID);
 
   let sessionProfiles: SessionProfile[] = [];
@@ -103,6 +109,9 @@
   let profiles: Profile[] = [];
   const defaultProfile = (): Partial<Profile> => ({ name: '', description: '' });
   let profileEditor: Partial<Profile> = defaultProfile();
+  let editingProfileID: number | null = null;
+  let editingProfileDraft: Partial<Profile> = defaultProfile();
+  let inlineProfileError = '';
   $: currentProfile = profiles.find(p => p.id === selectedProfileID);
 
   // Variables State (Session-scoped)
@@ -648,6 +657,76 @@
     if (domain === 'sessions') return !item.name?.trim() ? 'Session name is required.' : (!item.mud_host?.trim() ? 'MUD host is required.' : (!item.mud_port ? 'MUD port is required.' : ''));
     if (domain === 'profiles') return !item.name?.trim() ? 'Profile name is required.' : '';
     return '';
+  }
+
+  function startInlineProfileEdit(profile: Profile) {
+    if (editingProfileID !== null && editingProfileID !== profile.id && !confirm('Discard unsaved profile changes?')) return;
+    inlineProfileError = '';
+    editingProfileID = profile.id;
+    editingProfileDraft = { ...profile };
+  }
+
+  function cancelInlineProfileEdit() {
+    inlineProfileError = '';
+    editingProfileID = null;
+    editingProfileDraft = defaultProfile();
+  }
+
+  async function saveInlineProfileEdit() {
+    if (editingProfileDraft.id === undefined) return;
+    const validationError = validateItem('profiles', editingProfileDraft);
+    if (validationError) { inlineProfileError = validationError; return; }
+
+    inlineProfileError = '';
+    formError = '';
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const resp = await fetch(`/api/profiles/${editingProfileDraft.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+      body: JSON.stringify(editingProfileDraft),
+    });
+    if (!resp.ok) {
+      inlineProfileError = await resp.text() || 'Failed to save profile.';
+      return;
+    }
+    cancelInlineProfileEdit();
+    await fetchData();
+  }
+
+  function startInlineSessionEdit(session: Session) {
+    if (editingSessionID !== null && editingSessionID !== session.id && !confirm('Discard unsaved session changes?')) return;
+    inlineSessionError = '';
+    editingSessionID = session.id;
+    editingSessionDraft = { ...session, ansi_theme: session.ansi_theme || 'classic' };
+  }
+
+  function cancelInlineSessionEdit() {
+    inlineSessionError = '';
+    editingSessionID = null;
+    editingSessionDraft = defaultSession();
+  }
+
+  async function saveInlineSessionEdit() {
+    if (editingSessionDraft.id === undefined) return;
+    const validationError = validateItem('sessions', editingSessionDraft);
+    if (validationError) { inlineSessionError = validationError; return; }
+
+    inlineSessionError = '';
+    formError = '';
+    // @ts-ignore
+    const token = window.API_TOKEN || '';
+    const resp = await fetch(`/api/sessions/${editingSessionDraft.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
+      body: JSON.stringify(editingSessionDraft),
+    });
+    if (!resp.ok) {
+      inlineSessionError = await resp.text() || 'Failed to save session.';
+      return;
+    }
+    cancelInlineSessionEdit();
+    await fetchData();
   }
 
   async function deleteItem(domain: string, id: string | number) {
@@ -1338,167 +1417,48 @@
       />
 
     {:else if currentTab === 'profiles'}
-      <header class="content-header"><h2>Profiles</h2><p class="description">Manage settings profiles.</p></header>
-
-      <div class="editor-box" style="display: flex; gap: 12px; align-items: center; margin-bottom: 24px;">
-        <button class="btn-primary" on:click={exportAllProfiles}>Export All to config/</button>
-        <button class="btn-primary" style="background: #2ecc71" on:click={importAllProfiles}>Import All from config/</button>
-      </div>
-
-      <div class="editor-box">
-        {#if formError}<div class="form-error">{formError}</div>{/if}
-        <div class="form-row">
-            <input type="text" bind:value={profileEditor.name} placeholder="Profile Name" required />
-            <input type="text" bind:value={profileEditor.description} placeholder="Description" />
-            <button class="btn-primary" on:click={() => saveItem('profiles', profileEditor, () => profileEditor = defaultProfile())}>
-                {profileEditor.id ? 'Update' : 'Add'}
-            </button>
-        </div>
-      </div>
-      <table class="data-table">
-        <thead><tr><th>Name</th><th>Description</th><th>Actions</th></tr></thead>
-        <tbody>
-          {#each profiles as p}
-            <tr>
-              <td class="key-cell">{p.name}</td>
-              <td class="value-cell">{p.description || '-'}</td>
-              <td class="actions-cell">
-                <button class="btn-link" on:click={() => exportProfile(p.id)}>Export</button>
-                <button class="btn-link" style="margin-left: 12px" on:click={() => profileEditor = { ...p }}>Edit</button>
-                <button class="btn-link btn-danger" style="margin-left: 12px" on:click={() => deleteItem('profiles', p.id)}>Delete</button>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-
-      <h3 style="margin-top: 40px; border-bottom: 1px solid #2d333b; padding-bottom: 8px;">Files in config/</h3>
-      <table class="data-table" style="margin-bottom: 20px;">
-        <thead><tr><th>Filename</th><th style="width: 120px">Actions</th></tr></thead>
-        <tbody>
-            {#each profileFiles as file}
-                <tr>
-                    <td class="value-cell">{file.filename}</td>
-                    <td class="actions-cell">
-                        <button class="btn-link" on:click={() => importProfileFromFile(file.filename)}>Import</button>
-                    </td>
-                </tr>
-            {/each}
-            {#if profileFiles.length === 0}
-                <tr><td colspan="2" class="dim-cell">No .tt files found in config/ directory.</td></tr>
-            {/if}
-        </tbody>
-      </table>
+      <ProfilesSection
+        {formError}
+        {profiles}
+        bind:profileEditor
+        {profileFiles}
+        {editingProfileID}
+        bind:editingProfileDraft
+        {inlineProfileError}
+        addProfile={() => saveItem('profiles', { ...profileEditor, id: undefined }, () => profileEditor = defaultProfile())}
+        {exportAllProfiles}
+        {importAllProfiles}
+        {exportProfile}
+        {importProfileFromFile}
+        {startInlineProfileEdit}
+        deleteProfile={(id) => deleteItem('profiles', id)}
+        {saveInlineProfileEdit}
+        {cancelInlineProfileEdit}
+      />
 
     {:else if currentTab === 'sessions'}
-      <header class="content-header"><h2>Sessions</h2><p class="description">Manage your MUD connections and active profiles.</p></header>
-      <div class="editor-box">
-        {#if formError}<div class="form-error">{formError}</div>{/if}
-        <div class="form-row">
-            <input type="text" bind:value={sessionEditor.name} placeholder="Session Name" required />
-            <input type="text" bind:value={sessionEditor.mud_host} placeholder="MUD Host" required />
-            <input type="number" bind:value={sessionEditor.mud_port} placeholder="Port" required />
-            <button class="btn-primary" on:click={() => saveItem('sessions', sessionEditor, () => sessionEditor = defaultSession())}>
-                {sessionEditor.id ? 'Update' : 'Add'}
-            </button>
-        </div>
-        {#if sessionEditor.id}
-        <div class="form-row" style="flex-direction: column; align-items: stretch; margin-top: 8px;">
-            <label for="init-cmds" style="font-size: 0.85em; color: #8b949e;">Initial Commands <span style="font-weight: normal;">(one per line, sent on connect)</span></label>
-            <textarea id="init-cmds" bind:value={sessionEditor.initial_commands} rows="3" style="width: 100%; resize: vertical; font-family: monospace;"></textarea>
-        </div>
-        <div class="form-row" style="margin-top: 4px;">
-            <label style="display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                <input type="checkbox" checked={sessionEditor.mccp_enabled === 1} on:change={(e) => sessionEditor.mccp_enabled = e.target.checked ? 1 : 0} />
-                Enable MCCP2 compression
-            </label>
-        </div>
-        <div class="form-row" style="margin-top: 4px;">
-            <label for="ansi-theme" style="font-size: 0.85em; color: #8b949e;">ANSI color theme</label>
-            <select id="ansi-theme" bind:value={sessionEditor.ansi_theme}>
-                <option value="classic">Classic (default)</option>
-                <option value="high-contrast">High Contrast</option>
-                <option value="tango-dark">Tango Dark</option>
-                <option value="dracula">Dracula</option>
-                <option value="gruvbox-dark">Gruvbox Dark</option>
-            </select>
-        </div>
-        {/if}
-      </div>
-      <table class="data-table">
-        <thead><tr><th style="width: 120px">Status</th><th style="width: 200px">Network</th><th>Name</th><th>Connection</th><th style="width: 240px">Actions</th></tr></thead>
-        <tbody>
-          {#each sessions as s}
-            <tr>
-              <td>
-                <span class="status-tag {s.status === 'connected' ? 'connected' : 'disconnected'}">
-                  {s.status}
-                </span>
-              </td>
-              <td>
-                {#if s.mccp_active}
-                  <div class="mccp-stats">
-                    <span class="mccp-tag">MCCP Active</span>
-                    <span class="stats-text" title="Compressed / Decompressed">
-                      {Math.round((s.mccp_compressed_bytes || 0) / 1024)}K / {Math.round((s.mccp_decompressed_bytes || 0) / 1024)}K
-                    </span>
-                    <span class="ratio-text">{s.mccp_compression_ratio} saved</span>
-                  </div>
-                {:else}
-                  <span class="dim-cell">-</span>
-                {/if}
-              </td>
-              <td class="key-cell">{s.name}</td>
-              <td class="value-cell">{s.mud_host}:{s.mud_port}</td>
-              <td class="actions-cell">
-                {#if s.status === 'connected'}
-                    <button class="btn-link btn-danger" on:click={() => sessionAction('disconnect', s.id)}>Disconnect</button>
-                {:else}
-                    <button class="btn-link" on:click={() => sessionAction('connect', s.id)}>Connect</button>
-                {/if}
-                <button class="btn-link" style="margin-left: 12px" on:click={() => { selectedSessionID = s.id; currentTab = 'variables'; }}>View</button>
-                <button class="btn-link" style="margin-left: 12px" on:click={() => sessionEditor = { ...s, ansi_theme: s.ansi_theme || 'classic' }}>Edit</button>
-                <button class="btn-link btn-danger" style="margin-left: 12px" on:click={() => deleteItem('sessions', s.id)}>Delete</button>
-              </td>
-            </tr>
-          {/each}
-        </tbody>
-      </table>
-
-      {#if currentSession}
-        <h3 style="margin-top: 40px; border-bottom: 1px solid #2d333b; padding-bottom: 8px;">Active Profiles for {currentSession.name}</h3>
-        <p class="description">Profiles at the bottom of the list have higher priority and will override rules from profiles above them.</p>
-        <table class="data-table" style="margin-bottom: 20px;">
-            <thead><tr><th style="width: 60px">Order</th><th>Profile Name</th><th style="width: 120px">Actions</th></tr></thead>
-            <tbody>
-                {#each sessionProfiles as sp, i}
-                    <tr>
-                        <td class="order-cell">
-                            <button class="btn-icon" disabled={i === 0} on:click={() => moveSessionProfile(i, -1)}>▲</button>
-                            <button class="btn-icon" disabled={i === sessionProfiles.length - 1} on:click={() => moveSessionProfile(i, 1)}>▼</button>
-                        </td>
-                        <td class="value-cell">{sp.profile_name}</td>
-                        <td class="actions-cell">
-                            <button class="btn-link btn-danger" on:click={() => removeProfileFromSession(sp.profile_id)}>Remove</button>
-                        </td>
-                    </tr>
-                {/each}
-                {#if sessionProfiles.length === 0}
-                    <tr><td colspan="3" class="dim-cell">No active profiles for this session.</td></tr>
-                {/if}
-            </tbody>
-        </table>
-
-        <div class="form-row" style="max-width: 400px">
-            <select bind:value={profileEditor.id} style="flex: 1; background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px; border-radius: 6px;">
-                <option value={null} disabled selected>Select a profile to add</option>
-                {#each profiles as p}
-                    <option value={p.id}>{p.name}</option>
-                {/each}
-            </select>
-            <button class="btn-primary" disabled={!profileEditor.id} on:click={() => { if (profileEditor.id) addProfileToSession(profileEditor.id); profileEditor.id = undefined; }}>Add</button>
-        </div>
-      {/if}
+      <SessionsSection
+        {formError}
+        {sessions}
+        bind:sessionEditor
+        {editingSessionID}
+        bind:editingSessionDraft
+        {inlineSessionError}
+        {currentSession}
+        {sessionProfiles}
+        {profiles}
+        bind:sessionProfileToAddID
+        addSession={() => saveItem('sessions', { ...sessionEditor, id: undefined }, () => sessionEditor = defaultSession())}
+        {sessionAction}
+        viewSession={(id) => { selectedSessionID = id; currentTab = 'variables'; }}
+        {startInlineSessionEdit}
+        deleteSession={(id) => deleteItem('sessions', id)}
+        {saveInlineSessionEdit}
+        {cancelInlineSessionEdit}
+        {moveSessionProfile}
+        {removeProfileFromSession}
+        {addProfileToSession}
+      />
 
     {:else if currentTab === 'history'}
       <header class="content-header"><h2>History</h2><p class="description">Command history for {currentSession?.name || 'selected session'}.</p></header>
@@ -1677,12 +1637,11 @@
   .nav-links li.active button { background: #24292f; color: #3498db; border-left: 3px solid #3498db; }
   .content { padding: 40px; overflow-y: auto; }
   .description { color: #9ba3af; margin-bottom: 32px; }
-  .form-error { color: #ff7b72; margin-bottom: 12px; font-size: 0.9rem; }
   .editor-box { background: #1a1d21; padding: 20px; border-radius: 8px; border: 1px solid #2d333b; margin-bottom: 32px; }
   .selector-box { background: #1a1d21; padding: 12px 20px; border-radius: 8px; border: 1px solid #2d333b; margin-bottom: 24px; display: flex; align-items: center; gap: 12px; }
   .selector-box select { background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 6px 12px; border-radius: 6px; }
   .form-row { display: flex; gap: 12px; align-items: center; }
-  input[type="text"], input[type="number"] { background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px 12px; border-radius: 6px; flex: 1; }
+  input[type="text"] { background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px 12px; border-radius: 6px; flex: 1; }
   .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #9ba3af; cursor: pointer; }
   .btn-primary { background: #3498db; color: white; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; }
   .btn-primary:hover { background: #2980b9; }
@@ -1712,20 +1671,8 @@
   .data-table { width: 100%; border-collapse: collapse; }
   .data-table th { text-align: left; padding: 12px; border-bottom: 2px solid #30363d; color: #9ba3af; font-size: 0.8rem; text-transform: uppercase; }
   .data-table td { padding: 12px; border-bottom: 1px solid #21262d; font-size: 0.9rem; vertical-align: middle; }
-  .order-cell { text-align: center; }
-  .btn-icon { background: none; border: none; color: #9ba3af; cursor: pointer; padding: 2px 6px; border-radius: 4px; }
-  .btn-icon:hover:not(:disabled) { background: #2d333b; color: #e8edf2; }
-  .btn-icon:disabled { opacity: 0.3; cursor: not-allowed; }
   .key-cell { font-family: monospace; color: #f39c12; font-weight: 600; }
-  .value-cell { color: #e8edf2; }
   .dim-cell { color: #666; font-size: 0.8rem; }
-  .status-tag { padding: 4px 8px; border-radius: 4px; font-size: 0.75rem; font-weight: bold; text-transform: uppercase; }
-  .status-tag.connected { background: rgba(46, 204, 113, 0.2); color: #2ecc71; border: 1px solid rgba(46, 204, 113, 0.3); }
-  .status-tag.disconnected { background: rgba(231, 76, 60, 0.2); color: #e74c3c; border: 1px solid rgba(231, 76, 60, 0.3); }
-  .mccp-stats { display: flex; flex-direction: column; gap: 4px; }
-  .mccp-tag { align-self: flex-start; padding: 2px 6px; border-radius: 4px; font-size: 0.65rem; font-weight: bold; background: rgba(52, 152, 219, 0.2); color: #3498db; border: 1px solid rgba(52, 152, 219, 0.3); text-transform: uppercase; }
-  .stats-text { font-size: 0.75rem; color: #9ba3af; font-family: monospace; }
-  .ratio-text { font-size: 0.7rem; color: #2ecc71; font-weight: bold; }
   .actions-cell { white-space: nowrap; }
   .btn-link { background: none; border: none; color: #3498db; cursor: pointer; padding: 0; font-size: 0.9rem; }
   .btn-link:hover { text-decoration: underline; }
