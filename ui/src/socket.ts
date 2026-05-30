@@ -9,8 +9,8 @@ export function createSocket(sessionID?: number) {
   return new WebSocket(url);
 }
 
-export function sendSocketCommand(socket: WebSocket, value: string, source: string) {
-  socket.send(JSON.stringify({ method: 'send', value, source }));
+export function sendSocketCommand(socket: WebSocket, value: string, source: string, clientCommandID?: string) {
+  socket.send(JSON.stringify({ method: 'send', value, source, client_command_id: clientCommandID }));
 }
 
 export function requestSocketVariables(socket: WebSocket) {

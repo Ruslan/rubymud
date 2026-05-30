@@ -26,6 +26,11 @@ func (s *Session) sendTriggerCommand(cmd string, entryID int64, buffer string) e
 }
 
 func (s *Session) SendCommand(command string, source string) error {
+	_, err := s.SendCommandWithTrace(command, source)
+	return err
+}
+
+func (s *Session) SendCommandWithTrace(command string, source string) ([]string, error) {
 	if source == "" {
 		source = "input"
 	}
@@ -35,7 +40,7 @@ func (s *Session) SendCommand(command string, source string) error {
 	// Special case: empty enter from user input sends just a newline
 	if command == "" && source == "input" {
 		_, err := s.conn.Write([]byte("\n"))
-		return err
+		return nil, err
 	}
 
 	if source == "input" && originalCommand != "" {
@@ -52,6 +57,7 @@ func (s *Session) SendCommand(command string, source string) error {
 	}
 	echoMessages := make([]echoMsg, 0)
 	commands := make([]string, 0)
+	canonicalCommands := make([]string, 0)
 	for _, r := range results {
 		if r.IsInternal && (source != "input" || (r.Depth > 0 && !r.ShowOnInput)) {
 			continue
@@ -100,8 +106,9 @@ func (s *Session) SendCommand(command string, source string) error {
 			}
 		}
 		if _, err := s.conn.Write([]byte(cmd + "\n")); err != nil {
-			return err
+			return canonicalCommands, err
 		}
+		canonicalCommands = append(canonicalCommands, cmd)
 		s.mu.Lock()
 		s.lastCommandAt = time.Now()
 		s.mu.Unlock()
@@ -110,7 +117,7 @@ func (s *Session) SendCommand(command string, source string) error {
 	if shouldBroadcastVariables {
 		s.BroadcastVariables()
 	}
-	return nil
+	return canonicalCommands, nil
 }
 
 func hasVariableChange(results []vm.Result) bool {

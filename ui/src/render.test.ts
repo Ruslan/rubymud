@@ -107,6 +107,35 @@ describe('renderer buffer catalog', () => {
   });
 });
 
+describe('renderer command trace reconciliation', () => {
+  it('replaces a pending source hint with canonical commands', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.appendEntries([{ id: 1, text: 'A goblin is here.', buffer: 'main' }]);
+
+    renderer.appendCommandHint('bash $t1', 'cmd-1');
+    expect(document.querySelector('.output-line')?.textContent).toContain('-> bash $t1');
+
+    renderer.resolveCommandTrace('cmd-1', ['bash orc']);
+
+    const text = document.querySelector('.output-line')?.textContent || '';
+    expect(text).toContain('-> bash orc');
+    expect(text).not.toContain('bash $t1');
+  });
+
+  it('removes a pending source hint when trace resolves to local-only empty commands', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.appendEntries([{ id: 1, text: 'A goblin is here.', buffer: 'main' }]);
+
+    renderer.appendCommandHint('#showme {hi}', 'cmd-2');
+    renderer.resolveCommandTrace('cmd-2', []);
+
+    expect(document.querySelector('.output-line')?.textContent).not.toContain('#showme');
+    expect(document.querySelector('.output-hint')).toBeNull();
+  });
+});
+
 describe('renderer variables panel', () => {
   it('updates a focused variable input when the user has not edited it', () => {
     const renderer = createTestRenderer();

@@ -39,10 +39,11 @@ type Server struct {
 }
 
 type clientMessage struct {
-	Method string `json:"method"`
-	Value  string `json:"value"`
-	Source string `json:"source"`
-	SessID int64  `json:"sess_id"`
+	Method          string `json:"method"`
+	Value           string `json:"value"`
+	Source          string `json:"source"`
+	SessID          int64  `json:"sess_id"`
+	ClientCommandID string `json:"client_command_id"`
 }
 
 func New(listenAddr string, manager *session.Manager, store *storage.Store, configDir string) *Server {
@@ -1834,9 +1835,16 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 
-			if err := currentSess.SendCommand(command, source); err != nil {
+			commands, err := currentSess.SendCommandWithTrace(command, source)
+			if err != nil {
 				log.Printf("send command failed: %v", err)
 				return
+			}
+			if message.ClientCommandID != "" {
+				if err := writeJSON(session.ServerMsg{Type: "command_trace", ClientCommandID: message.ClientCommandID, Commands: commands}); err != nil {
+					log.Printf("websocket command trace send failed: %v", err)
+					return
+				}
 			}
 		}
 	}

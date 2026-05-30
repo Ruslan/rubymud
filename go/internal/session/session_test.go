@@ -215,6 +215,60 @@ func TestSendCommandBroadcastsVariablesForNestedVariableChanges(t *testing.T) {
 	}
 }
 
+func TestSendCommandWithTraceReturnsCanonicalCommands(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles failed: %v", err)
+	}
+	if err := store.SetVariable(1, "t1", "orc"); err != nil {
+		t.Fatalf("SetVariable(t1): %v", err)
+	}
+	if err := store.SetVariable(1, "ready", "1"); err != nil {
+		t.Fatalf("SetVariable(ready): %v", err)
+	}
+	conn := &recordingConn{}
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+	sess := &Session{sessionID: 1, conn: conn, store: store, vm: v, clients: map[int]clientSink{}}
+
+	commands, err := sess.SendCommandWithTrace("bash $t1", "input")
+	if err != nil {
+		t.Fatalf("SendCommandWithTrace(variable): %v", err)
+	}
+	if got, want := strings.Join(commands, ";"), "bash orc"; got != want {
+		t.Fatalf("variable trace = %q, want %q", got, want)
+	}
+
+	if _, err := sess.SendCommandWithTrace("#alias {hitit} {kick $t1}", "input"); err != nil {
+		t.Fatalf("SendCommandWithTrace(alias define): %v", err)
+	}
+	commands, err = sess.SendCommandWithTrace("hitit", "input")
+	if err != nil {
+		t.Fatalf("SendCommandWithTrace(alias): %v", err)
+	}
+	if got, want := strings.Join(commands, ";"), "kick orc"; got != want {
+		t.Fatalf("alias trace = %q, want %q", got, want)
+	}
+
+	commands, err = sess.SendCommandWithTrace("#if {$ready == 1} {c1;c2} {bad}", "input")
+	if err != nil {
+		t.Fatalf("SendCommandWithTrace(if chain): %v", err)
+	}
+	if got, want := strings.Join(commands, ";"), "c1;c2"; got != want {
+		t.Fatalf("if chain trace = %q, want %q", got, want)
+	}
+
+	commands, err = sess.SendCommandWithTrace("#showme {local only}", "input")
+	if err != nil {
+		t.Fatalf("SendCommandWithTrace(local): %v", err)
+	}
+	if len(commands) != 0 {
+		t.Fatalf("local-only trace = %v, want empty", commands)
+	}
+}
+
 func TestSendCommandUnknownHashCommandPassesThrough(t *testing.T) {
 	store := newTestStore(t)
 	conn := &recordingConn{}

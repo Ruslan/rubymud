@@ -61,6 +61,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
   const knownBuffers = new Set<string>(['main']);
   const bufferData = new Map<string, LogEntry[]>();
+  const pendingCommandHints = new Map<string, { buffer: string; entry: LogEntry; source: string }>();
   const renderedPanes = new Map<string, RenderedPane>();
 
   function getBufferData(name: string): LogEntry[] {
@@ -456,9 +457,8 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
         button.type = 'button';
         button.textContent = btn.label;
         button.addEventListener('click', () => {
-          appendCommandHint(btn.command); // Append to main
-          scrollOutputToBottom();
           sendCommand(btn.command, 'button');
+          scrollOutputToBottom();
         });
 
         if (onButtonRendered) {
@@ -572,24 +572,53 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     }
   }
 
-  function appendCommandHint(command: string) {
-    // Append to the last entry of 'main' buffer
-    const data = getBufferData('main');
+  function appendCommandHint(command: string, clientCommandID?: string) {
+    const buffer = 'main';
+    const data = getBufferData(buffer);
+    let pendingEntry: LogEntry | null = null;
     if (data.length > 0) {
       const lastEntry = data[data.length - 1]!;
       lastEntry.commands = lastEntry.commands || [];
       lastEntry.commands.push(command);
+      pendingEntry = lastEntry;
     }
-    
+    if (clientCommandID && pendingEntry) {
+      pendingCommandHints.set(clientCommandID, { buffer, entry: pendingEntry, source: command });
+    }
+
     renderedPanes.forEach(pane => {
-      if (pane.node.buffer === 'main') {
+      if (pane.node.buffer === buffer) {
         const line = pane.outputEl.lastElementChild;
         if (line) {
           const hint = document.createElement('span');
           hint.className = 'output-hint';
+          if (clientCommandID) {
+            hint.dataset['clientCommandId'] = clientCommandID;
+          }
           hint.textContent = `-> ${command}`;
           line.appendChild(hint);
         }
+      }
+    });
+  }
+
+  function resolveCommandTrace(clientCommandID: string, commands: string[]) {
+    const pending = pendingCommandHints.get(clientCommandID);
+    if (!pending) return;
+    pendingCommandHints.delete(clientCommandID);
+
+    pending.entry.commands = pending.entry.commands || [];
+    const sourceIndex = pending.entry.commands.indexOf(pending.source);
+    const canonicalCommands = commands.filter((command) => command.trim() !== '');
+    if (sourceIndex >= 0) {
+      pending.entry.commands.splice(sourceIndex, 1, ...canonicalCommands);
+    } else {
+      pending.entry.commands.push(...canonicalCommands);
+    }
+
+    renderedPanes.forEach(pane => {
+      if (pane.node.buffer === pending.buffer) {
+        renderPaneBuffer(pane.node.id);
       }
     });
   }
@@ -747,9 +776,8 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     const button = document.createElement('button');
     button.type = 'button';
     button.addEventListener('click', () => {
-      appendCommandHint(item.command);
-      scrollOutputToBottom();
       sendCommand(item.command, 'key');
+      scrollOutputToBottom();
     });
 
     if (!hideShortcut) {
@@ -1009,6 +1037,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   return {
     appendCommandHint,
     addCommandHint,
+    resolveCommandTrace,
     appendEntry,
     appendEntries,
     clearOutput,

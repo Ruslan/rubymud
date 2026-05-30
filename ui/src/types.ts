@@ -64,4 +64,6 @@ export interface ServerMessage {
   command?: string;
   buffer?: string;
   timers?: TimerSnapshot[];
+  client_command_id?: string;
+  commands?: string[];
 }

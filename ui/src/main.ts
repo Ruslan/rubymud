@@ -358,6 +358,10 @@ function toggleGroup(groupName: string, enabled: boolean) {
   }).then(() => requestGroups());
 }
 
+function nextClientCommandID(): string {
+  return `cmd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function sendCommand(value: string, source = 'input'): boolean {
   if (!sessionID) {
     renderer.appendEntry({ text: '[no session selected]' });
@@ -377,7 +381,11 @@ function sendCommand(value: string, source = 'input'): boolean {
   }
 
   lastInputAt = performance.now();
-  sendSocketCommand(socket, value, source);
+  const clientCommandID = value ? nextClientCommandID() : undefined;
+  if (value && clientCommandID) {
+    renderer.appendCommandHint(value, clientCommandID);
+  }
+  sendSocketCommand(socket, value, source, clientCommandID);
   return true;
 }
 
@@ -549,6 +557,11 @@ function attachSocketHandlers(target: WebSocket) {
       logBoot('command hint received', { id: message.entry_id, buffer: message.buffer, cmd: message.command });
       renderer.addCommandHint(message.entry_id, message.buffer || 'main', message.command);
     }
+
+    if (message.type === 'command_trace' && message.client_command_id) {
+      logBoot('command trace received', { id: message.client_command_id, commands: message.commands });
+      renderer.resolveCommandTrace(message.client_command_id, message.commands || []);
+    }
   };
 
   target.onerror = (event) => {
@@ -602,7 +615,6 @@ window.addEventListener('keydown', (event) => {
   if (match) {
     logBoot('hotkey matched', { shortcut: match.shortcut, command: match.command });
     event.preventDefault();
-    renderer.appendCommandHint(match.command);
     sendCommand(match.command, 'key');
     return;
   }
@@ -702,7 +714,6 @@ elements.input.addEventListener('keydown', (event) => {
 
   if (value) {
     history.push(value);
-    renderer.appendCommandHint(value);
   }
 
   if (sendCommand(value, 'input')) {
