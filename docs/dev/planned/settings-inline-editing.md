@@ -55,25 +55,29 @@ Keyboard behavior:
 
 ## Current Implementation Status
 
-Implemented in the first slices:
+Implemented:
 
 1. aliases
 2. triggers
 3. substitutions
 4. highlights
+5. hotkeys, including shortcut capture for add and inline edit forms
+6. declared variables
+7. runtime variables
+8. profiles
+9. sessions
 
 Deferred follow-up sections:
 
-1. hotkeys
-2. declared variables
-3. timers/tickers, if needed later
-4. profile/session forms, only if they become painful
+1. timers/tickers, if needed later
+2. profile/session forms can receive further polish only if they become painful
 
-Hotkeys follow-up requirement:
+Hotkeys resolved requirement:
 
-1. Inline hotkey editing must include a shortcut capture action for existing hotkeys, not only manual text editing.
-2. The capture interaction should preserve the existing hotkey fields while replacing only the shortcut value.
-3. Cancel must discard a captured-but-unsaved shortcut.
+1. Inline hotkey editing includes a shortcut capture action for existing hotkeys, not only manual text editing.
+2. The add-only hotkey form includes the same shortcut capture affordance.
+3. The capture interaction preserves the existing hotkey fields while replacing only the shortcut value.
+4. Cancel discards a captured-but-unsaved shortcut.
 
 ## Scope By Rule Type
 

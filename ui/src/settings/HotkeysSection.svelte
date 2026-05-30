@@ -18,6 +18,8 @@
   export let saveInlineHotkeyEdit: () => void | Promise<void>;
   export let cancelInlineHotkeyEdit: () => void;
 
+  const NEW_HOTKEY_CAPTURE_ID = -1;
+
   let capturingHotkeyID: number | null = null;
   let lastEditingHotkeyID: number | null = null;
 
@@ -36,12 +38,16 @@
   }
 
   function handleCaptureKeydown(event: KeyboardEvent) {
-    if (capturingHotkeyID === null || capturingHotkeyID !== editingHotkeyID) return;
+    if (capturingHotkeyID === null) return;
     event.preventDefault();
     event.stopPropagation();
     const shortcut = formatKeyboardShortcut(event);
     if (!shortcut) return;
-    editingHotkeyDraft = { ...editingHotkeyDraft, shortcut };
+    if (capturingHotkeyID === NEW_HOTKEY_CAPTURE_ID) {
+      hotkeyEditor = { ...hotkeyEditor, shortcut };
+    } else if (capturingHotkeyID === editingHotkeyID) {
+      editingHotkeyDraft = { ...editingHotkeyDraft, shortcut };
+    }
     capturingHotkeyID = null;
   }
 </script>
@@ -53,13 +59,20 @@
 <div class="editor-box">
   {#if formError}<div class="form-error">{formError}</div>{/if}
   <div class="form-row">
-    <input type="text" bind:value={hotkeyEditor.shortcut} placeholder="Shortcut (e.g. F1, Ctrl+A)" required />
+    <div class="shortcut-add-field">
+      <input type="text" bind:value={hotkeyEditor.shortcut} placeholder="Shortcut (e.g. F1, Ctrl+A)" required />
+      <button class="btn-secondary" type="button" on:click={() => startCapture(NEW_HOTKEY_CAPTURE_ID)}>{capturingHotkeyID === NEW_HOTKEY_CAPTURE_ID ? 'Capturing…' : 'Capture Shortcut'}</button>
+      {#if capturingHotkeyID === NEW_HOTKEY_CAPTURE_ID}
+        <span class="capture-hint">Press a shortcut now. Modifier-only keys are ignored.</span>
+        <button class="btn-link" type="button" on:click={cancelCapture}>Cancel capture</button>
+      {/if}
+    </div>
     <input type="text" bind:value={hotkeyEditor.command} placeholder="Command" required />
     <div class="form-row-group">
       <label class="compact-label">Mob Row: <input type="number" bind:value={hotkeyEditor.mobile_row} min="0" style="width: 60px" /></label>
       <label class="compact-label">Order: <input type="number" bind:value={hotkeyEditor.mobile_order} min="0" style="width: 60px" /></label>
     </div>
-    <button class="btn-primary" on:click={addHotkey}>
+    <button class="btn-primary" on:click={() => { cancelCapture(); addHotkey(); }}>
       Add
     </button>
   </div>
@@ -118,6 +131,7 @@
 
 <style>
   .form-row-group { display: flex; gap: 12px; align-items: center; background: #111315; padding: 4px 12px; border-radius: 6px; border: 1px solid #30363d; }
+  .shortcut-add-field { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .compact-label { font-size: 0.75rem; color: #9ba3af; white-space: nowrap; display: flex; align-items: center; gap: 6px; }
   .center-cell { text-align: center; }
   .capture-panel { display: flex; align-items: center; gap: 10px; min-height: 36px; flex-wrap: wrap; }
