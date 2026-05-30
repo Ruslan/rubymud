@@ -11,6 +11,7 @@
   import VariablesSection from './settings/VariablesSection.svelte';
   import ProfilesSection from './settings/ProfilesSection.svelte';
   import SessionsSection from './settings/SessionsSection.svelte';
+  import * as api from './settings/api';
   import type {
     Alias,
     Highlight,
@@ -283,47 +284,38 @@
   async function fetchData() {
     loading = true;
     formError = '';
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const headers = { 'X-Session-Token': token };
     try {
-      const [sessRes, profRes, colorsRes] = await Promise.all([
-        fetch('/api/sessions', { headers }),
-        fetch('/api/profiles', { headers }),
-        fetch('/api/colors', { headers })
+      const [sessData, profData, colorsData] = await Promise.all([
+        api.fetchSessions(),
+        api.fetchProfiles(),
+        api.fetchColors().catch(() => [])
       ]);
-      sessions = await sessRes.json() || [];
-      profiles = await profRes.json() || [];
-      if (colorsRes.ok) namedColorList = await colorsRes.json() || [];
+      sessions = sessData || [];
+      profiles = profData || [];
+      namedColorList = colorsData || [];
 
       if (selectedSessionID === null && sessions.length > 0) selectedSessionID = sessions[0]!.id;
       if (selectedProfileID === null && profiles.length > 0) selectedProfileID = profiles[0]!.id;
 
       if (currentTab === 'app') {
-        const appRes = await fetch('/api/app/settings', { headers });
-        appSettings = await appRes.json();
+        appSettings = await api.fetchAppSettings();
       } else if (currentTab === 'logs' && selectedSessionID) {
         await fetchLogs();
       } else if (currentTab === 'profiles') {
-        const filesRes = await fetch('/api/profiles/files', { headers });
-        profileFiles = await filesRes.json() || [];
+        profileFiles = await api.fetchProfileFiles() || [];
       } else if (currentTab === 'sessions' && selectedSessionID) {
-        const spRes = await fetch(`/api/sessions/${selectedSessionID}/profiles`, { headers });
-        sessionProfiles = await spRes.json() || [];
+        sessionProfiles = await api.fetchSessionProfiles(selectedSessionID) || [];
       } else if (currentTab === 'variables' && selectedSessionID) {
-        const varRes = await fetch(`/api/sessions/${selectedSessionID}/variables`, { headers });
-        variables = await varRes.json() || [];
+        variables = await api.fetchSessionVariables(selectedSessionID) || [];
       } else if (currentTab === 'history' && selectedSessionID) {
-        const histRes = await fetch(`/api/sessions/${selectedSessionID}/history`, { headers });
-        historyEntries = await histRes.json() || [];
+        historyEntries = await api.fetchSessionHistory(selectedSessionID) || [];
       } else if (currentTab === 'timers' && profiles.length > 0) {
         const timersMap: Record<number, ProfileTimer[]> = {};
         const nextTimerForms = { ...newTimerForms };
         const nextSubForms = { ...newSubForms };
 
         for (const p of profiles) {
-          const res = await fetch(`/api/profiles/${p.id}/timers`, { headers });
-          const list = await res.json() || [];
+          const list = await api.fetchProfileTimers(p.id) || [];
           timersMap[p.id] = list;
 
           // Pre-initialize newTimerForms for each profile
@@ -344,9 +336,7 @@
         newSubForms = nextSubForms;
         allProfilesTimers = timersMap;
       } else if (['aliases', 'triggers', 'subs', 'highlights', 'hotkeys', 'groups', 'declared_variables'].includes(currentTab) && selectedProfileID) {
-        const endpoint = currentTab === 'declared_variables' ? 'variables' : currentTab;
-        const res = await fetch(`/api/profiles/${selectedProfileID}/${endpoint}`, { headers });
-        const data = await res.json() || [];
+        const data = await api.fetchProfileDomain(selectedProfileID, currentTab) || [];
         if (currentTab === 'aliases') aliases = data;
         else if (currentTab === 'triggers') triggers = data;
         else if (currentTab === 'subs') subs = data;
@@ -367,30 +357,11 @@
     if (validationError) { formError = validationError; return; }
 
     formError = '';
-    const isUpdate = domain !== 'variables' && !!item.id;
-    let url = `/api/${domain}`;
-
-    if (domain === 'variables' && selectedSessionID) {
-      url = `/api/sessions/${selectedSessionID}/variables`;
-    } else if (['aliases', 'triggers', 'subs', 'highlights', 'hotkeys', 'declared_variables'].includes(domain) && selectedProfileID) {
-      const endpoint = domain === 'declared_variables' ? 'variables' : domain;
-      url = `/api/profiles/${selectedProfileID}/${endpoint}`;
-      if (isUpdate) url += `/${item.id}`;
-    } else if (domain === 'sessions' && isUpdate) {
-      url += `/${item.id}`;
-    } else if (domain === 'profiles' && isUpdate) {
-      url += `/${item.id}`;
-    }
-
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const method = isUpdate ? 'PUT' : 'POST';
-    const body = domain === 'variables' ? { key: newVarKey, value: newVarValue } : item;
-
-    const resp = await fetch(url, {
-      method,
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify(body)
+    const resp = await api.saveItemRequest(domain, item, {
+      selectedSessionID,
+      selectedProfileID,
+      variableKey: newVarKey,
+      variableValue: newVarValue,
     });
     if (!resp.ok) {
       formError = await resp.text() || `Failed to save ${domain}.`;
@@ -450,13 +421,7 @@
 
     inlineVariableError = '';
     formError = '';
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const resp = await fetch(`/api/sessions/${selectedSessionID}/variables`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify({ key: editingVariableDraft.key, value: editingVariableDraft.value }),
-    });
+    const resp = await api.saveRuntimeVariable(selectedSessionID, editingVariableDraft.key, editingVariableDraft.value);
     if (!resp.ok) {
       inlineVariableError = await resp.text() || 'Failed to save variable.';
       return;
@@ -474,13 +439,7 @@
 
     inlineAliasError = '';
     formError = '';
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const resp = await fetch(`/api/profiles/${selectedProfileID}/aliases/${editingAliasDraft.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify(editingAliasDraft),
-    });
+    const resp = await api.saveProfileRule(selectedProfileID, 'aliases', editingAliasDraft.id, editingAliasDraft);
     if (!resp.ok) {
       inlineAliasError = await resp.text() || 'Failed to save alias.';
       return;
@@ -512,13 +471,7 @@
 
     inlineTriggerError = '';
     formError = '';
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const resp = await fetch(`/api/profiles/${selectedProfileID}/triggers/${editingTriggerDraft.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify(editingTriggerDraft),
-    });
+    const resp = await api.saveProfileRule(selectedProfileID, 'triggers', editingTriggerDraft.id, editingTriggerDraft);
     if (!resp.ok) {
       inlineTriggerError = await resp.text() || 'Failed to save trigger.';
       return;
@@ -550,13 +503,7 @@
 
     inlineSubError = '';
     formError = '';
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const resp = await fetch(`/api/profiles/${selectedProfileID}/subs/${editingSubDraft.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify(editingSubDraft),
-    });
+    const resp = await api.saveProfileRule(selectedProfileID, 'subs', editingSubDraft.id, editingSubDraft);
     if (!resp.ok) {
       inlineSubError = await resp.text() || 'Failed to save substitution.';
       return;
@@ -588,13 +535,7 @@
 
     inlineHighlightError = '';
     formError = '';
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const resp = await fetch(`/api/profiles/${selectedProfileID}/highlights/${editingHighlightDraft.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify(editingHighlightDraft),
-    });
+    const resp = await api.saveProfileRule(selectedProfileID, 'highlights', editingHighlightDraft.id, editingHighlightDraft);
     if (!resp.ok) {
       inlineHighlightError = await resp.text() || 'Failed to save highlight.';
       return;
@@ -626,13 +567,7 @@
 
     inlineProfileVariableError = '';
     formError = '';
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const resp = await fetch(`/api/profiles/${selectedProfileID}/variables/${editingProfileVariableDraft.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify(editingProfileVariableDraft),
-    });
+    const resp = await api.saveProfileRule(selectedProfileID, 'declared_variables', editingProfileVariableDraft.id, editingProfileVariableDraft);
     if (!resp.ok) {
       inlineProfileVariableError = await resp.text() || 'Failed to save declared variable.';
       return;
@@ -679,13 +614,7 @@
 
     inlineProfileError = '';
     formError = '';
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const resp = await fetch(`/api/profiles/${editingProfileDraft.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify(editingProfileDraft),
-    });
+    const resp = await api.saveProfile(editingProfileDraft.id, editingProfileDraft);
     if (!resp.ok) {
       inlineProfileError = await resp.text() || 'Failed to save profile.';
       return;
@@ -714,13 +643,7 @@
 
     inlineSessionError = '';
     formError = '';
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const resp = await fetch(`/api/sessions/${editingSessionDraft.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify(editingSessionDraft),
-    });
+    const resp = await api.saveSession(editingSessionDraft.id, editingSessionDraft);
     if (!resp.ok) {
       inlineSessionError = await resp.text() || 'Failed to save session.';
       return;
@@ -731,18 +654,7 @@
 
   async function deleteItem(domain: string, id: string | number) {
     if (!confirm(`Delete this ${domain.slice(0, -1)}?`)) return;
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    let url = `/api/${domain}/${id}`;
-    if (domain === 'variables' && selectedSessionID) {
-        url = `/api/sessions/${selectedSessionID}/variables/${encodeURIComponent(String(id))}`;
-    } else if (domain === 'history' && selectedSessionID) {
-        url = `/api/sessions/${selectedSessionID}/history/${id}`;
-    } else if (['aliases', 'triggers', 'subs', 'highlights', 'hotkeys', 'declared_variables'].includes(domain) && selectedProfileID) {
-        const endpoint = domain === 'declared_variables' ? 'variables' : domain;
-        url = `/api/profiles/${selectedProfileID}/${endpoint}/${id}`;
-    }
-    const resp = await fetch(url, { method: 'DELETE', headers: { 'X-Session-Token': token } });
+    const resp = await api.deleteItemRequest(domain, id, { selectedSessionID, selectedProfileID });
     if (!resp.ok) {
       formError = await resp.text() || `Failed to delete ${domain.slice(0, -1)}.`;
       return;
@@ -753,26 +665,14 @@
   async function toggleItem(domain: 'aliases' | 'triggers' | 'subs' | 'highlights', item: any, enabled: boolean) {
     if (!selectedProfileID) return;
     formError = '';
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    await fetch(`/api/profiles/${selectedProfileID}/${domain}/${item.id}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify({ ...item, enabled }),
-    });
+    await api.toggleProfileRule(selectedProfileID, domain, item, enabled);
     await fetchData();
   }
 
   async function toggleGroup(domain: string, groupName: string, enabled: boolean) {
     if (!selectedProfileID) return;
     formError = '';
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    await fetch(`/api/profiles/${selectedProfileID}/groups/toggle`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify({ domain, group_name: groupName, enabled }),
-    });
+    await api.toggleProfileGroup(selectedProfileID, domain, groupName, enabled);
     await fetchData();
   }
 
@@ -781,19 +681,7 @@
       alert("Ticker name is required");
       return;
     }
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const res = await fetch(`/api/profiles/${profileID}/timers`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify({
-        profile_id: profileID,
-        name: timer.name,
-        icon: timer.icon || '',
-        cycle_ms: parseInt(String(timer.cycle_ms), 10) || 1000,
-        repeat_mode: timer.repeat_mode || 'repeating'
-      }),
-    });
+    const res = await api.saveProfileTimerRequest(profileID, timer);
     if (!res.ok) {
       alert("Failed to save ticker: " + await res.text());
     } else {
@@ -803,12 +691,7 @@
 
   async function deleteProfileTimer(profileID: number, name: string) {
     if (!confirm(`Delete ticker "${name}"? This will also delete all its subscriptions.`)) return;
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const res = await fetch(`/api/profiles/${profileID}/timers/${encodeURIComponent(name)}`, {
-      method: 'DELETE',
-      headers: { 'X-Session-Token': token },
-    });
+    const res = await api.deleteProfileTimerRequest(profileID, name);
     if (!res.ok) {
       alert("Failed to delete ticker: " + await res.text());
     } else {
@@ -817,21 +700,7 @@
   }
 
   async function saveProfileTimerSubscription(profileID: number, timerName: string, sub: any) {
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const res = await fetch(`/api/profiles/${profileID}/timers/${encodeURIComponent(timerName)}/subscriptions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify({
-        profile_id: profileID,
-        timer_name: timerName,
-        second: parseInt(String(sub.second), 10) || 0,
-        sort_order: sub.sort_order || 0,
-        command: sub.command || '',
-        is_removal: !!sub.is_removal,
-        is_bulk: !!sub.is_bulk
-      }),
-    });
+    const res = await api.saveProfileTimerSubscriptionRequest(profileID, timerName, sub);
     if (!res.ok) {
       alert("Failed to save subscription: " + await res.text());
     } else {
@@ -841,12 +710,7 @@
 
   async function deleteProfileTimerSubscription(profileID: number, timerName: string, sub: any) {
     if (!confirm(`Delete subscription for second ${sub.second}?`)) return;
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const res = await fetch(`/api/profiles/${profileID}/timers/${encodeURIComponent(timerName)}/subscriptions/${sub.second}/${sub.sort_order}`, {
-      method: 'DELETE',
-      headers: { 'X-Session-Token': token },
-    });
+    const res = await api.deleteProfileTimerSubscriptionRequest(profileID, timerName, sub);
     if (!res.ok) {
       alert("Failed to delete subscription: " + await res.text());
     } else {
@@ -896,32 +760,18 @@
   }
 
   async function sessionAction(action: 'connect' | 'disconnect', id: number) {
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    await fetch(`/api/sessions/${id}/${action}`, { method: 'POST', headers: { 'X-Session-Token': token } });
+    await api.sessionActionRequest(action, id);
     await fetchData();
   }
 
   async function fetchLogs() {
     if (!selectedSessionID) return;
     loading = true;
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const headers = { 'X-Session-Token': token };
-
     const from = logFrom ? new Date(logFrom).toISOString() : '';
     const to = logTo ? new Date(logTo + 'T23:59:59Z').toISOString() : '';
 
-    const params = new URLSearchParams({
-        from,
-        to,
-        page: String(logPage),
-        limit: String(logLimit)
-    });
-
     try {
-        const res = await fetch(`/api/sessions/${selectedSessionID}/logs?${params}`, { headers });
-        const data = await res.json();
+        const data = await api.fetchLogsRequest(selectedSessionID, from, to, logPage, logLimit);
         logEntries = data.entries || [];
         logTotal = data.total || 0;
     } catch (e) {
@@ -943,16 +793,8 @@
         logEntries = []; // Clear browsing entries too to avoid confusion
     }
 
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const headers = { 'X-Session-Token': token };
-
-    const url = `/api/sessions/${selectedSessionID}/logs/search?q=${encodeURIComponent(searchQuery)}` +
-                (loadMore && searchCursor ? `&before_id=${searchCursor}` : '');
-
     try {
-        const res = await fetch(url, { headers });
-        const data = await res.json() || {};
+        const data = await api.searchLogsRequest(selectedSessionID, searchQuery, loadMore ? searchCursor : null) || {};
         const newGroups = data.groups || [];
         if (loadMore) {
             searchResults = [...searchResults, ...newGroups];
@@ -973,12 +815,8 @@
     contextMode = true;
     searchMode = false;
     contextAnchorID = entryID;
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const headers = { 'X-Session-Token': token };
     try {
-        const res = await fetch(`/api/sessions/${selectedSessionID}/logs/${entryID}/context?before=20&after=20`, { headers });
-        contextEntries = await res.json() || [];
+        contextEntries = await api.fetchLogContext(selectedSessionID, entryID) || [];
     } catch (e) {
         console.error('Failed to fetch context', e);
     } finally {
@@ -991,14 +829,8 @@
     const anchor = direction === 'above' ? contextEntries[0] : contextEntries[contextEntries.length - 1];
     if (!anchor) return;
 
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const headers = { 'X-Session-Token': token };
-    const query = direction === 'above' ? `before=50&after=0` : `before=0&after=50`;
-
     try {
-        const res = await fetch(`/api/sessions/${selectedSessionID}/logs/${anchor.id}/context?${query}`, { headers });
-        const data: LogEntry[] = await res.json() || [];
+        const data: LogEntry[] = await api.fetchMoreLogContext(selectedSessionID, anchor.id, direction) || [];
         if (direction === 'above') {
             contextEntries = [...data.filter(e => e.id !== anchor.id), ...contextEntries];
         } else {
@@ -1011,37 +843,21 @@
 
   function downloadLogs() {
     if (!selectedSessionID) return;
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
     const from = logFrom ? new Date(logFrom).toISOString() : '';
     const to = logTo ? new Date(logTo + 'T23:59:59Z').toISOString() : '';
-
-    const params = new URLSearchParams({
-        from,
-        to,
-        token
-    });
-    window.open(`/api/sessions/${selectedSessionID}/logs/download?${params}`, '_blank');
+    window.open(api.buildLogDownloadURL(selectedSessionID, from, to), '_blank');
   }
 
   async function addProfileToSession(profileID: number) {
     if (!selectedSessionID) return;
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
     const maxOrder = sessionProfiles.length > 0 ? Math.max(...sessionProfiles.map(sp => sp.order_index)) : -1;
-    await fetch(`/api/sessions/${selectedSessionID}/profiles`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify({ profile_id: profileID, order_index: maxOrder + 1 })
-    });
+    await api.addProfileToSessionRequest(selectedSessionID, profileID, maxOrder + 1);
     await fetchData();
   }
 
   async function removeProfileFromSession(profileID: number) {
     if (!selectedSessionID) return;
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    await fetch(`/api/sessions/${selectedSessionID}/profiles/${profileID}`, { method: 'DELETE', headers: { 'X-Session-Token': token } });
+    await api.removeProfileFromSessionRequest(selectedSessionID, profileID);
     await fetchData();
   }
 
@@ -1055,20 +871,12 @@
     newProfiles[index + direction] = temp!;
 
     const payload = newProfiles.map((sp, i) => ({ profile_id: sp.profile_id, order_index: i }));
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    await fetch(`/api/sessions/${selectedSessionID}/profiles/reorder`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify(payload)
-    });
+    await api.reorderSessionProfilesRequest(selectedSessionID, payload);
     await fetchData();
   }
 
   async function exportProfile(profileID: number) {
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const res = await fetch(`/api/profiles/${profileID}/export`, { method: 'POST', headers: { 'X-Session-Token': token } });
+    const res = await api.exportProfileRequest(profileID);
     if (!res.ok) { alert('Export failed: ' + await res.text()); return; }
     const data = await res.json();
     alert(`Exported to config/${data.filename}`);
@@ -1076,9 +884,7 @@
   }
 
   async function exportAllProfiles() {
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const res = await fetch('/api/profiles/export/all', { method: 'POST', headers: { 'X-Session-Token': token } });
+    const res = await api.exportAllProfilesRequest();
     if (!res.ok) { alert('Export failed: ' + await res.text()); return; }
     const filenames: string[] = await res.json();
     alert(`Exported ${filenames.length} profile(s) to config/`);
@@ -1087,25 +893,14 @@
 
   async function importAllProfiles() {
     if (!confirm('Import all .tt files from config/? This will create new profiles for each file.')) return;
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const res = await fetch('/api/profiles/import/all', {
-      method: 'POST',
-      headers: { 'X-Session-Token': token }
-    });
+    const res = await api.importAllProfilesRequest();
     if (!res.ok) { alert('Import failed: ' + await res.text()); return; }
     await fetchData();
   }
 
   async function importProfileFromFile(filename: string) {
     if (!confirm(`Import profile from ${filename}?`)) return;
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const res = await fetch('/api/profiles/import', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'X-Session-Token': token },
-      body: JSON.stringify({ filename, session_id: selectedSessionID })
-    });
+    const res = await api.importProfileFromFileRequest(filename, selectedSessionID);
     if (!res.ok) { alert('Import failed: ' + await res.text()); return; }
     await fetchData();
   }
@@ -1128,31 +923,20 @@
     const currentPos = item.position;
     const swapPos = swapWith.position;
 
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const headers = { 'Content-Type': 'application/json', 'X-Session-Token': token };
-
     // Optimistic update
     item.position = swapPos;
     swapWith.position = currentPos;
 
-    const endpoint = domain === 'declared_variables' ? 'variables' : domain;
-    await Promise.all([
-      fetch(`/api/profiles/${selectedProfileID}/${endpoint}/${item.id}`, { method: 'PUT', headers, body: JSON.stringify(item) }),
-      fetch(`/api/profiles/${selectedProfileID}/${endpoint}/${swapWith.id}`, { method: 'PUT', headers, body: JSON.stringify(swapWith) })
-    ]);
+    await api.moveProfileRulesRequest(selectedProfileID, domain, item, swapWith);
 
     await fetchData();
   }
 
   async function rotateAPIToken() {
     if (!confirm('Are you sure you want to rotate the API token? This will invalidate all external clients.')) return;
-    // @ts-ignore
-    const token = window.API_TOKEN || '';
-    const res = await fetch('/api/app/settings/rotate-api-token', { method: 'POST', headers: { 'X-Session-Token': token } });
+    const res = await api.rotateAPITokenRequest();
     appSettings = await res.json();
-    // @ts-ignore
-    window.API_TOKEN = appSettings.api_token;
+    api.setAPIToken(appSettings.api_token);
   }
 
   function titleCase(value: string): string {
