@@ -44,9 +44,8 @@ func (s *Session) SendCommand(command string, source string) error {
 		}
 	}
 
-	shouldBroadcastVariables := isVariableCommand(command)
-
 	results := s.vm.ProcessInputDetailed(command)
+	shouldBroadcastVariables := hasVariableChange(results)
 	type echoMsg struct {
 		Text         string
 		TargetBuffer string
@@ -114,21 +113,11 @@ func (s *Session) SendCommand(command string, source string) error {
 	return nil
 }
 
-func isVariableCommand(command string) bool {
-	trimmed := strings.TrimSpace(command)
-	if !strings.HasPrefix(trimmed, "#") {
-		return false
+func hasVariableChange(results []vm.Result) bool {
+	for _, result := range results {
+		if result.VariablesChanged {
+			return true
+		}
 	}
-
-	fields := strings.Fields(strings.TrimSpace(strings.TrimPrefix(trimmed, "#")))
-	if len(fields) == 0 {
-		return false
-	}
-
-	switch fields[0] {
-	case "var", "variable", "unvar", "unvariable":
-		return true
-	default:
-		return false
-	}
+	return false
 }

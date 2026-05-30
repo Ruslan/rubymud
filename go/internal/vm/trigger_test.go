@@ -211,8 +211,11 @@ func TestApplyEffectsButtonWithoutStore(t *testing.T) {
 	v := New(nil, 1)
 	effects := []Effect{{Type: "button", Label: "press", Command: "look"}}
 
-	buttons := v.ApplyEffects(effects, 123, "main", nil, nil)
+	buttons, variablesChanged := v.ApplyEffects(effects, 123, "main", nil, nil)
 
+	if variablesChanged {
+		t.Fatalf("variablesChanged = true, want false")
+	}
 	if len(buttons) != 1 || buttons[0].Label != "press" {
 		t.Fatalf("buttons = %+v, want one button effect", buttons)
 	}

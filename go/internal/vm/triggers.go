@@ -61,14 +61,18 @@ func (v *VM) MatchTriggers(plainText string) ([]Effect, RoutingInfo) {
 	return effects, routing
 }
 
-func (v *VM) ApplyEffects(effects []Effect, entryID int64, buffer string, sendFn func(string, int64, string) error, echoFn func(Result)) []Effect {
+func (v *VM) ApplyEffects(effects []Effect, entryID int64, buffer string, sendFn func(string, int64, string) error, echoFn func(Result)) ([]Effect, bool) {
 	var buttons []Effect
+	variablesChanged := false
 	for _, e := range effects {
 		switch e.Type {
 		case "send":
 			// Process trigger command through the full pipeline (variables, aliases, local commands)
 			results := v.ProcessInputWithCaptures(e.Command, e.Captures)
 			for _, res := range results {
+				if res.VariablesChanged {
+					variablesChanged = true
+				}
 				if res.Kind == ResultEcho {
 					echoFn(res)
 				} else {
@@ -86,5 +90,5 @@ func (v *VM) ApplyEffects(effects []Effect, entryID int64, buffer string, sendFn
 			buttons = append(buttons, e)
 		}
 	}
-	return buttons
+	return buttons, variablesChanged
 }

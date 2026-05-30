@@ -421,6 +421,44 @@ func newAuthenticatedRequest(method, url string, body io.Reader, token string) (
 	return req, nil
 }
 
+func TestSessionHotkeysAPI(t *testing.T) {
+	s, sess := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	profileIDs, err := s.store.GetOrderedProfileIDs(sess.SessionID())
+	if err != nil {
+		t.Fatalf("GetOrderedProfileIDs: %v", err)
+	}
+	if len(profileIDs) == 0 {
+		t.Fatal("expected setup session to have at least one profile")
+	}
+	if _, err := s.store.CreateHotkey(profileIDs[0], "ctrl+k", "look", 2, 3); err != nil {
+		t.Fatalf("CreateHotkey: %v", err)
+	}
+
+	url := fmt.Sprintf("%s/api/sessions/%d/hotkeys", ts.URL, sess.SessionID())
+	req, err := newAuthenticatedRequest(http.MethodGet, url, nil, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(GET %s): %v", url, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("GET %s status = %d, want 200", url, resp.StatusCode)
+	}
+	var hotkeys []session.HotkeyJSON
+	if err := json.NewDecoder(resp.Body).Decode(&hotkeys); err != nil {
+		t.Fatalf("decode hotkeys: %v", err)
+	}
+	if len(hotkeys) != 1 || hotkeys[0].Shortcut != "ctrl+k" || hotkeys[0].Command != "look" || hotkeys[0].MobileRow != 2 || hotkeys[0].MobileOrder != 3 {
+		t.Fatalf("hotkeys = %+v, want ctrl+k/look row 2 order 3", hotkeys)
+	}
+}
+
 func TestProfileFileEndpoints(t *testing.T) {
 	s, _ := setupTestServer(t)
 	ts := httptest.NewServer(s.httpServer.Handler)

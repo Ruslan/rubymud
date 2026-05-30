@@ -142,6 +142,8 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 					r.Get("/", s.listSessionGroups)
 					r.Post("/{name}/toggle", s.toggleSessionGroup)
 				})
+
+				r.Get("/hotkeys", s.listSessionHotkeys)
 			})
 		})
 
@@ -693,6 +695,35 @@ func (s *Server) listSessionProfiles(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(profiles)
+}
+
+func (s *Server) listSessionHotkeys(w http.ResponseWriter, r *http.Request) {
+	_, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	profileIDs, err := s.store.GetOrderedProfileIDs(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	hotkeys, err := s.store.LoadHotkeysForProfiles(profileIDs)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	result := make([]session.HotkeyJSON, 0, len(hotkeys))
+	for _, hk := range hotkeys {
+		result = append(result, session.HotkeyJSON{
+			Shortcut:    hk.Shortcut,
+			Command:     hk.Command,
+			MobileRow:   hk.MobileRow,
+			MobileOrder: hk.MobileOrder,
+		})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(result)
 }
 
 func (s *Server) listSessionGroups(w http.ResponseWriter, r *http.Request) {

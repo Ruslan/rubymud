@@ -119,7 +119,7 @@ func (v *VM) cmdVariable(rest string, depth int) []Result {
 		v.rulesVersion++
 	}
 
-	return echoResults([]string{fmt.Sprintf("#variable {%s} = {%s}", normalizedName, value)}, depth)
+	return variableChangedResults([]string{fmt.Sprintf("#variable {%s} = {%s}", normalizedName, value)}, depth)
 }
 
 func (v *VM) cmdUnvariable(rest string, depth int) []Result {
@@ -138,7 +138,7 @@ func (v *VM) cmdUnvariable(rest string, depth int) []Result {
 		delete(v.variables, name)
 		v.rulesVersion++
 	}
-	return echoResults([]string{fmt.Sprintf("#unvariable: %s removed", name)}, depth)
+	return variableChangedResults([]string{fmt.Sprintf("#unvariable: %s removed", name)}, depth)
 }
 
 func (v *VM) cmdHotkey(rest string, depth int) []Result {

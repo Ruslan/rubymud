@@ -187,7 +187,10 @@ func (s *Session) processLine(line string) {
 	}
 
 	phaseStartedAt = time.Now()
-	buttons := s.vm.ApplyEffects(effects, id, routing.TargetBuffer, s.sendTriggerCommand, s.BroadcastResult)
+	buttons, variablesChanged := s.vm.ApplyEffects(effects, id, routing.TargetBuffer, s.sendTriggerCommand, s.BroadcastResult)
+	if variablesChanged {
+		s.BroadcastVariables()
+	}
 	effectsDuration += time.Since(phaseStartedAt)
 
 	entry := storage.LogEntry{ID: id, Buffer: routing.TargetBuffer, RawText: processed, PlainText: plainText, DisplayRaw: displayRaw, DisplayPlain: displayPlain, Overlays: subOverlays}

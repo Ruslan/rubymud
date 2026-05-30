@@ -49,7 +49,7 @@
 <svelte:window on:keydown={handleCaptureKeydown} />
 
 <section class="settings-section">
-<header class="content-header"><h2>Hotkeys</h2><p class="description">Keyboard shortcuts for profile {currentProfile?.name}. Changes apply in the game client after refresh or reconnect.</p></header>
+<header class="content-header"><h2>Hotkeys</h2><p class="description">Keyboard shortcuts for profile {currentProfile?.name}. Saved changes sync to the game client automatically.</p></header>
 <div class="editor-box">
   {#if formError}<div class="form-error">{formError}</div>{/if}
   <div class="form-row">

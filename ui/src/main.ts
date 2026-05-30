@@ -323,6 +323,21 @@ function requestVariables() {
     .catch(err => console.error('Failed to sync variables:', err));
 }
 
+function requestHotkeys() {
+  if (!sessionID) {
+    configuredHotkeys = [];
+    renderer.renderHotkeys(configuredHotkeys);
+    return;
+  }
+  fetchWithToken(`/api/sessions/${sessionID}/hotkeys`)
+    .then(res => res.json())
+    .then((data: Hotkey[]) => {
+      configuredHotkeys = data || [];
+      renderer.renderHotkeys(configuredHotkeys);
+    })
+    .catch(err => console.error('Failed to sync hotkeys:', err));
+}
+
 function requestGroups() {
   if (!sessionID) {
     renderer.renderGroups([]);
@@ -520,9 +535,14 @@ function attachSocketHandlers(target: WebSocket) {
       requestVariables();
     }
 
-    if (message.type === 'settings.changed' && message.settings?.domain === 'variables') {
+    if (message.type === 'settings.changed' && (message.settings?.domain === 'variables' || message.settings?.domain === 'profiles')) {
       logBoot('settings changed -> request variables');
       requestVariables();
+    }
+
+    if (message.type === 'settings.changed' && (message.settings?.domain === 'hotkeys' || message.settings?.domain === 'profiles')) {
+      logBoot('settings changed -> request hotkeys');
+      requestHotkeys();
     }
 
     if (message.type === 'command_hint' && message.entry_id && message.command) {
@@ -656,12 +676,6 @@ document.addEventListener('visibilitychange', () => {
   logBoot('visibility change', { hidden: document.hidden });
   if (!document.hidden) requestVariables();
 });
-window.setInterval(() => {
-  if (!document.hidden) {
-    requestVariables();
-  }
-}, 3000);
-
 elements.input.addEventListener('keydown', (event) => {
   if (event.key === 'ArrowUp') {
     event.preventDefault();

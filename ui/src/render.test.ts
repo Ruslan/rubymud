@@ -106,3 +106,30 @@ describe('renderer buffer catalog', () => {
     expect(paneSelectOptions()).toEqual(['kills', 'main']);
   });
 });
+
+describe('renderer variables panel', () => {
+  it('updates a focused variable input when the user has not edited it', () => {
+    const renderer = createTestRenderer();
+
+    renderer.renderVariables([{ name: 'target', value: 'old', default_value: '', declared: true, has_value: true, uses_default: false }]);
+    const input = document.querySelector<HTMLInputElement>('[data-var-key="target"]');
+    input?.focus();
+
+    renderer.renderVariables([{ name: 'target', value: 'new', default_value: '', declared: true, has_value: true, uses_default: false }]);
+
+    expect(document.querySelector<HTMLInputElement>('[data-var-key="target"]')?.value).toBe('new');
+  });
+
+  it('preserves a dirty focused variable input while rendering fresh data', () => {
+    const renderer = createTestRenderer();
+
+    renderer.renderVariables([{ name: 'target', value: 'old', default_value: '', declared: true, has_value: true, uses_default: false }]);
+    const input = document.querySelector<HTMLInputElement>('[data-var-key="target"]');
+    input?.focus();
+    if (input) input.value = 'unsaved';
+
+    renderer.renderVariables([{ name: 'target', value: 'new', default_value: '', declared: true, has_value: true, uses_default: false }]);
+
+    expect(document.querySelector<HTMLInputElement>('[data-var-key="target"]')?.value).toBe('unsaved');
+  });
+});

@@ -37,12 +37,13 @@ const (
 )
 
 type Result struct {
-	Text         string
-	Kind         ResultKind
-	TargetBuffer string
-	IsInternal   bool
-	Depth        int
-	ShowOnInput  bool
+	Text             string
+	Kind             ResultKind
+	TargetBuffer     string
+	IsInternal       bool
+	Depth            int
+	ShowOnInput      bool
+	VariablesChanged bool
 }
 
 type TimerControl interface {

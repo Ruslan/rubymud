@@ -904,7 +904,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   function renderVariables(items: (Variable | ResolvedVariable)[]) {
     const focused = document.activeElement as HTMLInputElement | null;
     const focusedKey = focused?.dataset['varKey'] ?? null;
-    const focusedValue = focusedKey != null ? focused!.value : null;
+    const focusedValue = focusedKey != null && focused!.value !== focused!.defaultValue ? focused!.value : null;
 
     elements.variablesList.innerHTML = '';
 
@@ -944,9 +944,11 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       input.className = 'variable-input';
       input.dataset['varKey'] = keyStr;
       input.value = valStr;
+      input.defaultValue = valStr;
       if (usesDefault) {
         input.placeholder = (item as ResolvedVariable).default_value;
         input.value = '';
+        input.defaultValue = '';
       }
       if (keyStr === focusedKey && focusedValue !== null) {
         input.value = focusedValue;
@@ -989,7 +991,8 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     });
 
     if (focusedKey != null) {
-      const restored = elements.variablesList.querySelector<HTMLInputElement>(`[data-var-key="${CSS.escape(focusedKey)}"]`);
+      const restored = Array.from(elements.variablesList.querySelectorAll<HTMLInputElement>('[data-var-key]'))
+        .find((input) => input.dataset['varKey'] === focusedKey);
       if (restored) {
         restored.focus();
         const len = restored.value.length;

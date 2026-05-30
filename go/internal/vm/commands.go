@@ -252,6 +252,14 @@ func echoResults(lines []string, depth int) []Result {
 	return results
 }
 
+func variableChangedResults(lines []string, depth int) []Result {
+	results := echoResults(lines, depth)
+	for i := range results {
+		results[i].VariablesChanged = true
+	}
+	return results
+}
+
 func inputEchoResults(lines []string, depth int) []Result {
 	results := make([]Result, 0, len(lines))
 	for _, line := range lines {

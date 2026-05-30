@@ -164,6 +164,57 @@ func TestSendCommandAliasVarGetterShowsForInputOnly(t *testing.T) {
 	}
 }
 
+func TestSendCommandBroadcastsVariablesForNestedVariableChanges(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles failed: %v", err)
+	}
+	conn := &recordingConn{}
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+
+	sess := &Session{
+		sessionID: 1,
+		conn:      conn,
+		store:     store,
+		vm:        v,
+		clients:   map[int]clientSink{},
+	}
+
+	var variableMessages []ServerMsg
+	sess.AttachClient("test", func(msg ServerMsg) error {
+		if msg.Type == "variables" {
+			variableMessages = append(variableMessages, msg)
+		}
+		return nil
+	})
+
+	if err := sess.SendCommand("#alias {settarget} {#var {target} {%0}}", "input"); err != nil {
+		t.Fatalf("SendCommand(alias): %v", err)
+	}
+	variableMessages = nil
+
+	if err := sess.SendCommand("settarget goblin", "input"); err != nil {
+		t.Fatalf("SendCommand(alias variable setter): %v", err)
+	}
+	if len(variableMessages) != 1 {
+		t.Fatalf("alias variable setter broadcast %d variables messages, want 1", len(variableMessages))
+	}
+	if len(variableMessages[0].Variables) != 1 || variableMessages[0].Variables[0].Key != "target" || variableMessages[0].Variables[0].Value != "goblin" {
+		t.Fatalf("variables broadcast = %+v, want target=goblin", variableMessages[0].Variables)
+	}
+
+	variableMessages = nil
+	if err := sess.SendCommand("settarget", "input"); err != nil {
+		t.Fatalf("SendCommand(alias variable getter): %v", err)
+	}
+	if len(variableMessages) != 0 {
+		t.Fatalf("alias variable getter broadcast %d variables messages, want 0", len(variableMessages))
+	}
+}
+
 func TestSendCommandUnknownHashCommandPassesThrough(t *testing.T) {
 	store := newTestStore(t)
 	conn := &recordingConn{}
