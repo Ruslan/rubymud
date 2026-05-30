@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"reflect"
 	"testing"
 
 	"rubymud/go/internal/storage"
@@ -204,6 +205,30 @@ func TestApplyEffects_FullPipeline(t *testing.T) {
 	// 2. Should have evaluated local command #showme and substituted variable
 	if len(echoes) != 1 || echoes[0].Text != "set орк" {
 		t.Errorf("expected echo 'set орк', got %v", echoes)
+	}
+}
+
+func TestApplyEffectsExecResultIsLocalOnly(t *testing.T) {
+	v := New(nil, 1)
+	effects := []Effect{{Type: "send", Command: "#exec {./items_db_client} {red;blue}"}}
+
+	var sentCommands []string
+	var localResults []Result
+	v.ApplyEffects(effects, 123, "main", func(cmd string, _ int64, _ string) error {
+		sentCommands = append(sentCommands, cmd)
+		return nil
+	}, func(res Result) {
+		localResults = append(localResults, res)
+	})
+
+	if len(sentCommands) != 0 {
+		t.Fatalf("exec trigger sent commands to MUD: %v", sentCommands)
+	}
+	if len(localResults) != 1 || localResults[0].Kind != ResultExec {
+		t.Fatalf("exec trigger local results = %+v, want one ResultExec", localResults)
+	}
+	if localResults[0].Text != "./items_db_client" || !reflect.DeepEqual(localResults[0].Args, []string{"red;blue"}) {
+		t.Fatalf("exec trigger argv = path %q args %#v", localResults[0].Text, localResults[0].Args)
 	}
 }
 

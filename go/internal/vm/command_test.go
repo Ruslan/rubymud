@@ -1,6 +1,7 @@
 package vm
 
 import (
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -44,6 +45,46 @@ func TestNopCommand(t *testing.T) {
 	result := v.ProcessInput("#nop this is a comment")
 	if len(result) != 0 {
 		t.Errorf("ProcessInput(#nop) = %v, want empty", result)
+	}
+}
+
+func TestExecCommandBuildsArgvWithoutReparsingCaptures(t *testing.T) {
+	v := New(nil, 1)
+	v.dispatchCommand("#alias {лор} {#exec {./items_db_client} {%1} {%0}}", 0, nil)
+
+	results := v.ProcessInputDetailed("лор {red;blue}")
+	if len(results) != 1 {
+		t.Fatalf("exec alias results = %d, want 1: %+v", len(results), results)
+	}
+	if results[0].Kind != ResultExec {
+		t.Fatalf("exec alias kind = %q, want %q: %+v", results[0].Kind, ResultExec, results[0])
+	}
+	if results[0].Text != "./items_db_client" {
+		t.Fatalf("exec path = %q, want ./items_db_client", results[0].Text)
+	}
+	wantArgs := []string{"red;blue", "red;blue"}
+	if !reflect.DeepEqual(results[0].Args, wantArgs) {
+		t.Fatalf("exec args = %#v, want %#v", results[0].Args, wantArgs)
+	}
+}
+
+func TestWebFetchCommandBuildsLocalResultWithCapturedQueryValue(t *testing.T) {
+	v := New(nil, 1)
+	v.dispatchCommand("#alias {лор} {#webfetch {https://rmud.bssx.ru/items.txt} {q} {%0}}", 0, nil)
+
+	results := v.ProcessInputDetailed("лор red orc")
+	if len(results) != 1 {
+		t.Fatalf("webfetch alias results = %d, want 1: %+v", len(results), results)
+	}
+	if results[0].Kind != ResultWebFetch {
+		t.Fatalf("webfetch alias kind = %q, want %q: %+v", results[0].Kind, ResultWebFetch, results[0])
+	}
+	if results[0].Text != "https://rmud.bssx.ru/items.txt" {
+		t.Fatalf("webfetch URL = %q", results[0].Text)
+	}
+	wantArgs := []string{"q", "red orc"}
+	if !reflect.DeepEqual(results[0].Args, wantArgs) {
+		t.Fatalf("webfetch args = %#v, want %#v", results[0].Args, wantArgs)
 	}
 }
 

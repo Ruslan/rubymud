@@ -40,7 +40,7 @@
   let selectedSessionID: number | null = null;
   let selectedProfileID: number | null = null;
 
-  let appSettings: { api_token: string } = { api_token: '' };
+  let appSettings: { api_token: string; allow_exec_command: boolean; allow_webfetch_command: boolean } = { api_token: '', allow_exec_command: false, allow_webfetch_command: false };
   const wakeLockEnabledStorageKey = 'mudhost.wakeLockEnabled';
   let wakeLockEnabled = true;
 
@@ -979,6 +979,17 @@
     api.setAPIToken(appSettings.api_token);
   }
 
+  async function saveAppCommandSetting(key: 'allow_exec_command' | 'allow_webfetch_command', enabled: boolean) {
+    const next = { ...appSettings, [key]: enabled };
+    const res = await api.saveAppSettingsRequest(next);
+    if (!res.ok) {
+      formError = await res.text() || 'Failed to save app settings.';
+      return;
+    }
+    appSettings = await res.json();
+    formError = '';
+  }
+
   function previewSubstitution(rule: Substitute): string {
     if (!rule.pattern.trim()) return subPreviewText;
     try {
@@ -1415,6 +1426,18 @@
             <label class="checkbox-label">
                 <input type="checkbox" checked={wakeLockEnabled} on:change={(event) => setWakeLockEnabled((event.currentTarget as HTMLInputElement).checked)} />
                 Keep screen awake while active
+            </label>
+        </div>
+        <div class="editor-box">
+            <h3>Local Command Hooks</h3>
+            <p class="description">Power-user local commands are disabled by default. Enable only if you trust your profiles and triggers.</p>
+            <label class="checkbox-label">
+                <input type="checkbox" checked={appSettings.allow_exec_command} on:change={(event) => saveAppCommandSetting('allow_exec_command', (event.currentTarget as HTMLInputElement).checked)} />
+                Allow #exec
+            </label>
+            <label class="checkbox-label">
+                <input type="checkbox" checked={appSettings.allow_webfetch_command} on:change={(event) => saveAppCommandSetting('allow_webfetch_command', (event.currentTarget as HTMLInputElement).checked)} />
+                Allow #webfetch
             </label>
         </div>
         <div class="editor-box">

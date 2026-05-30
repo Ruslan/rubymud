@@ -65,6 +65,10 @@ func (s *Session) SendCommandWithTrace(command string, source string) ([]string,
 		switch r.Kind {
 		case vm.ResultEcho:
 			echoMessages = append(echoMessages, echoMsg{Text: r.Text, TargetBuffer: r.TargetBuffer})
+		case vm.ResultExec, vm.ResultWebFetch:
+			for _, line := range s.runLocalResult(r) {
+				echoMessages = append(echoMessages, echoMsg{Text: line, TargetBuffer: r.TargetBuffer})
+			}
 		default:
 			commands = append(commands, r.Text)
 		}

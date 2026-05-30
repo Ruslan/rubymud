@@ -24,6 +24,51 @@ import (
 	"rubymud/go/internal/vm"
 )
 
+func TestAppSettingsAPIIncludesAndPersistsLocalCommandToggles(t *testing.T) {
+	s, _ := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	url := ts.URL + "/api/app/settings"
+	req, err := newAuthenticatedRequest(http.MethodGet, url, nil, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(GET): %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET app settings: %v", err)
+	}
+	defer resp.Body.Close()
+	var initial appSettingsJSON
+	if err := json.NewDecoder(resp.Body).Decode(&initial); err != nil {
+		t.Fatalf("decode initial app settings: %v", err)
+	}
+	if initial.AllowExecCommand || initial.AllowWebFetchCommand {
+		t.Fatalf("app settings default toggles = exec:%v webfetch:%v, want false/false", initial.AllowExecCommand, initial.AllowWebFetchCommand)
+	}
+
+	body := bytes.NewBufferString(`{"allow_exec_command":true,"allow_webfetch_command":true}`)
+	req, err = newAuthenticatedRequest(http.MethodPut, url, body, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(PUT): %v", err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT app settings: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT status = %d, want 200", resp.StatusCode)
+	}
+	var updated appSettingsJSON
+	if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode updated app settings: %v", err)
+	}
+	if !updated.AllowExecCommand || !updated.AllowWebFetchCommand {
+		t.Fatalf("updated toggles = exec:%v webfetch:%v, want true/true", updated.AllowExecCommand, updated.AllowWebFetchCommand)
+	}
+}
+
 func TestVariablesAPI(t *testing.T) {
 	s, sess := setupTestServer(t)
 	ts := httptest.NewServer(s.httpServer.Handler)

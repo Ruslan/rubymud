@@ -73,9 +73,12 @@ func (v *VM) ApplyEffects(effects []Effect, entryID int64, buffer string, sendFn
 				if res.VariablesChanged {
 					variablesChanged = true
 				}
-				if res.Kind == ResultEcho {
-					echoFn(res)
-				} else {
+				switch res.Kind {
+				case ResultEcho, ResultExec, ResultWebFetch:
+					if echoFn != nil {
+						echoFn(res)
+					}
+				default:
 					if err := sendFn(res.Text, entryID, buffer); err != nil {
 						log.Printf("trigger send error: %v", err)
 					}

@@ -227,6 +227,7 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 
 		r.Route("/app", func(r chi.Router) {
 			r.Get("/settings", s.getAppSettings)
+			r.Put("/settings", s.updateAppSettings)
 			r.Post("/settings/rotate-api-token", s.rotateAPIToken)
 		})
 	})
@@ -346,12 +347,60 @@ func (s *Server) notifyProfileChanged(profileID int64, domain string) {
 
 // App Settings
 
-func (s *Server) getAppSettings(w http.ResponseWriter, r *http.Request) {
+type appSettingsJSON struct {
+	APIToken             string `json:"api_token"`
+	AllowExecCommand     bool   `json:"allow_exec_command"`
+	AllowWebFetchCommand bool   `json:"allow_webfetch_command"`
+}
+
+func parseSettingBool(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
+}
+
+func boolSettingValue(value bool) string {
+	if value {
+		return "true"
+	}
+	return "false"
+}
+
+func (s *Server) appSettingsPayload() appSettingsJSON {
 	apiToken, _ := s.store.GetSetting("api_token")
+	allowExec, _ := s.store.GetSetting("allow_exec_command")
+	allowWebFetch, _ := s.store.GetSetting("allow_webfetch_command")
+	return appSettingsJSON{
+		APIToken:             apiToken,
+		AllowExecCommand:     parseSettingBool(allowExec),
+		AllowWebFetchCommand: parseSettingBool(allowWebFetch),
+	}
+}
+
+func (s *Server) getAppSettings(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"api_token": apiToken,
-	})
+	json.NewEncoder(w).Encode(s.appSettingsPayload())
+}
+
+func (s *Server) updateAppSettings(w http.ResponseWriter, r *http.Request) {
+	var payload appSettingsJSON
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := s.store.SetSetting("allow_exec_command", boolSettingValue(payload.AllowExecCommand)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if err := s.store.SetSetting("allow_webfetch_command", boolSettingValue(payload.AllowWebFetchCommand)); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.appSettingsPayload())
 }
 
 func (s *Server) rotateAPIToken(w http.ResponseWriter, r *http.Request) {
@@ -364,9 +413,7 @@ func (s *Server) rotateAPIToken(w http.ResponseWriter, r *http.Request) {
 	}
 	s.apiToken = apiToken
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
-		"api_token": apiToken,
-	})
+	json.NewEncoder(w).Encode(s.appSettingsPayload())
 }
 
 // Colors

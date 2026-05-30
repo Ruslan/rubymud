@@ -47,6 +47,10 @@ func (v *VM) evalStatement(stmt string, depth int, captures []string) []Result {
 		return nil
 	}
 
+	if isExecCommand(stmt) {
+		return v.dispatchCommand(stmt, depth, captures)
+	}
+
 	if isCodeBearingCommand(stmt) {
 		if stmt == "#if" || strings.HasPrefix(stmt, "#if ") || strings.HasPrefix(stmt, "#if	") || strings.HasPrefix(stmt, "#if{") {
 			return v.dispatchIf(stmt, depth, captures)
@@ -180,6 +184,10 @@ func (v *VM) dispatchCommand(input string, depth int, captures []string) []Resul
 		}
 		text = renderLocalMarkup(text)
 		return []Result{{Text: text, Kind: ResultEcho, TargetBuffer: "main", IsInternal: false, Depth: depth}}
+	case "exec", "run":
+		return v.cmdExec(rest, depth, captures)
+	case "webfetch", "httpget":
+		return v.cmdWebFetch(rest, depth, captures)
 	case "woutput":
 		buffer, afterBuffer := splitBraceArg(rest)
 		text, _ := splitBraceArg(afterBuffer)
@@ -234,6 +242,11 @@ func (v *VM) dispatchIf(input string, depth int, captures []string) []Result {
 	}
 
 	return nil
+}
+
+func isExecCommand(stmt string) bool {
+	return stmt == "#exec" || strings.HasPrefix(stmt, "#exec ") || strings.HasPrefix(stmt, "#exec	") || strings.HasPrefix(stmt, "#exec{") ||
+		stmt == "#run" || strings.HasPrefix(stmt, "#run ") || strings.HasPrefix(stmt, "#run	") || strings.HasPrefix(stmt, "#run{")
 }
 
 func commandResults(lines []string, depth int) []Result {

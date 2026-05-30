@@ -922,6 +922,13 @@ func (s *Session) RenderLogEntry(entry storage.LogEntry) string {
 }
 
 func (s *Session) BroadcastResult(res vm.Result) {
+	if isLocalResultKind(res.Kind) {
+		for _, line := range s.runLocalResult(res) {
+			s.BroadcastResult(vm.Result{Text: line, Kind: vm.ResultEcho, TargetBuffer: res.TargetBuffer})
+		}
+		return
+	}
+
 	if res.Kind != vm.ResultEcho || res.IsInternal {
 		return
 	}

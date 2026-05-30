@@ -47,6 +47,7 @@ export async function fetchColors() {
   return await res.json();
 }
 export const fetchAppSettings = () => getJSON('/api/app/settings');
+export const saveAppSettingsRequest = (settings: any) => putJSON('/api/app/settings', settings);
 export const fetchProfileFiles = () => getJSON('/api/profiles/files');
 export const fetchSessionProfiles = (sessionID: number) => getJSON(`/api/sessions/${sessionID}/profiles`);
 export const fetchSessionVariables = (sessionID: number) => getJSON(`/api/sessions/${sessionID}/variables`);

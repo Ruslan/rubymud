@@ -25,7 +25,8 @@
 1. **Прямой ввод**: Если вы вводите команду вручную в консоль (например, `#var a 1`), клиент выводит подтверждение выполнения в лог.
 2. **Скрипты и автоматизация**: Если команда выполняется внутри alias, trigger, timer или delay, её техническое эхо (подтверждение) скрывается, чтобы не зашумлять лог.
 3. **Явный вывод**: Команды вроде `#showme` или `#woutput` всегда выводят свой текст, так как это их основная задача.
-4. **Неизвестные команды**: Если команда начинается с `#`, но не распознана как локальная (например, `#say`), она отправляется в MUD и отображается как обычная исходящая команда.
+4. **Local command hooks**: Команды `#exec` и `#webfetch` являются локальными hooks. Они отключены по умолчанию в Settings и никогда не отправляют результат обратно в MUD.
+5. **Неизвестные команды**: Если команда начинается с `#`, но не распознана как локальная (например, `#say`), она отправляется в MUD и отображается как обычная исходящая команда.
 
 ### Обычный ввод
 
@@ -44,6 +45,32 @@
 - alias могут раскрываться в локальные `#`-команды;
 - тот же пайплайн используется и для trigger command'ов;
 - переменные подставляются непосредственно перед выполнением конкретного statement, а не один раз на всю исходную строку.
+
+### Опасные локальные hooks
+
+Команды `#exec` и `#webfetch` отключены по умолчанию.
+
+Их можно включить в:
+
+```text
+Settings -> App Settings -> Local Command Hooks
+```
+
+Доступные флаги:
+
+- `Allow #exec`
+- `Allow #webfetch`
+
+Почему выключено по умолчанию:
+
+- alias, trigger, timer или delay могут выполнить hook автоматически;
+- импортированный профиль может содержать неожиданные hooks;
+- `#exec` запускает локальный процесс;
+- `#webfetch` делает сетевой запрос к внешнему сайту.
+
+Если hook выключен, команда не выполняется и выводит локальное диагностическое сообщение.
+
+Оба hook'а являются local-only: они не отправляют свой результат в MUD и не записываются как исходящая MUD-команда.
 
 Пример:
 
@@ -268,7 +295,7 @@ e
 - `pattern` — Go regexp;
 - если указан `button`, trigger создаёт кнопку вместо немедленной отправки команды;
 - trigger command проходит через тот же VM pipeline, что и ручной ввод:
-  работают `;`, alias, переменные, `#showme`, `#woutput`, `#tts`;
+  работают `;`, alias, переменные, `#showme`, `#woutput`, `#tts`, а также включённые local hooks `#exec` и `#webfetch`;
 - runtime-команда `#action` сейчас не умеет задавать `buffer_action` / `target_buffer` прямо в синтаксисе.
   Для routing по буферам без `#woutput` используйте Settings UI, `.tt` import/export или API.
 
@@ -407,6 +434,93 @@ e
 #woutput {combat} {Target: $target}
 #woutput {combat} {<fg 256:196>CRIT</fg>: $target}
 ```
+
+## `#exec`, `#run`
+
+Запустить локальный executable/script и вывести stdout/stderr в основной буфер `main`.
+
+Команда отключена по умолчанию. Чтобы использовать её, включите:
+
+```text
+Settings -> App Settings -> Local Command Hooks -> Allow #exec
+```
+
+Синтаксис:
+
+```text
+#exec {path} {arg1} {arg2} ...
+#run {path} {arg1} {arg2} ...
+```
+
+Примеры:
+
+```text
+#exec {/bin/echo} {hello}
+#exec {./scripts/item-helper} {%0}
+#alias {lookup-local} {#exec {./data/rmud-items.rb} {%0}}
+```
+
+Безопасность и ограничения:
+
+- `#exec` запускает процесс через argv-модель, без shell interpolation;
+- не используется `sh -c`, `cmd.exe /C` или аналогичная shell-строка;
+- каждый `{arg}` передаётся отдельным argv-аргументом;
+- требуется явный путь: `./tool`, `scripts/tool`, `/abs/path/tool`;
+- bare command через `PATH` запрещён, например `#exec {curl} {...}` не работает;
+- есть timeout и лимиты на размер/число строк вывода;
+- stdout и stderr выводятся как local echo;
+- результат не отправляется в MUD;
+- команда может вызываться из alias, trigger, timer и delay, но только если `Allow #exec` включён.
+
+Важно: `#exec` — power-user hook. Включайте его только если доверяете своим профилям, alias и trigger'ам.
+
+## `#webfetch`, `#httpget`
+
+Сделать безопасный HTTP GET к внешнему HTTPS endpoint и вывести response body в основной буфер `main`.
+
+Команда отключена по умолчанию. Чтобы использовать её, включите:
+
+```text
+Settings -> App Settings -> Local Command Hooks -> Allow #webfetch
+```
+
+Синтаксис:
+
+```text
+#webfetch {url} {queryKey} {queryValue}
+#httpget {url} {queryKey} {queryValue}
+```
+
+`queryValue` URL-encode'ится как значение query-параметра, а не вставляется в URL сырой строкой.
+
+Пример:
+
+```text
+#webfetch {https://rmud.bssx.ru/items.txt} {q} {мифриловый меч}
+```
+
+One-line alias для базы предметов RMUD/BSSX:
+
+```text
+#alias {лор} {#webfetch {https://rmud.bssx.ru/items.txt} {q} {%0}}
+лор дубинка городской стражи
+лор 395
+```
+
+Безопасность и ограничения:
+
+- только `GET`;
+- только `https://`;
+- cookies, auth headers и RubyMUD API token наружу не отправляются;
+- URL с userinfo запрещены, например `https://user:pass@example.com/`;
+- localhost, private IP, link-local и internal addresses блокируются после DNS resolution;
+- redirects ограничены и тоже должны оставаться безопасными HTTPS URL;
+- есть timeout и лимиты на размер/число строк ответа;
+- response body выводится как local echo;
+- ответ не отправляется в MUD;
+- команда может вызываться из alias, trigger, timer и delay, но только если `Allow #webfetch` включён.
+
+Идея `#webfetch` — подключать сайт как простой текстовый plugin. Сайт сам форматирует ответ для игрока, а RubyMUD безопасно получает и показывает этот текст.
 
 ## Локальная разметка (Markup)
 
@@ -664,7 +778,7 @@ e
 - если названный таймер ещё не существует, он будет создан с циклом по умолчанию (60с);
 - подписки привязаны к конкретному таймеру;
 - команда срабатывает на каждой итерации цикла, пока подписка существует;
-- scheduled command проходит через обычный VM pipeline: работают `;`, alias, переменные, `#showme`, `#woutput`, `#tts`;
+- scheduled command проходит через обычный VM pipeline: работают `;`, alias, переменные, `#showme`, `#woutput`, `#tts`, а также включённые local hooks `#exec` и `#webfetch`;
 - повторный вызов `#tickat` для того же `second` добавляет ещё одну команду в этот слот.
 
 ## `#untickat`
@@ -917,6 +1031,7 @@ TinTin++ delete-style ticker       -> #tickoff (pause cycle) or #untickat (remov
 - `#gag`
 - `#read`
 - `#write`
+- shell-mode command string вроде TinTin++ `#system {curl ...}`; используйте безопасные `#webfetch` или `#exec` после явного включения в Settings
 - runtime-удаление hotkey отдельной командой
 - runtime-синтаксис для trigger buffer routing
 
@@ -930,4 +1045,5 @@ TinTin++ delete-style ticker       -> #tickoff (pause cycle) or #untickat (remov
 #hotkey {f1} {score}
 #showme {Client ready at $TIME}
 #woutput {chat} {Chat pane ready}
+#alias {лор} {#webfetch {https://rmud.bssx.ru/items.txt} {q} {%0}}
 ```

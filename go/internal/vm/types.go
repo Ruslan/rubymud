@@ -32,12 +32,15 @@ type EchoAction struct {
 type ResultKind string
 
 const (
-	ResultCommand ResultKind = "command"
-	ResultEcho    ResultKind = "echo"
+	ResultCommand  ResultKind = "command"
+	ResultEcho     ResultKind = "echo"
+	ResultExec     ResultKind = "exec"
+	ResultWebFetch ResultKind = "webfetch"
 )
 
 type Result struct {
 	Text             string
+	Args             []string
 	Kind             ResultKind
 	TargetBuffer     string
 	IsInternal       bool
