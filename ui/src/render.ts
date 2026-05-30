@@ -24,6 +24,8 @@ interface RendererDeps {
 
 const maxRenderedLines = 5000;
 const pruneRenderedLines = 500;
+const httpsUrlPattern = /https:\/\/[^\s<>"']+/g;
+const trailingUrlPunctuation = /[.,;:!?]+$/;
 
 interface PaneNode {
   id: string;
@@ -438,6 +440,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
     const span = document.createElement('span');
     span.innerHTML = entry.text ? renderANSI(pane, entry.text) : '&nbsp;';
+    linkifyHttpsUrls(span);
     line.appendChild(span);
 
     (entry.commands || []).forEach((command) => {
@@ -1054,6 +1057,55 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     refreshAnsiTheme,
   };
 }
-  function renderANSI(pane: RenderedPane, text: string): string {
-    return renderAnsiHtml(pane.ansiUp, text, currentAnsiTheme());
-  }
+function renderANSI(pane: RenderedPane, text: string): string {
+  return renderAnsiHtml(pane.ansiUp, text, currentAnsiTheme());
+}
+
+function linkifyHttpsUrls(root: HTMLElement) {
+  const textNodes: Text[] = [];
+  const collectTextNodes = (node: Node) => {
+    node.childNodes.forEach((child) => {
+      if (child.nodeType === Node.TEXT_NODE) {
+        textNodes.push(child as Text);
+      } else if (child.nodeType === Node.ELEMENT_NODE && (child as Element).tagName !== 'A') {
+        collectTextNodes(child);
+      }
+    });
+  };
+  collectTextNodes(root);
+
+  textNodes.forEach((textNode) => {
+    const text = textNode.textContent || '';
+    httpsUrlPattern.lastIndex = 0;
+    if (!httpsUrlPattern.test(text)) return;
+
+    httpsUrlPattern.lastIndex = 0;
+    const fragment = document.createDocumentFragment();
+    let lastIndex = 0;
+    for (const match of text.matchAll(httpsUrlPattern)) {
+      const rawUrl = match[0];
+      const start = match.index || 0;
+      const url = rawUrl.replace(trailingUrlPunctuation, '');
+      const trailing = rawUrl.slice(url.length);
+      if (start > lastIndex) {
+        fragment.appendChild(document.createTextNode(text.slice(lastIndex, start)));
+      }
+
+      const anchor = document.createElement('a');
+      anchor.className = 'ansi-bright-cyan-fg';
+      anchor.href = url;
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer';
+      anchor.textContent = url;
+      fragment.appendChild(anchor);
+      if (trailing) {
+        fragment.appendChild(document.createTextNode(trailing));
+      }
+      lastIndex = start + rawUrl.length;
+    }
+    if (lastIndex < text.length) {
+      fragment.appendChild(document.createTextNode(text.slice(lastIndex)));
+    }
+    textNode.replaceWith(fragment);
+  });
+}

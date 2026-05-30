@@ -79,6 +79,36 @@ describe('renderer ANSI theme refresh', () => {
   });
 });
 
+describe('renderer output links', () => {
+  it('renders https URLs as safe external links', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    renderer.appendEntries([{ id: 1, text: 'Read https://example.com/path?x=1#top now.', buffer: 'main' }]);
+
+    const link = document.querySelector<HTMLAnchorElement>('.output-line a');
+    expect(link?.textContent).toBe('https://example.com/path?x=1#top');
+    expect(link?.classList.contains('ansi-bright-cyan-fg')).toBe(true);
+    expect(link?.href).toBe('https://example.com/path?x=1#top');
+    expect(link?.target).toBe('_blank');
+    expect(link?.rel).toBe('noopener noreferrer');
+    expect(document.querySelector('.output-line')?.textContent).toContain('now.');
+  });
+
+  it('does not linkify non-https URLs and leaves trailing punctuation outside links', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    renderer.appendEntries([{ id: 1, text: 'Old http://example.com new https://secure.example/path.', buffer: 'main' }]);
+
+    const links = Array.from(document.querySelectorAll<HTMLAnchorElement>('.output-line a'));
+    expect(links).toHaveLength(1);
+    expect(links[0]?.textContent).toBe('https://secure.example/path');
+    expect(document.querySelector('.output-line')?.textContent).toContain('http://example.com');
+    expect(document.querySelector('.output-line')?.textContent).toContain('https://secure.example/path.');
+  });
+});
+
 describe('renderer buffer catalog', () => {
   it('uses restore buffer names even when no entries arrive for them', () => {
     const renderer = createTestRenderer();
