@@ -3,7 +3,7 @@ import { AnsiUp } from 'ansi_up';
 
 import { applyAnsiTheme } from './ansi';
 import { getAppElements, fetchWithToken } from './dom';
-import { InputHistory } from './history';
+import { commandHistoryStorageKey, InputHistory } from './history';
 import { matchHotkey } from './hotkeys';
 import { safeCatchupCursor } from './logCatchup';
 import { ReverseSearchController } from './reverseSearchController';
@@ -204,6 +204,14 @@ function currentHotkeysViewportWidth(): number {
   return Math.round(window.visualViewport?.width || window.innerWidth);
 }
 
+const history = new InputHistory();
+const reverseSearchController = new ReverseSearchController({
+  input: elements.input,
+  inputWrap: elements.input.closest('.input-wrap') as HTMLElement | null,
+  searcher: history,
+});
+logBoot('history initialized');
+
 let socket = createSocket(sessionID);
 let reconnectTimer: number | null = null;
 let reconnectAttempts = 0;
@@ -214,14 +222,6 @@ let logCatchupQueued = false;
 let restoreCursor = 0;
 let restoreCursorKnown = false;
 logBoot('socket created', { readyState: socket.readyState, url: socket.url, sessionID });
-
-const history = new InputHistory();
-const reverseSearchController = new ReverseSearchController({
-  input: elements.input,
-  inputWrap: elements.input.closest('.input-wrap') as HTMLElement | null,
-  searcher: history,
-});
-logBoot('history initialized');
 
 const ansiUp = new AnsiUp();
 ansiUp.use_classes = true;
@@ -326,6 +326,21 @@ function renderHistorySuggestions(query: string, hide = false) {
 
   container.hidden = false;
 }
+
+function syncHistoryFromStorage() {
+  if (!history.syncFromStorage()) {
+    return;
+  }
+
+  reverseSearchController.reset();
+  renderHistorySuggestions(elements.input.value);
+}
+
+window.addEventListener('storage', (event) => {
+  if (event.key === commandHistoryStorageKey) {
+    syncHistoryFromStorage();
+  }
+});
 
 function requestVariables() {
   if (!sessionID) {
@@ -763,6 +778,7 @@ logBoot('event listeners attached');
 
 window.addEventListener('focus', () => {
   logBoot('window focus -> request variables');
+  syncHistoryFromStorage();
   requestVariables();
   void requestLogCatchup();
   elements.input.focus();
@@ -770,6 +786,7 @@ window.addEventListener('focus', () => {
 document.addEventListener('visibilitychange', () => {
   logBoot('visibility change', { hidden: document.hidden });
   if (!document.hidden) {
+    syncHistoryFromStorage();
     requestVariables();
     void requestLogCatchup();
   }

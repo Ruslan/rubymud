@@ -19,8 +19,12 @@ export type ReverseSearchState = {
   match: string | null;
 };
 
+export const commandHistoryStorageKey = 'commandHistory';
+
 export class InputHistory {
   private history: string[] = [];
+  private pendingLocalBeforeRemoteRestore: string[] = [];
+  private hasMergedRemoteHistory = false;
   private navigation: NavigationSession = {
     active: false,
     query: '',
@@ -76,27 +80,40 @@ export class InputHistory {
 
   push(value: string) {
     if (!value) return;
-    this.history = this.history.filter((item) => item !== value);
-    this.history.push(value);
+    this.upsert(value);
+    if (!this.hasMergedRemoteHistory) {
+      this.pendingLocalBeforeRemoteRestore = this.upsertIn(this.pendingLocalBeforeRemoteRestore, value);
+    }
     this.resetNavigation();
     this.saveHistory();
   }
 
   merge(remoteHistory: string[]) {
     const localHistory = [...this.history];
+    const pendingLocal = this.hasMergedRemoteHistory ? [] : [...this.pendingLocalBeforeRemoteRestore];
     this.history = [];
-    for (const value of localHistory) {
-      if (!value) continue;
-      this.history = this.history.filter((item) => item !== value);
-      this.history.push(value);
-    }
-    for (const value of remoteHistory || []) {
-      if (!value) continue;
-      this.history = this.history.filter((item) => item !== value);
-      this.history.push(value);
-    }
+    this.mergeValues(localHistory);
+    this.mergeValues(remoteHistory || []);
+    this.mergeValues(pendingLocal);
+    this.pendingLocalBeforeRemoteRestore = [];
+    this.hasMergedRemoteHistory = true;
     this.resetNavigation();
     this.saveHistory();
+  }
+
+  syncFromStorage(): boolean {
+    const storedHistory = this.readStoredHistory();
+    const previous = [...this.history];
+    const pendingLocal = this.hasMergedRemoteHistory ? [] : [...this.pendingLocalBeforeRemoteRestore];
+    this.history = [];
+    this.mergeValues(previous);
+    this.mergeValues(storedHistory);
+    this.mergeValues(pendingLocal);
+    const changed = !this.historiesEqual(previous, this.history);
+    if (changed) {
+      this.resetNavigation();
+    }
+    return changed;
   }
 
   up(currentValue: string): string {
@@ -285,18 +302,42 @@ export class InputHistory {
   }
 
   private loadHistory() {
-    const storedHistory = localStorage.getItem('commandHistory');
-    if (!storedHistory) return;
+    this.history = this.readStoredHistory();
+  }
+
+  private readStoredHistory(): string[] {
+    const storedHistory = localStorage.getItem(commandHistoryStorageKey);
+    if (!storedHistory) return [];
 
     try {
       const parsed = JSON.parse(storedHistory);
-      this.history = Array.isArray(parsed) ? parsed : [];
+      return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === 'string' && value.length > 0) : [];
     } catch (e) {
       console.error('Failed to parse history', e);
+      return [];
     }
   }
 
   private saveHistory() {
-    localStorage.setItem('commandHistory', JSON.stringify(this.history));
+    localStorage.setItem(commandHistoryStorageKey, JSON.stringify(this.history));
+  }
+
+  private mergeValues(values: string[]) {
+    for (const value of values) {
+      if (!value) continue;
+      this.upsert(value);
+    }
+  }
+
+  private upsert(value: string) {
+    this.history = this.upsertIn(this.history, value);
+  }
+
+  private upsertIn(values: string[], value: string): string[] {
+    return [...values.filter((item) => item !== value), value];
+  }
+
+  private historiesEqual(left: string[], right: string[]): boolean {
+    return left.length === right.length && left.every((value, index) => value === right[index]);
   }
 }

@@ -192,6 +192,29 @@ describe('InputHistory', () => {
     expect(history.up('look')).toBe('north');
   });
 
+  it('keeps commands pushed before first backend restore newer than the restore snapshot', () => {
+    localStorage.setItem('commandHistory', JSON.stringify(['north', 'look']));
+    const history = new InputHistory();
+
+    history.push('kill goblin');
+    history.merge(['look', 'say hello']);
+
+    expect(history.up('')).toBe('kill goblin');
+    expect(history.up('kill goblin')).toBe('say hello');
+    expect(history.up('say hello')).toBe('look');
+  });
+
+  it('can sync commands written by another browser tab to localStorage', () => {
+    localStorage.setItem('commandHistory', JSON.stringify(['look']));
+    const history = new InputHistory();
+
+    localStorage.setItem('commandHistory', JSON.stringify(['look', 'north']));
+    expect(history.syncFromStorage()).toBe(true);
+
+    expect(history.up('')).toBe('north');
+    expect(history.up('north')).toBe('look');
+  });
+
   it('manual reset closes reverse search so the next search starts fresh', () => {
     const history = historyWith(['kill goblin old', 'look', 'say orc', 'kill goblin new']);
 
