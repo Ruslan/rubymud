@@ -30,12 +30,13 @@ const restoreChunkSize = 100
 var webFiles embed.FS
 
 type Server struct {
-	httpServer *http.Server
-	manager    *session.Manager
-	store      *storage.Store
-	upgrader   websocket.Upgrader
-	apiToken   string
-	configDir  string
+	httpServer             *http.Server
+	manager                *session.Manager
+	store                  *storage.Store
+	upgrader               websocket.Upgrader
+	apiToken               string
+	configDir              string
+	restoreAfterCursorHook func(*session.Session) error
 }
 
 type clientMessage struct {
@@ -1960,6 +1961,16 @@ func parseClientMessage(payload []byte) clientMessage {
 }
 
 func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.ServerMsg) error) error {
+	restoreCursor, err := s.store.LatestVisibleLogID(sess.SessionID())
+	if err != nil {
+		return err
+	}
+	if s.restoreAfterCursorHook != nil {
+		if err := s.restoreAfterCursorHook(sess); err != nil {
+			return err
+		}
+	}
+
 	logsPerBuffer, err := sess.RecentLogsPerBuffer(500)
 	if err != nil {
 		return err
@@ -1992,11 +2003,12 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 	timers := sess.TimerSnapshots()
 
 	begin := session.ServerMsg{
-		Type:      "restore_begin",
-		History:   history,
-		Variables: variables,
-		Buffers:   buffers,
-		Timers:    timers,
+		Type:          "restore_begin",
+		History:       history,
+		Variables:     variables,
+		Buffers:       buffers,
+		Timers:        timers,
+		RestoreCursor: &restoreCursor,
 	}
 
 	profileIDs, _ := s.store.GetOrderedProfileIDs(sess.SessionID())

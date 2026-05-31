@@ -427,6 +427,110 @@ func TestRestoreStateIncludesBellPositions(t *testing.T) {
 	}
 }
 
+func TestRestoreStateIncludesKnownZeroCursorWhenNoVisibleLogs(t *testing.T) {
+	s, sess := setupTestServer(t)
+
+	var msg session.ServerMsg
+	if err := s.sendRestoreState(sess, func(next session.ServerMsg) error {
+		if next.Type == "restore_begin" {
+			msg = next
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("sendRestoreState: %v", err)
+	}
+	if msg.RestoreCursor == nil || *msg.RestoreCursor != 0 {
+		t.Fatalf("restore cursor = %v, want known zero cursor", msg.RestoreCursor)
+	}
+}
+
+func TestRestoreStateCapturesCursorBeforeReadingPayload(t *testing.T) {
+	s, sess := setupTestServer(t)
+	initialID, err := s.store.AppendLogEntry(sess.SessionID(), "main", "before", "before")
+	if err != nil {
+		t.Fatalf("AppendLogEntry before: %v", err)
+	}
+	var insertedID int64
+	s.restoreAfterCursorHook = func(*session.Session) error {
+		id, err := s.store.AppendLogEntry(sess.SessionID(), "main", "during restore", "during restore")
+		insertedID = id
+		return err
+	}
+
+	var msg session.ServerMsg
+	if err := s.sendRestoreState(sess, func(next session.ServerMsg) error {
+		if next.Type == "restore_begin" {
+			msg = next
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("sendRestoreState: %v", err)
+	}
+
+	if insertedID <= initialID {
+		t.Fatalf("inserted id = %d, want after initial id %d", insertedID, initialID)
+	}
+	if msg.RestoreCursor == nil || *msg.RestoreCursor != initialID {
+		t.Fatalf("restore cursor = %v, want pre-payload high-water mark %d", msg.RestoreCursor, initialID)
+	}
+}
+
+func TestRestoreStateIncludesLatestVisibleCursorWhenPayloadIsLimited(t *testing.T) {
+	s, sess := setupTestServer(t)
+	var latestID int64
+	for i := 0; i < 505; i++ {
+		id, err := s.store.AppendLogEntry(sess.SessionID(), "main", fmt.Sprintf("line-%03d", i), fmt.Sprintf("line-%03d", i))
+		if err != nil {
+			t.Fatalf("AppendLogEntry(%d): %v", i, err)
+		}
+		latestID = id
+	}
+
+	var msg session.ServerMsg
+	if err := s.sendRestoreState(sess, func(next session.ServerMsg) error {
+		if next.Type == "restore_begin" {
+			msg = next
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("sendRestoreState: %v", err)
+	}
+
+	if got := len(msg.Buffers["main"]); got != 500 {
+		t.Fatalf("restore main entries = %d, want limited 500", got)
+	}
+	if msg.RestoreCursor == nil || *msg.RestoreCursor != latestID {
+		t.Fatalf("restore cursor = %v, want latest visible id %d", msg.RestoreCursor, latestID)
+	}
+}
+
+func TestRestoreStateCursorUsesLatestVisibleLog(t *testing.T) {
+	s, sess := setupTestServer(t)
+	visibleID, err := s.store.AppendLogEntry(sess.SessionID(), "main", "visible", "visible")
+	if err != nil {
+		t.Fatalf("AppendLogEntry visible: %v", err)
+	}
+	if _, err := s.store.AppendLogEntryWithOverlays(sess.SessionID(), "main", "hidden", "hidden", []storage.LogOverlay{{
+		OverlayType: "gag",
+		PayloadJSON: "{}",
+	}}); err != nil {
+		t.Fatalf("AppendLogEntryWithOverlays gag: %v", err)
+	}
+
+	var msg session.ServerMsg
+	if err := s.sendRestoreState(sess, func(next session.ServerMsg) error {
+		if next.Type == "restore_begin" {
+			msg = next
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("sendRestoreState: %v", err)
+	}
+	if msg.RestoreCursor == nil || *msg.RestoreCursor != visibleID {
+		t.Fatalf("restore cursor = %v, want latest visible id %d", msg.RestoreCursor, visibleID)
+	}
+}
+
 func TestLiveLogsSinceIDReturnsClientEntries(t *testing.T) {
 	s, sess := setupTestServer(t)
 	ts := httptest.NewServer(s.httpServer.Handler)

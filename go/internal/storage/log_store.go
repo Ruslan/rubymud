@@ -120,6 +120,13 @@ func (s *Store) LatestLogID(sessionID int64) (int64, error) {
 	return id, err
 }
 
+// LatestVisibleLogID returns the highest visible log entry ID for the session, or 0 if none.
+func (s *Store) LatestVisibleLogID(sessionID int64) (int64, error) {
+	var id int64
+	err := s.db.Model(&LogRecord{}).Where("session_id = ?", sessionID).Where(visibleLogEntrySQL).Order("id DESC").Limit(1).Pluck("id", &id).Error
+	return id, err
+}
+
 // LogsSinceID returns log entries with id > afterID in chronological order, up to limit.
 func (s *Store) LogsSinceID(sessionID, afterID int64, limit int) ([]LogEntry, error) {
 	var records []LogRecord

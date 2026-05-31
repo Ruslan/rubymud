@@ -67,4 +67,5 @@ export interface ServerMessage {
   timers?: TimerSnapshot[];
   client_command_id?: string;
   commands?: string[];
+  restore_cursor?: number;
 }

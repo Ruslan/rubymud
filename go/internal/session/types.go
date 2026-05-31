@@ -16,6 +16,7 @@ type ServerMsg struct {
 	Timers          []TimerSnapshot             `json:"timers,omitempty"`
 	ClientCommandID string                      `json:"client_command_id,omitempty"`
 	Commands        []string                    `json:"commands,omitempty"`
+	RestoreCursor   *int64                      `json:"restore_cursor,omitempty"`
 }
 
 type SettingsChangedJSON struct {

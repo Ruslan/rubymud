@@ -5,6 +5,7 @@ import { applyAnsiTheme } from './ansi';
 import { getAppElements, fetchWithToken } from './dom';
 import { InputHistory } from './history';
 import { matchHotkey } from './hotkeys';
+import { safeCatchupCursor } from './logCatchup';
 import { ReverseSearchController } from './reverseSearchController';
 import { createRenderer } from './render';
 import { createSocket, sendSocketCommand } from './socket';
@@ -210,6 +211,8 @@ let lastHotkeysViewportWidth = currentHotkeysViewportWidth();
 let connectionStatus = 'connecting';
 let logCatchupInFlight = false;
 let logCatchupQueued = false;
+let restoreCursor = 0;
+let restoreCursorKnown = false;
 logBoot('socket created', { readyState: socket.readyState, url: socket.url, sessionID });
 
 const history = new InputHistory();
@@ -428,9 +431,15 @@ async function requestLogCatchup() {
     return;
   }
 
-  let afterID = renderer.latestEntryID();
+  const usingRestoreCursor = restoreCursorKnown;
+  const cursor = safeCatchupCursor(renderer.latestEntryID(), restoreCursor, restoreCursorKnown);
+  if (cursor === null) return;
+  let afterID = cursor;
 
   logCatchupInFlight = true;
+  if (usingRestoreCursor) {
+    restoreCursorKnown = false;
+  }
   try {
     for (let page = 0; page < 20; page += 1) {
       const res = await fetchWithToken(`/api/sessions/${sessionID}/logs/live?after_id=${afterID}&limit=1000`);
@@ -453,6 +462,9 @@ async function requestLogCatchup() {
       }
     }
   } catch (err) {
+    if (usingRestoreCursor) {
+      restoreCursorKnown = true;
+    }
     console.error('Failed to catch up logs:', err);
   } finally {
     logCatchupInFlight = false;
@@ -554,7 +566,10 @@ function attachSocketHandlers(target: WebSocket) {
         hotkeys: message.hotkeys?.length || 0,
         variables: message.variables?.length || 0,
         buffers: Object.keys(message.buffers || {}).join(', ') || 'none',
+        restoreCursor: message.restore_cursor || 0,
       });
+      restoreCursor = message.restore_cursor || 0;
+      restoreCursorKnown = Object.prototype.hasOwnProperty.call(message, 'restore_cursor');
       state.restoreInProgress = true;
       renderer.clearOutput();
       renderer.setAvailableBuffers(Object.keys(message.buffers || {}));
