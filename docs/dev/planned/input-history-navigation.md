@@ -17,7 +17,7 @@ This makes command recall feel unsafe during normal play, where a wrong recalled
 
 ## Implementation Status
 
-Status: arrow navigation fixed, keep this plan open for follow-ups.
+Status: arrow navigation and safe `Ctrl+R` search fixed, keep this plan open for follow-ups.
 
 Implemented:
 
@@ -28,14 +28,18 @@ Implemented:
 5. Prefix-search on arrows remains case-insensitive.
 6. Oldest-match `ArrowUp` clamps on the oldest match.
 7. Newest-match `ArrowDown` restores the original draft/query.
-8. Focused `InputHistory` unit tests cover stale-index, prefix, empty-input, boundary, and case-insensitive behavior.
+8. `Ctrl+R` opens safe reverse substring search with newest-to-older matching and no wrap.
+9. `Enter` during active reverse search accepts the selected command without sending it.
+10. `Escape` during active reverse search restores the original draft.
+11. Manual input resets active arrow and reverse-search sessions.
+12. Focused `InputHistory` unit tests cover stale-index, prefix, empty-input, boundary, case-insensitive, and reverse-search behavior.
 
 Remaining follow-ups:
 
-1. Add `Ctrl+R` reverse substring search as a separate safe interaction.
-2. Decide whether local browser history should be scoped by session ID instead of global `commandHistory`.
-3. Decide duplicate/recency policy for repeated commands and `merge(remoteHistory)`.
-4. Keep raw input recall as an explicit product choice while canonical sent-command logs continue separately.
+1. Decide whether local browser history should be scoped by session ID instead of global `commandHistory`.
+2. Decide duplicate/recency policy for repeated commands and `merge(remoteHistory)`.
+3. Keep raw input recall as an explicit product choice while canonical sent-command logs continue separately.
+4. Consider a small visible indicator for active reverse-search mode if the input-only feedback feels too subtle.
 
 ## Previous Implementation
 
@@ -101,19 +105,19 @@ History navigation should be predictable and shell-like:
 12. Reset navigation state on normal input changes and after successful command submission.
 13. Consider scoping local storage by session ID in a separate small follow-up.
 
-## Ctrl+R Search Proposal
+## Ctrl+R Search
 
-Ctrl+R should be a separate follow-up after arrow navigation is stable.
+Ctrl+R is implemented as a separate safe reverse-search interaction after arrow navigation stabilization.
 
-Recommended safe behavior for a MUD client:
+Safe behavior for a MUD client:
 
 1. `Ctrl+R` opens reverse history search.
 2. Search should match substrings, not only prefixes.
-3. Repeated `Ctrl+R` cycles to older matches.
+3. Repeated `Ctrl+R` moves to older matches and clamps at the oldest match.
 4. `Enter` accepts the selected match into the input without sending it immediately.
 5. A second `Enter` sends the accepted command through the normal input path.
 6. `Escape` closes search and restores the original draft.
-7. `ArrowUp` and `ArrowDown` should close search or move within search results only if that is explicitly designed.
+7. `ArrowUp` and `ArrowDown` close search mode first, then run normal prefix history navigation from the visible input.
 
 The two-step Enter behavior is intentionally safer than immediate execution because accidental recall of an old MUD command can be costly.
 

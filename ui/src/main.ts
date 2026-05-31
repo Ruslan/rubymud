@@ -697,10 +697,12 @@ elements.variablesToggle.addEventListener('click', () => renderer.setActivePanel
 elements.groupsToggle.addEventListener('click', () => renderer.setActivePanel('groups'));
 elements.settingsToggle.addEventListener('click', () => window.open('/settings', 'settings'));
 elements.historyUp.addEventListener('click', () => {
+  history.resetSearch();
   applyHistoryValue(history.up(elements.input.value));
   renderHistorySuggestions(elements.input.value, true);
 });
 elements.historyDown.addEventListener('click', () => {
+  history.resetSearch();
   applyHistoryValue(history.down(elements.input.value));
   renderHistorySuggestions(elements.input.value, true);
 });
@@ -748,8 +750,30 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 elements.input.addEventListener('keydown', (event) => {
+  if (event.key.toLowerCase() === 'r' && event.ctrlKey && !event.altKey && !event.metaKey) {
+    event.preventDefault();
+    elements.input.value = history.reverseSearch(elements.input.value);
+    const length = elements.input.value.length;
+    elements.input.setSelectionRange(length, length);
+    renderHistorySuggestions(elements.input.value, true);
+    return;
+  }
+
+  if (event.key === 'Escape' && history.isSearchActive()) {
+    event.preventDefault();
+    const value = history.cancelSearch();
+    if (value !== null) {
+      elements.input.value = value;
+      const length = value.length;
+      elements.input.setSelectionRange(length, length);
+    }
+    renderHistorySuggestions(elements.input.value, true);
+    return;
+  }
+
   if (event.key === 'ArrowUp') {
     event.preventDefault();
+    history.resetSearch();
     elements.input.value = history.up(elements.input.value);
     const length = elements.input.value.length;
     elements.input.setSelectionRange(length, length);
@@ -759,6 +783,7 @@ elements.input.addEventListener('keydown', (event) => {
 
   if (event.key === 'ArrowDown') {
     event.preventDefault();
+    history.resetSearch();
     elements.input.value = history.down(elements.input.value);
     const length = elements.input.value.length;
     elements.input.setSelectionRange(length, length);
@@ -767,6 +792,18 @@ elements.input.addEventListener('keydown', (event) => {
   }
 
   if (event.key !== 'Enter') return;
+
+  if (history.isSearchActive()) {
+    event.preventDefault();
+    const value = history.acceptSearch();
+    if (value !== null) {
+      elements.input.value = value;
+      const length = value.length;
+      elements.input.setSelectionRange(length, length);
+    }
+    renderHistorySuggestions(elements.input.value, true);
+    return;
+  }
 
   const value = elements.input.value.trim();
   logBoot('input enter', { value, readyState: socket.readyState });

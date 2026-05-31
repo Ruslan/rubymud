@@ -4,6 +4,13 @@ type NavigationSession = {
   index: number;
 };
 
+type SearchSession = {
+  active: boolean;
+  query: string;
+  draft: string;
+  index: number;
+};
+
 export class InputHistory {
   private history: string[] = [];
   private navigation: NavigationSession = {
@@ -11,9 +18,19 @@ export class InputHistory {
     query: '',
     index: 0,
   };
+  private search: SearchSession = {
+    active: false,
+    query: '',
+    draft: '',
+    index: 0,
+  };
 
   private startsWithQuery(value: string, query: string): boolean {
     return value.toLocaleLowerCase().startsWith(query.toLocaleLowerCase());
+  }
+
+  private containsQuery(value: string, query: string): boolean {
+    return value.toLocaleLowerCase().includes(query.toLocaleLowerCase());
   }
 
   constructor() {
@@ -22,11 +39,21 @@ export class InputHistory {
   }
 
   resetNavigation() {
-    this.navigation = {
+    this.resetArrowNavigation();
+    this.resetSearch();
+  }
+
+  resetSearch() {
+    this.search = {
       active: false,
       query: '',
+      draft: '',
       index: this.history.length,
     };
+  }
+
+  isSearchActive(): boolean {
+    return this.search.active;
   }
 
   push(value: string) {
@@ -70,8 +97,42 @@ export class InputHistory {
     }
 
     const query = this.navigation.query;
-    this.resetNavigation();
+    this.resetArrowNavigation();
     return query;
+  }
+
+  reverseSearch(currentValue: string): string {
+    this.ensureSearch(currentValue);
+
+    for (let i = this.search.index - 1; i >= 0; i--) {
+      const value = this.history[i];
+      if (value && this.containsQuery(value, this.search.query)) {
+        this.search.index = i;
+        return value;
+      }
+    }
+
+    return this.currentSearchValue();
+  }
+
+  acceptSearch(): string | null {
+    if (!this.search.active) {
+      return null;
+    }
+
+    const value = this.currentSearchValue();
+    this.resetNavigation();
+    return value;
+  }
+
+  cancelSearch(): string | null {
+    if (!this.search.active) {
+      return null;
+    }
+
+    const draft = this.search.draft;
+    this.resetNavigation();
+    return draft;
   }
 
   matches(prefix: string, limit = 3): string[] {
@@ -95,6 +156,14 @@ export class InputHistory {
     return result;
   }
 
+  private resetArrowNavigation() {
+    this.navigation = {
+      active: false,
+      query: '',
+      index: this.history.length,
+    };
+  }
+
   private ensureNavigation(currentValue: string) {
     if (this.navigation.active) {
       return;
@@ -107,9 +176,28 @@ export class InputHistory {
     };
   }
 
+  private ensureSearch(currentValue: string) {
+    if (this.search.active) {
+      return;
+    }
+
+    this.resetArrowNavigation();
+    this.search = {
+      active: true,
+      query: currentValue,
+      draft: currentValue,
+      index: this.history.length,
+    };
+  }
+
   private currentNavigationValue(): string {
     const current = this.history[this.navigation.index];
     return current && this.startsWithQuery(current, this.navigation.query) ? current : this.navigation.query;
+  }
+
+  private currentSearchValue(): string {
+    const current = this.history[this.search.index];
+    return current && this.containsQuery(current, this.search.query) ? current : this.search.draft;
   }
 
   private loadHistory() {
