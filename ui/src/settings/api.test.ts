@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { saveAppSettingsRequest, toggleProfileGroup } from './api';
+import { fetchSessionHistory, saveAppSettingsRequest, toggleProfileGroup } from './api';
 
 describe('settings api', () => {
   afterEach(() => {
@@ -35,6 +35,19 @@ describe('settings api', () => {
         'X-Session-Token': '',
       },
       body: JSON.stringify({ group_name: 'combat', enabled: false }),
+    });
+  });
+
+  it('fetches paged filtered searched session history', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{"entries":[],"has_more":false}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchSessionHistory(3, { kind: 'input', query: 'look north', beforeID: 42, limit: 25 });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/sessions/3/history?limit=25&kind=input&q=look+north&before_id=42', {
+      headers: {
+        'X-Session-Token': '',
+      },
     });
   });
 });

@@ -1,6 +1,19 @@
 package storage
 
-import "strings"
+import (
+	"errors"
+	"strings"
+	"unicode"
+
+	"gorm.io/gorm"
+)
+
+type HistoryListOptions struct {
+	Kind     string
+	Query    string
+	BeforeID int64
+	Limit    int
+}
 
 func (h *HistoryEntry) TableName() string {
 	return "history_entries"
@@ -11,13 +24,22 @@ func (s *Store) AppendHistoryEntry(sessionID int64, kind, line string) error {
 	if line == "" {
 		return nil
 	}
-	entry := HistoryEntry{
-		SessionID: sessionID,
-		Kind:      kind,
-		Line:      line,
-		CreatedAt: nowSQLiteTime(),
+	kind = strings.TrimSpace(kind)
+	if kind == "" {
+		kind = "input"
 	}
-	return s.db.Create(&entry).Error
+
+	createdAt := nowSQLiteTime()
+	return s.db.Exec(`
+		INSERT INTO history_entries (session_id, kind, line, created_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(session_id, line) DO UPDATE SET
+			kind = CASE
+				WHEN excluded.kind = 'input' OR history_entries.kind = 'input' THEN 'input'
+				ELSE excluded.kind
+			END,
+			created_at = excluded.created_at
+	`, sessionID, kind, line, createdAt).Error
 }
 
 func (s *Store) RecentInputHistory(sessionID int64, limit int) ([]string, error) {
@@ -48,12 +70,71 @@ func (s *Store) RecentInputHistory(sessionID int64, limit int) ([]string, error)
 }
 
 func (s *Store) ListHistory(sessionID int64, limit int) ([]HistoryEntry, error) {
-	var entries []HistoryEntry
-	err := s.db.Where("session_id = ?", sessionID).
-		Order("created_at DESC, id DESC").
-		Limit(limit).
-		Find(&entries).Error
+	entries, _, err := s.ListHistoryPage(sessionID, HistoryListOptions{Limit: limit})
 	return entries, err
+}
+
+func historyQueryGlob(query string) string {
+	escaped := escapeGlob(query)
+	var globPattern strings.Builder
+	globPattern.WriteByte('*')
+	for _, r := range escaped {
+		lower := unicode.ToLower(r)
+		upper := unicode.ToUpper(r)
+		if lower == upper {
+			globPattern.WriteRune(lower)
+		} else {
+			globPattern.WriteByte('[')
+			globPattern.WriteRune(lower)
+			globPattern.WriteRune(upper)
+			globPattern.WriteByte(']')
+		}
+	}
+	globPattern.WriteByte('*')
+	return globPattern.String()
+}
+
+func (s *Store) ListHistoryPage(sessionID int64, opts HistoryListOptions) ([]HistoryEntry, bool, error) {
+	limit := opts.Limit
+	if limit < 1 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	var entries []HistoryEntry
+	query := s.db.Where("session_id = ?", sessionID)
+	if kind := strings.TrimSpace(opts.Kind); kind != "" {
+		query = query.Where("kind = ?", kind)
+	}
+	if search := strings.TrimSpace(opts.Query); search != "" {
+		query = query.Where("line GLOB ?", historyQueryGlob(search))
+	}
+	if opts.BeforeID > 0 {
+		var cursor HistoryEntry
+		err := s.db.Where("session_id = ? AND id = ?", sessionID, opts.BeforeID).First(&cursor).Error
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return []HistoryEntry{}, false, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		query = query.Where("(created_at < ? OR (created_at = ? AND id < ?))", cursor.CreatedAt, cursor.CreatedAt, cursor.ID)
+	}
+
+	err := query.Order("created_at DESC, id DESC").
+		Limit(limit + 1).
+		Find(&entries).Error
+	if err != nil {
+		return nil, false, err
+	}
+
+	hasMore := len(entries) > limit
+	if hasMore {
+		entries = entries[:limit]
+	}
+	return entries, hasMore, nil
 }
 
 func (s *Store) DeleteHistoryEntry(sessionID int64, id int64) error {

@@ -171,6 +171,27 @@ describe('InputHistory', () => {
     expect(history.isReverseSearchActive()).toBe(false);
   });
 
+  it('push upserts duplicate commands to MRU instead of appending duplicates', () => {
+    const history = historyWith(['look', 'north', 'look']);
+
+    expect(history.up('')).toBe('look');
+    expect(history.up('look')).toBe('north');
+    expect(history.up('north')).toBe('north');
+    expect(history.down('north')).toBe('look');
+    expect(history.down('look')).toBe('');
+  });
+
+  it('merge keeps backend restore recency ahead of stale local duplicates', () => {
+    localStorage.setItem('commandHistory', JSON.stringify(['north', 'look']));
+    const history = new InputHistory();
+
+    history.merge(['look', 'kill goblin']);
+
+    expect(history.up('')).toBe('kill goblin');
+    expect(history.up('kill goblin')).toBe('look');
+    expect(history.up('look')).toBe('north');
+  });
+
   it('manual reset closes reverse search so the next search starts fresh', () => {
     const history = historyWith(['kill goblin old', 'look', 'say orc', 'kill goblin new']);
 

@@ -1,4 +1,4 @@
-import type { LogEntry } from './types';
+import type { HistoryListResponse, LogEntry } from './types';
 
 export type ProfileRuleDomain = 'aliases' | 'triggers' | 'subs' | 'highlights' | 'hotkeys' | 'declared_variables';
 
@@ -51,7 +51,15 @@ export const saveAppSettingsRequest = (settings: any) => putJSON('/api/app/setti
 export const fetchProfileFiles = () => getJSON('/api/profiles/files');
 export const fetchSessionProfiles = (sessionID: number) => getJSON(`/api/sessions/${sessionID}/profiles`);
 export const fetchSessionVariables = (sessionID: number) => getJSON(`/api/sessions/${sessionID}/variables`);
-export const fetchSessionHistory = (sessionID: number) => getJSON(`/api/sessions/${sessionID}/history`);
+export type FetchSessionHistoryOptions = { kind?: string; query?: string; beforeID?: number | null; limit?: number };
+export function fetchSessionHistory(sessionID: number, options: FetchSessionHistoryOptions = {}) {
+  const params = new URLSearchParams();
+  params.set('limit', String(options.limit ?? 100));
+  if (options.kind) params.set('kind', options.kind);
+  if (options.query) params.set('q', options.query);
+  if (options.beforeID) params.set('before_id', String(options.beforeID));
+  return getJSON<HistoryListResponse>(`/api/sessions/${sessionID}/history?${params}`);
+}
 export const fetchProfileTimers = (profileID: number) => getJSON(`/api/profiles/${profileID}/timers`);
 
 export function profileEndpoint(domain: string): string {

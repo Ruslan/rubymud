@@ -38,10 +38,10 @@ type SessionRecord struct {
 }
 
 type HistoryEntry struct {
-	ID        int64      `gorm:"primaryKey"`
-	SessionID int64      `json:"session_id"`
+	ID        int64      `gorm:"primaryKey" json:"id"`
+	SessionID int64      `gorm:"uniqueIndex:history_entries_session_line_idx" json:"session_id"`
 	Kind      string     `json:"kind"`
-	Line      string     `json:"line"`
+	Line      string     `gorm:"uniqueIndex:history_entries_session_line_idx" json:"line"`
 	CreatedAt SQLiteTime `json:"created_at"`
 }
 

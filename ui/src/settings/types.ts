@@ -148,3 +148,9 @@ export interface HistoryEntry {
   line: string;
   created_at: string;
 }
+
+export interface HistoryListResponse {
+  entries: HistoryEntry[];
+  has_more: boolean;
+  next_before_id?: number | null;
+}

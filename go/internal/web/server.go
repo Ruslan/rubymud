@@ -506,19 +506,64 @@ func (s *Server) deleteVariable(w http.ResponseWriter, r *http.Request) {
 
 // Session History
 
+type historyListResponse struct {
+	Entries      []storage.HistoryEntry `json:"entries"`
+	HasMore      bool                   `json:"has_more"`
+	NextBeforeID *int64                 `json:"next_before_id,omitempty"`
+}
+
 func (s *Server) listHistory(w http.ResponseWriter, r *http.Request) {
 	_, id, err := s.getSession(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	history, err := s.store.ListHistory(id, 1000)
+
+	query := r.URL.Query()
+	limit := 1000
+	if limitStr := query.Get("limit"); limitStr != "" {
+		limit, err = strconv.Atoi(limitStr)
+		if err != nil || limit < 1 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	var beforeID int64
+	if beforeIDStr := query.Get("before_id"); beforeIDStr != "" {
+		beforeID, err = strconv.ParseInt(beforeIDStr, 10, 64)
+		if err != nil || beforeID < 1 {
+			http.Error(w, "invalid before_id", http.StatusBadRequest)
+			return
+		}
+	}
+
+	history, hasMore, err := s.store.ListHistoryPage(id, storage.HistoryListOptions{
+		Kind:     strings.TrimSpace(query.Get("kind")),
+		Query:    strings.TrimSpace(query.Get("q")),
+		BeforeID: beforeID,
+		Limit:    limit,
+	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+
+	var nextBeforeID *int64
+	if hasMore && len(history) > 0 {
+		next := history[len(history)-1].ID
+		nextBeforeID = &next
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(history)
+	json.NewEncoder(w).Encode(historyListResponse{
+		Entries:      history,
+		HasMore:      hasMore,
+		NextBeforeID: nextBeforeID,
+	})
 }
 
 func (s *Server) deleteHistoryEntry(w http.ResponseWriter, r *http.Request) {

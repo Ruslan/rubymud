@@ -210,6 +210,211 @@ func TestVariablesAPIDeletesExistingDollarPrefixedName(t *testing.T) {
 	}
 }
 
+func TestHistoryAPISearchesPagedFilteredEntries(t *testing.T) {
+	s, sess := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	for _, entry := range []struct {
+		kind string
+		line string
+	}{
+		{kind: "input", line: "raw look"},
+		{kind: "expanded", line: "LOOK"},
+		{kind: "input", line: "raw kill"},
+		{kind: "input", line: "look north"},
+	} {
+		if err := s.store.AppendHistoryEntry(sess.SessionID(), entry.kind, entry.line); err != nil {
+			t.Fatalf("AppendHistoryEntry(%s): %v", entry.line, err)
+		}
+	}
+
+	url := fmt.Sprintf("%s/api/sessions/%d/history?limit=2&q=look", ts.URL, sess.SessionID())
+	req, err := newAuthenticatedRequest(http.MethodGet, url, nil, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(GET %s): %v", url, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET history search status = %d, want 200: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var firstPage struct {
+		Entries      []historyEntryAPI `json:"entries"`
+		HasMore      bool              `json:"has_more"`
+		NextBeforeID *int64            `json:"next_before_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&firstPage); err != nil {
+		t.Fatalf("decode history search first page: %v", err)
+	}
+	if !firstPage.HasMore || firstPage.NextBeforeID == nil {
+		t.Fatalf("history search first page cursor = hasMore:%v next:%v, want hasMore true with cursor", firstPage.HasMore, firstPage.NextBeforeID)
+	}
+	if got := historyAPILines(firstPage.Entries); fmt.Sprint(got) != "[look north LOOK]" {
+		t.Fatalf("history search first page lines = %v, want [look north LOOK]", got)
+	}
+	if len(firstPage.Entries) == 0 || firstPage.Entries[0].ID == 0 {
+		t.Fatalf("history search first page entry id = %d, want non-zero lowercase JSON id", firstPage.Entries[0].ID)
+	}
+	if firstPage.Entries[0].LegacyID != nil {
+		t.Fatalf("history search first page entry included legacy JSON ID field: %+v", firstPage.Entries[0])
+	}
+
+	url = fmt.Sprintf("%s/api/sessions/%d/history?limit=2&q=look&before_id=%d&kind=input", ts.URL, sess.SessionID(), *firstPage.NextBeforeID)
+	req, err = newAuthenticatedRequest(http.MethodGet, url, nil, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(GET %s): %v", url, err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET history search second page status = %d, want 200: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var secondPage struct {
+		Entries      []historyEntryAPI `json:"entries"`
+		HasMore      bool              `json:"has_more"`
+		NextBeforeID *int64            `json:"next_before_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&secondPage); err != nil {
+		t.Fatalf("decode history search second page: %v", err)
+	}
+	if secondPage.HasMore {
+		t.Fatalf("history search second page hasMore = true, want false")
+	}
+	if secondPage.NextBeforeID != nil {
+		t.Fatalf("history search second page next_before_id = %v, want nil", secondPage.NextBeforeID)
+	}
+	if got := historyAPILines(secondPage.Entries); fmt.Sprint(got) != "[raw look]" {
+		t.Fatalf("history search second page lines = %v, want [raw look]", got)
+	}
+}
+
+func TestHistoryAPIListsPagedFilteredEntries(t *testing.T) {
+	s, sess := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	for _, entry := range []struct {
+		kind string
+		line string
+	}{
+		{kind: "input", line: "raw look"},
+		{kind: "expanded", line: "look"},
+		{kind: "input", line: "raw kill"},
+	} {
+		if err := s.store.AppendHistoryEntry(sess.SessionID(), entry.kind, entry.line); err != nil {
+			t.Fatalf("AppendHistoryEntry(%s): %v", entry.line, err)
+		}
+	}
+
+	url := fmt.Sprintf("%s/api/sessions/%d/history?limit=2", ts.URL, sess.SessionID())
+	req, err := newAuthenticatedRequest(http.MethodGet, url, nil, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(GET %s): %v", url, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET history status = %d, want 200: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+	}
+
+	var firstPage struct {
+		Entries      []historyEntryAPI `json:"entries"`
+		HasMore      bool              `json:"has_more"`
+		NextBeforeID *int64            `json:"next_before_id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&firstPage); err != nil {
+		t.Fatalf("decode history first page: %v", err)
+	}
+	if !firstPage.HasMore || firstPage.NextBeforeID == nil {
+		t.Fatalf("first page cursor = hasMore:%v next:%v, want hasMore true with cursor", firstPage.HasMore, firstPage.NextBeforeID)
+	}
+	if got := historyAPILines(firstPage.Entries); fmt.Sprint(got) != "[raw kill look]" {
+		t.Fatalf("first page lines = %v, want [raw kill look]", got)
+	}
+	if len(firstPage.Entries) == 0 || firstPage.Entries[0].ID == 0 {
+		t.Fatalf("first page entry id = %d, want non-zero lowercase JSON id", firstPage.Entries[0].ID)
+	}
+	if firstPage.Entries[0].LegacyID != nil {
+		t.Fatalf("first page entry included legacy JSON ID field: %+v", firstPage.Entries[0])
+	}
+
+	url = fmt.Sprintf("%s/api/sessions/%d/history?limit=2&before_id=%d", ts.URL, sess.SessionID(), *firstPage.NextBeforeID)
+	req, err = newAuthenticatedRequest(http.MethodGet, url, nil, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(GET %s): %v", url, err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	var secondPage struct {
+		Entries []historyEntryAPI `json:"entries"`
+		HasMore bool              `json:"has_more"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&secondPage); err != nil {
+		t.Fatalf("decode history second page: %v", err)
+	}
+	if secondPage.HasMore {
+		t.Fatal("second page has_more = true, want false")
+	}
+	if got := historyAPILines(secondPage.Entries); fmt.Sprint(got) != "[raw look]" {
+		t.Fatalf("second page lines = %v, want [raw look]", got)
+	}
+
+	url = fmt.Sprintf("%s/api/sessions/%d/history?kind=input&limit=10", ts.URL, sess.SessionID())
+	req, err = newAuthenticatedRequest(http.MethodGet, url, nil, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(GET %s): %v", url, err)
+	}
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	var filteredPage struct {
+		Entries []historyEntryAPI `json:"entries"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&filteredPage); err != nil {
+		t.Fatalf("decode history filtered page: %v", err)
+	}
+	if got := historyAPILines(filteredPage.Entries); fmt.Sprint(got) != "[raw kill raw look]" {
+		t.Fatalf("filtered page lines = %v, want [raw kill raw look]", got)
+	}
+}
+
+type historyEntryAPI struct {
+	ID        int64  `json:"id"`
+	LegacyID  *int64 `json:"ID"`
+	SessionID int64  `json:"session_id"`
+	Kind      string `json:"kind"`
+	Line      string `json:"line"`
+	CreatedAt string `json:"created_at"`
+}
+
+func historyAPILines(entries []historyEntryAPI) []string {
+	lines := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		lines = append(lines, entry.Line)
+	}
+	return lines
+}
+
 func TestAliasesAPI(t *testing.T) {
 	s, _ := setupTestServer(t)
 	ts := httptest.NewServer(s.httpServer.Handler)

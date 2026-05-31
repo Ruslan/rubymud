@@ -106,6 +106,24 @@
 
   // History State
   let historyEntries: HistoryEntry[] = [];
+  let historyHasMore = false;
+  let historyNextBeforeID: number | null = null;
+  let historyKindFilter = '';
+  let historyQuery = '';
+  let historyQueryDraft = '';
+  let historyLoading = false;
+  const historyLimit = 100;
+  const historyKindOptions = [
+    { value: '', label: 'All kinds' },
+    { value: 'input', label: 'Raw input' },
+    { value: 'expanded', label: 'Sent from input' },
+    { value: 'trigger', label: 'Trigger sends' },
+    { value: 'key', label: 'Hotkey sends' },
+    { value: 'button', label: 'Button sends' },
+    { value: 'scheduler', label: 'Scheduled sends' },
+    { value: 'connect', label: 'Connect sends' },
+  ];
+  const historyKindLabels: Record<string, string> = Object.fromEntries(historyKindOptions.map(option => [option.value, option.label]));
 
   // Profiles State
   let profiles: Profile[] = [];
@@ -312,7 +330,7 @@
       } else if (currentTab === 'variables' && selectedSessionID) {
         variables = await api.fetchSessionVariables(selectedSessionID) || [];
       } else if (currentTab === 'history' && selectedSessionID) {
-        historyEntries = await api.fetchSessionHistory(selectedSessionID) || [];
+        await fetchHistory(false);
       } else if (currentTab === 'timers' && profiles.length > 0) {
         const timersMap: Record<number, ProfileTimer[]> = {};
         const nextTimerForms = { ...newTimerForms };
@@ -354,6 +372,46 @@
     } finally {
       loading = false;
     }
+  }
+
+  function historyKindLabel(kind: string): string {
+    return historyKindLabels[kind] || kind;
+  }
+
+  async function fetchHistory(append: boolean) {
+    if (!selectedSessionID) return;
+    if (append && !historyNextBeforeID) return;
+
+    historyLoading = true;
+    formError = '';
+    try {
+      const data = await api.fetchSessionHistory(selectedSessionID, {
+        kind: historyKindFilter,
+        query: historyQuery,
+        beforeID: append ? historyNextBeforeID : null,
+        limit: historyLimit,
+      });
+      const entries = data.entries || [];
+      historyEntries = append ? [...historyEntries, ...entries] : entries;
+      historyHasMore = !!data.has_more;
+      historyNextBeforeID = data.next_before_id || null;
+    } catch (e) {
+      console.error('Failed to fetch history', e);
+      formError = 'Failed to fetch history.';
+    } finally {
+      historyLoading = false;
+    }
+  }
+
+  function applyHistorySearch() {
+    historyQuery = historyQueryDraft.trim();
+    void fetchHistory(false);
+  }
+
+  function clearHistorySearch() {
+    historyQueryDraft = '';
+    historyQuery = '';
+    void fetchHistory(false);
   }
 
   async function saveItem(domain: string, item: any, resetFn: () => void) {
@@ -1276,14 +1334,43 @@
       />
 
     {:else if currentTab === 'history'}
-      <header class="content-header"><h2>History</h2><p class="description">Command history for {currentSession?.name || 'selected session'}.</p></header>
+      <header class="content-header">
+        <h2>History</h2>
+        <p class="description">Stored command history rows for {currentSession?.name || 'selected session'}, newest first. Use Logs for canonical output/search/export.</p>
+      </header>
+
+      <div class="editor-box history-controls">
+        <div class="form-row history-toolbar">
+          <label class="history-filter" for="history-kind-filter">
+            Kind
+            <select id="history-kind-filter" bind:value={historyKindFilter} on:change={() => fetchHistory(false)} disabled={historyLoading}>
+              {#each historyKindOptions as option}
+                <option value={option.value}>{option.label}</option>
+              {/each}
+            </select>
+          </label>
+          <label class="history-filter history-search" for="history-search-query">
+            Command search
+            <input id="history-search-query" type="text" bind:value={historyQueryDraft} placeholder="Search command history..." on:keydown={(e) => e.key === 'Enter' && applyHistorySearch()} disabled={historyLoading} />
+          </label>
+          <button class="btn-secondary" on:click={applyHistorySearch} disabled={historyLoading}>{historyLoading ? 'Searching...' : 'Search'}</button>
+          <button class="btn-secondary" on:click={clearHistorySearch} disabled={historyLoading || (!historyQuery && !historyQueryDraft)}>Clear</button>
+          <button class="btn-secondary" on:click={() => fetchHistory(false)} disabled={historyLoading}>{historyLoading ? 'Refreshing...' : 'Refresh'}</button>
+        </div>
+        <p class="history-note">Search filters stored command history rows by command text only. Use Logs for canonical output/search/export.</p>
+      </div>
+
+      {#if formError}
+        <div class="form-error">{formError}</div>
+      {/if}
+
       <table class="data-table">
         <thead><tr><th>Time</th><th>Kind</th><th>Command</th><th style="width: 100px">Actions</th></tr></thead>
         <tbody>
           {#each historyEntries as entry}
             <tr>
               <td class="dim-cell" title={entry.created_at}>{new Date(entry.created_at).toLocaleString()}</td>
-              <td class="dim-cell">{entry.kind}</td>
+              <td class="dim-cell" title={entry.kind}>{historyKindLabel(entry.kind)}</td>
               <td class="key-cell">{entry.line}</td>
               <td class="actions-cell">
                 <button class="btn-link btn-danger" on:click={() => deleteItem('history', entry.id)}>Delete</button>
@@ -1295,6 +1382,9 @@
           {/if}
         </tbody>
       </table>
+      {#if historyHasMore}
+        <button class="load-more-btn" on:click={() => fetchHistory(true)} disabled={historyLoading}>{historyLoading ? 'Loading...' : 'Load older history'}</button>
+      {/if}
 
     {:else if currentTab === 'logs'}
       <header class="content-header">
@@ -1468,6 +1558,12 @@
   .selector-box { background: #1a1d21; padding: 12px 20px; border-radius: 8px; border: 1px solid #2d333b; margin-bottom: 24px; display: flex; align-items: center; gap: 12px; }
   .selector-box select { background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 6px 12px; border-radius: 6px; }
   .form-row { display: flex; gap: 12px; align-items: center; }
+  .form-row select { background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 6px 12px; border-radius: 6px; }
+  .form-error { color: #ff7b72; margin-bottom: 16px; }
+  .history-controls { margin-bottom: 18px; }
+  .history-toolbar { justify-content: space-between; flex-wrap: wrap; }
+  .history-filter { display: flex; gap: 8px; align-items: center; color: #9ba3af; }
+  .history-note { color: #9ba3af; font-size: 0.85rem; margin: 12px 0 0; }
   input[type="text"] { background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px 12px; border-radius: 6px; flex: 1; }
   .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #9ba3af; cursor: pointer; }
   .btn-primary { background: #3498db; color: white; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; }

@@ -76,15 +76,25 @@ export class InputHistory {
 
   push(value: string) {
     if (!value) return;
+    this.history = this.history.filter((item) => item !== value);
     this.history.push(value);
     this.resetNavigation();
     this.saveHistory();
   }
 
   merge(remoteHistory: string[]) {
-    this.history = [...this.history, ...(remoteHistory || [])].filter((value, index, self) => {
-      return self.indexOf(value) === index;
-    });
+    const localHistory = [...this.history];
+    this.history = [];
+    for (const value of localHistory) {
+      if (!value) continue;
+      this.history = this.history.filter((item) => item !== value);
+      this.history.push(value);
+    }
+    for (const value of remoteHistory || []) {
+      if (!value) continue;
+      this.history = this.history.filter((item) => item !== value);
+      this.history.push(value);
+    }
     this.resetNavigation();
     this.saveHistory();
   }

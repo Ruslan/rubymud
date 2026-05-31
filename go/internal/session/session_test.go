@@ -312,6 +312,49 @@ func TestSendCommandTextWithColonStillSends(t *testing.T) {
 	}
 }
 
+func TestSendCommandHistoryDedupesSameLineAcrossInputAndExpanded(t *testing.T) {
+	store := newTestStoreWithDeclarations(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles failed: %v", err)
+	}
+
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload(): %v", err)
+	}
+
+	conn := &recordingConn{}
+	sess := &Session{
+		sessionID: 1,
+		conn:      conn,
+		store:     store,
+		vm:        v,
+		clients:   map[int]clientSink{},
+	}
+
+	if err := sess.SendCommand("look", "input"); err != nil {
+		t.Fatalf("SendCommand(look): %v", err)
+	}
+
+	history, err := store.ListHistory(1, 50)
+	if err != nil {
+		t.Fatalf("ListHistory failed: %v", err)
+	}
+
+	countLook := 0
+	for _, entry := range history {
+		if entry.Line == "look" {
+			countLook++
+			if entry.Kind != "input" {
+				t.Fatalf("look kind = %q, want input", entry.Kind)
+			}
+		}
+	}
+	if countLook != 1 {
+		t.Fatalf("look entries = %d, want 1", countLook)
+	}
+}
+
 func TestSendCommandAliasHistorySeparatesInputAndExpanded(t *testing.T) {
 	store := newTestStoreWithDeclarations(t)
 	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
