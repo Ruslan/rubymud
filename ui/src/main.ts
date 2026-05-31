@@ -776,12 +776,14 @@ elements.input.addEventListener('keydown', (event) => {
   }
 
   if (sendCommand(value, 'input')) {
+    history.resetNavigation();
     elements.input.value = '';
     renderHistorySuggestions('', true);
   }
 });
 
 elements.input.addEventListener('input', () => {
+  history.resetNavigation();
   renderHistorySuggestions(elements.input.value);
 });
 

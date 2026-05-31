@@ -15,11 +15,33 @@ Example problem:
 
 This makes command recall feel unsafe during normal play, where a wrong recalled command can have real in-game consequences.
 
-## Current Implementation
+## Implementation Status
+
+Status: arrow navigation fixed, keep this plan open for follow-ups.
+
+Implemented:
+
+1. `InputHistory` uses a focused arrow-navigation session with `active`, `query`, and `index`.
+2. Manual input resets the active navigation session.
+3. Successful command submission resets the active navigation session.
+4. `ArrowUp` starts from the newest history item after manual typing instead of a stale index.
+5. Prefix-search on arrows remains case-insensitive.
+6. Oldest-match `ArrowUp` clamps on the oldest match.
+7. Newest-match `ArrowDown` restores the original draft/query.
+8. Focused `InputHistory` unit tests cover stale-index, prefix, empty-input, boundary, and case-insensitive behavior.
+
+Remaining follow-ups:
+
+1. Add `Ctrl+R` reverse substring search as a separate safe interaction.
+2. Decide whether local browser history should be scoped by session ID instead of global `commandHistory`.
+3. Decide duplicate/recency policy for repeated commands and `merge(remoteHistory)`.
+4. Keep raw input recall as an explicit product choice while canonical sent-command logs continue separately.
+
+## Previous Implementation
 
 The frontend history logic lives in `ui/src/history.ts`.
 
-Current state includes:
+The previous fragile state included:
 
 1. `historyIndex`
 2. `historyViewed`
@@ -29,7 +51,7 @@ Current state includes:
 
 The key handlers are in `ui/src/main.ts` and call `history.up(elements.input.value)` and `history.down(elements.input.value)`.
 
-## Suspected Root Cause
+## Root Cause Fixed
 
 The current model mixes navigation state, search query state, direction state, and duplicate suppression.
 
