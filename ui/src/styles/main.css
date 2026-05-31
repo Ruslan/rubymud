@@ -455,6 +455,41 @@ body {
   outline: none;
 }
 
+.input-wrap_reverse-search-active {
+  box-shadow: inset 0 0 0 1px rgba(255, 203, 107, 0.45);
+  background: rgba(255, 203, 107, 0.05);
+}
+
+.reverse-search-hint {
+  position: absolute;
+  top: 50%;
+  max-width: min(55%, 520px);
+  transform: translateY(-50%);
+  border: 1px solid rgba(255, 203, 107, 0.38);
+  border-radius: 999px;
+  background: rgba(21, 25, 30, 0.92);
+  color: #ffe3a3;
+  padding: 3px 9px;
+  font: inherit;
+  font-size: 0.85em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  z-index: 4;
+}
+
+.reverse-search-hint:disabled {
+  cursor: default;
+  opacity: 0.8;
+}
+
+.reverse-search-match {
+  text-decoration: underline;
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+}
+
 .history-suggestions {
   position: absolute;
   right: 8px;

@@ -29,6 +29,10 @@ describe('formatKeyboardShortcut', () => {
     expect(shortcut({ key: '!', code: 'Digit1', ctrlKey: false, altKey: false, shiftKey: true, metaKey: false })).toBe('shift+1');
   });
 
+  it('maps physical Ctrl+R to ctrl+r in Russian layout', () => {
+    expect(eventToShortcut({ key: 'к', code: 'KeyR', ctrlKey: true, altKey: false, shiftKey: false, metaKey: false } as KeyboardEvent)).toBe('ctrl+r');
+  });
+
   it('ignores bare modifier-only presses', () => {
     expect(shortcut({ key: 'Shift', code: 'ShiftLeft', ctrlKey: false, altKey: false, shiftKey: true, metaKey: false })).toBe('');
   });

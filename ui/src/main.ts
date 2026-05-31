@@ -5,6 +5,7 @@ import { applyAnsiTheme } from './ansi';
 import { getAppElements, fetchWithToken } from './dom';
 import { InputHistory } from './history';
 import { matchHotkey } from './hotkeys';
+import { ReverseSearchController } from './reverseSearchController';
 import { createRenderer } from './render';
 import { createSocket, sendSocketCommand } from './socket';
 import type { Hotkey, LogEntry, ServerMessage } from './types';
@@ -212,6 +213,11 @@ let logCatchupQueued = false;
 logBoot('socket created', { readyState: socket.readyState, url: socket.url, sessionID });
 
 const history = new InputHistory();
+const reverseSearchController = new ReverseSearchController({
+  input: elements.input,
+  inputWrap: elements.input.closest('.input-wrap') as HTMLElement | null,
+  searcher: history,
+});
 logBoot('history initialized');
 
 const ansiUp = new AnsiUp();
@@ -666,6 +672,10 @@ window.addEventListener('resize', rerenderHotkeysForViewportWidth);
 window.visualViewport?.addEventListener('resize', rerenderHotkeysForViewportWidth);
 
 window.addEventListener('keydown', (event) => {
+  if (reverseSearchController.handleGlobalKeydown(event)) {
+    return;
+  }
+
   const match = matchHotkey(event, configuredHotkeys);
   if (match) {
     logBoot('hotkey matched', { shortcut: match.shortcut, command: match.command });
@@ -697,12 +707,12 @@ elements.variablesToggle.addEventListener('click', () => renderer.setActivePanel
 elements.groupsToggle.addEventListener('click', () => renderer.setActivePanel('groups'));
 elements.settingsToggle.addEventListener('click', () => window.open('/settings', 'settings'));
 elements.historyUp.addEventListener('click', () => {
-  history.resetSearch();
+  reverseSearchController.reset();
   applyHistoryValue(history.up(elements.input.value));
   renderHistorySuggestions(elements.input.value, true);
 });
 elements.historyDown.addEventListener('click', () => {
-  history.resetSearch();
+  reverseSearchController.reset();
   applyHistoryValue(history.down(elements.input.value));
   renderHistorySuggestions(elements.input.value, true);
 });
@@ -750,30 +760,13 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 elements.input.addEventListener('keydown', (event) => {
-  if (event.key.toLowerCase() === 'r' && event.ctrlKey && !event.altKey && !event.metaKey) {
-    event.preventDefault();
-    elements.input.value = history.reverseSearch(elements.input.value);
-    const length = elements.input.value.length;
-    elements.input.setSelectionRange(length, length);
-    renderHistorySuggestions(elements.input.value, true);
-    return;
-  }
-
-  if (event.key === 'Escape' && history.isSearchActive()) {
-    event.preventDefault();
-    const value = history.cancelSearch();
-    if (value !== null) {
-      elements.input.value = value;
-      const length = value.length;
-      elements.input.setSelectionRange(length, length);
-    }
+  if (reverseSearchController.handleInputKeydown(event)) {
     renderHistorySuggestions(elements.input.value, true);
     return;
   }
 
   if (event.key === 'ArrowUp') {
     event.preventDefault();
-    history.resetSearch();
     elements.input.value = history.up(elements.input.value);
     const length = elements.input.value.length;
     elements.input.setSelectionRange(length, length);
@@ -783,7 +776,6 @@ elements.input.addEventListener('keydown', (event) => {
 
   if (event.key === 'ArrowDown') {
     event.preventDefault();
-    history.resetSearch();
     elements.input.value = history.down(elements.input.value);
     const length = elements.input.value.length;
     elements.input.setSelectionRange(length, length);
@@ -792,18 +784,6 @@ elements.input.addEventListener('keydown', (event) => {
   }
 
   if (event.key !== 'Enter') return;
-
-  if (history.isSearchActive()) {
-    event.preventDefault();
-    const value = history.acceptSearch();
-    if (value !== null) {
-      elements.input.value = value;
-      const length = value.length;
-      elements.input.setSelectionRange(length, length);
-    }
-    renderHistorySuggestions(elements.input.value, true);
-    return;
-  }
 
   const value = elements.input.value.trim();
   logBoot('input enter', { value, readyState: socket.readyState });
@@ -814,6 +794,7 @@ elements.input.addEventListener('keydown', (event) => {
 
   if (sendCommand(value, 'input')) {
     history.resetNavigation();
+    reverseSearchController.reset();
     elements.input.value = '';
     renderHistorySuggestions('', true);
   }
@@ -821,6 +802,7 @@ elements.input.addEventListener('keydown', (event) => {
 
 elements.input.addEventListener('input', () => {
   history.resetNavigation();
+  reverseSearchController.reset();
   renderHistorySuggestions(elements.input.value);
 });
 

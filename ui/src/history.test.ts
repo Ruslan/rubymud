@@ -89,69 +89,97 @@ describe('InputHistory', () => {
     expect(history.up('')).toBe('third');
   });
 
-  it('reverse search returns the newest command containing the query substring', () => {
+  it('begins reverse search with empty draft/query in a safe no-match state', () => {
+    const history = historyWith(['look', 'kill goblin']);
+
+    expect(history.beginReverseSearch('')).toEqual({ active: true, query: '', draft: '', match: null });
+    expect(history.acceptReverseSearch()).toBeNull();
+  });
+
+  it('updates reverse search query and returns the newest substring match', () => {
     const history = historyWith([
       'осмотреться',
-      'убить гоблина старого',
-      'сказать про гоблина',
-      'убить гоблина свежего',
+      'пнуть орк',
+      'пнуть гоблина старого',
+      'пнуть гоблина свежего',
     ]);
 
-    expect(history.reverseSearch('гобл')).toBe('убить гоблина свежего');
+    history.beginReverseSearch('draft command');
+    expect(history.updateReverseSearchQuery('пнуть').match).toBe('пнуть гоблина свежего');
+    expect(history.updateReverseSearchQuery('пнуть г').match).toBe('пнуть гоблина свежего');
   });
 
-  it('repeated reverse search moves to older substring matches and clamps at oldest', () => {
+  it('repeated reverse search advances to older matches and clamps at oldest', () => {
     const history = historyWith([
-      'убить гоблина старого',
-      'убить орка',
+      'пнуть гоблина старого',
+      'пнуть орка',
       'сказать про гоблина',
-      'убить гоблина свежего',
+      'пнуть гоблина свежего',
     ]);
 
-    expect(history.reverseSearch('гобл')).toBe('убить гоблина свежего');
-    expect(history.reverseSearch('убить гоблина свежего')).toBe('сказать про гоблина');
-    expect(history.reverseSearch('сказать про гоблина')).toBe('убить гоблина старого');
-    expect(history.reverseSearch('убить гоблина старого')).toBe('убить гоблина старого');
+    history.beginReverseSearch('');
+    expect(history.updateReverseSearchQuery('гобл').match).toBe('пнуть гоблина свежего');
+    expect(history.advanceReverseSearch().match).toBe('сказать про гоблина');
+    expect(history.advanceReverseSearch().match).toBe('пнуть гоблина старого');
+    expect(history.advanceReverseSearch().match).toBe('пнуть гоблина старого');
   });
 
-  it('reverse search is case-insensitive', () => {
-    const history = historyWith(['Kill Goblin', 'look', 'say GOBLIN']);
+  it('query updates recompute reverse search from newest', () => {
+    const history = historyWith(['пнуть гоблина старого', 'пнуть орка', 'пнуть гоблина свежего']);
 
-    expect(history.reverseSearch('goblin')).toBe('say GOBLIN');
-    expect(history.reverseSearch('say GOBLIN')).toBe('Kill Goblin');
+    history.beginReverseSearch('');
+    expect(history.updateReverseSearchQuery('гобл').match).toBe('пнуть гоблина свежего');
+    expect(history.advanceReverseSearch().match).toBe('пнуть гоблина старого');
+    expect(history.updateReverseSearchQuery('пнуть').match).toBe('пнуть гоблина свежего');
   });
 
-  it('acceptSearch closes search mode and returns the selected command', () => {
+  it('reverse search is case-insensitive for Cyrillic queries', () => {
+    const history = historyWith(['осмотреться', 'убить гоблина']);
+
+    history.beginReverseSearch('');
+    expect(history.updateReverseSearchQuery('ГОБЛ').match).toBe('убить гоблина');
+    expect(history.acceptReverseSearch()).toBe('убить гоблина');
+  });
+
+  it('acceptReverseSearch closes search mode and returns the selected match', () => {
     const history = historyWith(['look', 'kill goblin']);
 
-    expect(history.reverseSearch('gob')).toBe('kill goblin');
-    expect(history.isSearchActive()).toBe(true);
-    expect(history.acceptSearch()).toBe('kill goblin');
-    expect(history.isSearchActive()).toBe(false);
-    expect(history.acceptSearch()).toBeNull();
+    history.beginReverseSearch('draft');
+    expect(history.updateReverseSearchQuery('gob').match).toBe('kill goblin');
+    expect(history.isReverseSearchActive()).toBe(true);
+    expect(history.acceptReverseSearch()).toBe('kill goblin');
+    expect(history.isReverseSearchActive()).toBe(false);
+    expect(history.acceptReverseSearch()).toBeNull();
   });
 
-  it('cancelSearch closes search mode and restores the original draft', () => {
+  it('cancelReverseSearch closes search mode and returns the original draft', () => {
     const history = historyWith(['look', 'kill goblin']);
 
-    expect(history.reverseSearch('draft gob')).toBe('draft gob');
-    expect(history.cancelSearch()).toBe('draft gob');
-    expect(history.isSearchActive()).toBe(false);
-    expect(history.cancelSearch()).toBeNull();
+    history.beginReverseSearch('draft command');
+    expect(history.updateReverseSearchQuery('gob').match).toBe('kill goblin');
+    expect(history.cancelReverseSearch()).toBe('draft command');
+    expect(history.isReverseSearchActive()).toBe(false);
   });
 
-  it('manual reset closes reverse search so the next search uses the new query from newest', () => {
-    const history = historyWith([
-      'kill goblin old',
-      'look',
-      'say orc',
-      'kill goblin new',
-    ]);
+  it('no-match reverse search returns null and accept does not return a stale command', () => {
+    const history = historyWith(['look', 'kill goblin']);
 
-    expect(history.reverseSearch('gob')).toBe('kill goblin new');
+    history.beginReverseSearch('draft');
+    expect(history.updateReverseSearchQuery('gob').match).toBe('kill goblin');
+    expect(history.updateReverseSearchQuery('dragon').match).toBeNull();
+    expect(history.acceptReverseSearch()).toBeNull();
+    expect(history.isReverseSearchActive()).toBe(false);
+  });
+
+  it('manual reset closes reverse search so the next search starts fresh', () => {
+    const history = historyWith(['kill goblin old', 'look', 'say orc', 'kill goblin new']);
+
+    history.beginReverseSearch('');
+    expect(history.updateReverseSearchQuery('gob').match).toBe('kill goblin new');
     history.resetNavigation();
 
-    expect(history.isSearchActive()).toBe(false);
-    expect(history.reverseSearch('orc')).toBe('say orc');
+    expect(history.isReverseSearchActive()).toBe(false);
+    history.beginReverseSearch('');
+    expect(history.updateReverseSearchQuery('orc').match).toBe('say orc');
   });
 });

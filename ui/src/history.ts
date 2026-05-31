@@ -4,11 +4,19 @@ type NavigationSession = {
   index: number;
 };
 
-type SearchSession = {
+type ReverseSearchSession = {
   active: boolean;
   query: string;
   draft: string;
   index: number;
+  match: string | null;
+};
+
+export type ReverseSearchState = {
+  active: boolean;
+  query: string;
+  draft: string;
+  match: string | null;
 };
 
 export class InputHistory {
@@ -18,11 +26,12 @@ export class InputHistory {
     query: '',
     index: 0,
   };
-  private search: SearchSession = {
+  private reverseSearchSession: ReverseSearchSession = {
     active: false,
     query: '',
     draft: '',
     index: 0,
+    match: null,
   };
 
   private startsWithQuery(value: string, query: string): boolean {
@@ -40,20 +49,29 @@ export class InputHistory {
 
   resetNavigation() {
     this.resetArrowNavigation();
-    this.resetSearch();
+    this.resetReverseSearch();
   }
 
-  resetSearch() {
-    this.search = {
+  resetReverseSearch() {
+    this.reverseSearchSession = {
       active: false,
       query: '',
       draft: '',
       index: this.history.length,
+      match: null,
     };
   }
 
+  resetSearch() {
+    this.resetReverseSearch();
+  }
+
+  isReverseSearchActive(): boolean {
+    return this.reverseSearchSession.active;
+  }
+
   isSearchActive(): boolean {
-    return this.search.active;
+    return this.isReverseSearchActive();
   }
 
   push(value: string) {
@@ -101,38 +119,92 @@ export class InputHistory {
     return query;
   }
 
-  reverseSearch(currentValue: string): string {
-    this.ensureSearch(currentValue);
-
-    for (let i = this.search.index - 1; i >= 0; i--) {
-      const value = this.history[i];
-      if (value && this.containsQuery(value, this.search.query)) {
-        this.search.index = i;
-        return value;
-      }
-    }
-
-    return this.currentSearchValue();
+  beginReverseSearch(draft: string): ReverseSearchState {
+    this.resetArrowNavigation();
+    this.reverseSearchSession = {
+      active: true,
+      query: '',
+      draft,
+      index: this.history.length,
+      match: null,
+    };
+    return this.getReverseSearchState();
   }
 
-  acceptSearch(): string | null {
-    if (!this.search.active) {
+  updateReverseSearchQuery(query: string): ReverseSearchState {
+    this.ensureReverseSearch('');
+    this.reverseSearchSession.query = query;
+    this.reverseSearchSession.index = this.history.length;
+    const match = this.findOlderReverseMatch(this.history.length, query);
+    this.reverseSearchSession.match = match.value;
+    this.reverseSearchSession.index = match.index;
+    return this.getReverseSearchState();
+  }
+
+  advanceReverseSearch(): ReverseSearchState {
+    this.ensureReverseSearch('');
+    if (!this.reverseSearchSession.query) {
+      this.reverseSearchSession.match = null;
+      this.reverseSearchSession.index = this.history.length;
+      return this.getReverseSearchState();
+    }
+
+    const next = this.findOlderReverseMatch(this.reverseSearchSession.index, this.reverseSearchSession.query);
+    if (next.value !== null) {
+      this.reverseSearchSession.match = next.value;
+      this.reverseSearchSession.index = next.index;
+    }
+    return this.getReverseSearchState();
+  }
+
+  acceptReverseSearch(): string | null {
+    if (!this.reverseSearchSession.active) {
       return null;
     }
 
-    const value = this.currentSearchValue();
+    const value = this.reverseSearchSession.match;
     this.resetNavigation();
     return value;
   }
 
-  cancelSearch(): string | null {
-    if (!this.search.active) {
-      return null;
-    }
-
-    const draft = this.search.draft;
+  cancelReverseSearch(): string {
+    const draft = this.reverseSearchSession.draft;
     this.resetNavigation();
     return draft;
+  }
+
+  getReverseSearchState(): ReverseSearchState {
+    return {
+      active: this.reverseSearchSession.active,
+      query: this.reverseSearchSession.query,
+      draft: this.reverseSearchSession.draft,
+      match: this.reverseSearchSession.match,
+    };
+  }
+
+  reverseSearchCommand(currentValue: string): string | null {
+    if (!this.reverseSearchSession.active) {
+      this.beginReverseSearch(currentValue);
+      this.updateReverseSearchQuery(currentValue);
+    } else {
+      this.advanceReverseSearch();
+    }
+    return this.reverseSearchSession.match;
+  }
+
+  reverseSearch(currentValue: string): string | null {
+    return this.reverseSearchCommand(currentValue);
+  }
+
+  acceptSearch(): string | null {
+    return this.acceptReverseSearch();
+  }
+
+  cancelSearch(): string | null {
+    if (!this.reverseSearchSession.active) {
+      return null;
+    }
+    return this.cancelReverseSearch();
   }
 
   matches(prefix: string, limit = 3): string[] {
@@ -176,28 +248,30 @@ export class InputHistory {
     };
   }
 
-  private ensureSearch(currentValue: string) {
-    if (this.search.active) {
+  private ensureReverseSearch(draft: string) {
+    if (this.reverseSearchSession.active) {
       return;
     }
+    this.beginReverseSearch(draft);
+  }
 
-    this.resetArrowNavigation();
-    this.search = {
-      active: true,
-      query: currentValue,
-      draft: currentValue,
-      index: this.history.length,
-    };
+  private findOlderReverseMatch(startExclusive: number, query: string): { value: string | null; index: number } {
+    if (!query) {
+      return { value: null, index: this.history.length };
+    }
+
+    for (let i = startExclusive - 1; i >= 0; i--) {
+      const value = this.history[i];
+      if (value && this.containsQuery(value, query)) {
+        return { value, index: i };
+      }
+    }
+    return { value: null, index: startExclusive };
   }
 
   private currentNavigationValue(): string {
     const current = this.history[this.navigation.index];
     return current && this.startsWithQuery(current, this.navigation.query) ? current : this.navigation.query;
-  }
-
-  private currentSearchValue(): string {
-    const current = this.history[this.search.index];
-    return current && this.containsQuery(current, this.search.query) ? current : this.search.draft;
   }
 
   private loadHistory() {
