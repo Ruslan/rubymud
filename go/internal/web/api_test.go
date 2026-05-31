@@ -427,6 +427,60 @@ func TestRestoreStateIncludesBellPositions(t *testing.T) {
 	}
 }
 
+func TestLiveLogsSinceIDReturnsClientEntries(t *testing.T) {
+	s, sess := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	firstID, err := s.store.AppendLogEntry(sess.SessionID(), "main", "old", "old")
+	if err != nil {
+		t.Fatalf("AppendLogEntry(old): %v", err)
+	}
+	secondID, err := s.store.AppendLogEntry(sess.SessionID(), "main", "new", "new")
+	if err != nil {
+		t.Fatalf("AppendLogEntry(new): %v", err)
+	}
+	if err := s.store.AppendCommandHintToLatestLogEntry(sess.SessionID(), "look"); err != nil {
+		t.Fatalf("AppendCommandHintToLatestLogEntry: %v", err)
+	}
+
+	url := fmt.Sprintf("%s/api/sessions/%d/logs/live?after_id=%d", ts.URL, sess.SessionID(), firstID)
+	req, err := newAuthenticatedRequest(http.MethodGet, url, nil, s.apiToken)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(GET %s): %v", url, err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("GET live logs status = %d, want 200: %s", resp.StatusCode, string(body))
+	}
+
+	var data struct {
+		Entries []session.ClientLogEntry `json:"entries"`
+		HasMore bool                     `json:"has_more"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&data); err != nil {
+		t.Fatalf("decode live logs: %v", err)
+	}
+	if data.HasMore {
+		t.Fatalf("has_more = true, want false")
+	}
+	if len(data.Entries) != 1 {
+		t.Fatalf("live entries = %d, want 1: %+v", len(data.Entries), data.Entries)
+	}
+	entry := data.Entries[0]
+	if entry.ID != secondID || entry.Text != "new" || entry.Buffer != "main" {
+		t.Fatalf("live entry = %+v, want id=%d text=new buffer=main", entry, secondID)
+	}
+	if !reflect.DeepEqual(entry.Commands, []string{"look"}) {
+		t.Fatalf("live entry commands = %v, want [look]", entry.Commands)
+	}
+}
+
 func setupTestServer(t *testing.T) (*Server, *session.Session) {
 	dbName := uuid.New().String()
 	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", dbName)

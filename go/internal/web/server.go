@@ -127,6 +127,7 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 
 				r.Route("/logs", func(r chi.Router) {
 					r.Get("/", s.listLogs)
+					r.Get("/live", s.listLiveLogs)
 					r.Get("/search", s.listSearch)
 					r.Get("/{entryID}/context", s.getLogContext)
 					r.Get("/download", s.downloadLogs)
@@ -587,6 +588,53 @@ func (s *Server) listLogs(w http.ResponseWriter, r *http.Request) {
 		"total":   total,
 		"page":    page,
 		"limit":   limit,
+	})
+}
+
+func (s *Server) listLiveLogs(w http.ResponseWriter, r *http.Request) {
+	sess, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	afterID, _ := strconv.ParseInt(r.URL.Query().Get("after_id"), 10, 64)
+	if afterID < 0 {
+		afterID = 0
+	}
+	limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+	if limit < 1 || limit > 1000 {
+		limit = 500
+	}
+
+	logs, err := s.store.LogsSinceID(id, afterID, limit+1)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	hasMore := len(logs) > limit
+	if hasMore {
+		logs = logs[:limit]
+	}
+
+	entries := make([]session.ClientLogEntry, 0, len(logs))
+	var latestID int64
+	for _, entry := range logs {
+		entries = append(entries, clientLogEntryForSession(sess, entry))
+		if entry.ID > latestID {
+			latestID = entry.ID
+		}
+	}
+	if latestID == 0 {
+		latestID = afterID
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]any{
+		"entries":   entries,
+		"has_more":  hasMore,
+		"latest_id": latestID,
 	})
 }
 
@@ -1926,9 +1974,9 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 	for bufName, logs := range logsPerBuffer {
 		entries := make([]session.ClientLogEntry, 0, len(logs))
 		for _, entry := range logs {
-			cle := session.ClientLogEntry{ID: entry.ID, Text: sess.RenderLogEntry(entry), Buffer: bufName, Commands: entry.Commands, BellPositions: session.BellPositionsFromOverlays(entry.Overlays)}
-			for _, b := range entry.Buttons {
-				cle.Buttons = append(cle.Buttons, session.ButtonOverlay{Label: b.Label, Command: b.Command})
+			cle := clientLogEntryForSession(sess, entry)
+			if cle.Buffer == "" {
+				cle.Buffer = bufName
 			}
 			entries = append(entries, cle)
 		}
@@ -1967,6 +2015,24 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 	}
 
 	return writeJSON(session.ServerMsg{Type: "restore_end"})
+}
+
+func clientLogEntryForSession(sess *session.Session, entry storage.LogEntry) session.ClientLogEntry {
+	text := entry.DisplayRawText()
+	if sess != nil {
+		text = sess.RenderLogEntry(entry)
+	}
+	cle := session.ClientLogEntry{
+		ID:            entry.ID,
+		Text:          text,
+		Buffer:        entry.Buffer,
+		Commands:      entry.Commands,
+		BellPositions: session.BellPositionsFromOverlays(entry.Overlays),
+	}
+	for _, b := range entry.Buttons {
+		cle.Buttons = append(cle.Buttons, session.ButtonOverlay{Label: b.Label, Command: b.Command})
+	}
+	return cle
 }
 
 // Profile Variables

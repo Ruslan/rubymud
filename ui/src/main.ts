@@ -7,7 +7,7 @@ import { InputHistory } from './history';
 import { matchHotkey } from './hotkeys';
 import { createRenderer } from './render';
 import { createSocket, sendSocketCommand } from './socket';
-import type { Hotkey, ServerMessage } from './types';
+import type { Hotkey, LogEntry, ServerMessage } from './types';
 
 type WakeLockSentinelLike = {
   release(): Promise<void>;
@@ -18,6 +18,11 @@ type WakeLockNavigator = Navigator & {
   wakeLock?: {
     request(type: 'screen'): Promise<WakeLockSentinelLike>;
   };
+};
+
+type LiveLogsResponse = {
+  entries?: LogEntry[];
+  has_more?: boolean;
 };
 
 const wakeLockEnabledStorageKey = 'mudhost.wakeLockEnabled';
@@ -202,6 +207,8 @@ let reconnectTimer: number | null = null;
 let reconnectAttempts = 0;
 let lastHotkeysViewportWidth = currentHotkeysViewportWidth();
 let connectionStatus = 'connecting';
+let logCatchupInFlight = false;
+let logCatchupQueued = false;
 logBoot('socket created', { readyState: socket.readyState, url: socket.url, sessionID });
 
 const history = new InputHistory();
@@ -403,6 +410,53 @@ const renderer = createRenderer({
 renderer.loadLayout();
 logBoot('renderer initialized');
 
+function latestEntryID(entries: LogEntry[], fallback: number): number {
+  return entries.reduce((latest, entry) => entry.id && entry.id > latest ? entry.id : latest, fallback);
+}
+
+async function requestLogCatchup() {
+  if (!sessionID || state.restoreInProgress) return;
+
+  if (logCatchupInFlight) {
+    logCatchupQueued = true;
+    return;
+  }
+
+  let afterID = renderer.latestEntryID();
+
+  logCatchupInFlight = true;
+  try {
+    for (let page = 0; page < 20; page += 1) {
+      const res = await fetchWithToken(`/api/sessions/${sessionID}/logs/live?after_id=${afterID}&limit=1000`);
+      if (!res.ok) {
+        throw new Error(await res.text() || res.statusText);
+      }
+      const data: LiveLogsResponse = await res.json();
+      const entries = data.entries || [];
+      if (entries.length === 0) {
+        break;
+      }
+      renderer.appendEntries(entries);
+      const nextAfterID = latestEntryID(entries, afterID);
+      if (nextAfterID <= afterID) {
+        break;
+      }
+      afterID = nextAfterID;
+      if (!data.has_more) {
+        break;
+      }
+    }
+  } catch (err) {
+    console.error('Failed to catch up logs:', err);
+  } finally {
+    logCatchupInFlight = false;
+    if (logCatchupQueued) {
+      logCatchupQueued = false;
+      void requestLogCatchup();
+    }
+  }
+}
+
 fetchWithToken('/api/sessions')
   .then((res) => res.json())
   .then((sessions: SessionSummary[]) => {
@@ -523,6 +577,7 @@ function attachSocketHandlers(target: WebSocket) {
       logBoot('restore end');
       state.restoreInProgress = false;
       renderer.scrollOutputToBottom();
+      void requestLogCatchup();
     }
 
     if (message.type === 'output' || message.type === 'variables') {
@@ -682,11 +737,15 @@ logBoot('event listeners attached');
 window.addEventListener('focus', () => {
   logBoot('window focus -> request variables');
   requestVariables();
+  void requestLogCatchup();
   elements.input.focus();
 });
 document.addEventListener('visibilitychange', () => {
   logBoot('visibility change', { hidden: document.hidden });
-  if (!document.hidden) requestVariables();
+  if (!document.hidden) {
+    requestVariables();
+    void requestLogCatchup();
+  }
 });
 elements.input.addEventListener('keydown', (event) => {
   if (event.key === 'ArrowUp') {

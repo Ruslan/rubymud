@@ -517,7 +517,16 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
     byBuffer.forEach((bufferEntries, bufferName) => {
       const data = getBufferData(bufferName);
-      data.push(...bufferEntries);
+      const seenIDs = new Set(data.map(entry => entry.id).filter((id): id is number => !!id));
+      const newEntries = bufferEntries.filter((entry) => {
+        if (!entry.id) return true;
+        if (seenIDs.has(entry.id)) return false;
+        seenIDs.add(entry.id);
+        return true;
+      });
+      if (newEntries.length === 0) return;
+
+      data.push(...newEntries);
 
       if (data.length > maxRenderedLines + pruneRenderedLines) {
         data.splice(0, pruneRenderedLines);
@@ -528,11 +537,11 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
           const shouldScroll = shouldStickToBottom(pane);
           const fragment = document.createDocumentFragment();
 
-          for (const entry of bufferEntries) {
+          for (const entry of newEntries) {
             fragment.appendChild(createEntryDOM(entry, pane));
           }
           pane.outputEl.appendChild(fragment);
-          if (!state.restoreInProgress && bufferEntries.some(entry => (entry.bell_positions || []).length > 0)) {
+          if (!state.restoreInProgress && newEntries.some(entry => (entry.bell_positions || []).length > 0)) {
             triggerVisualBell(pane.outputEl);
           }
 
@@ -554,6 +563,18 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
         }
       });
     });
+  }
+
+  function latestEntryID(): number {
+    let latest = 0;
+    bufferData.forEach((entries) => {
+      for (const entry of entries) {
+        if (entry.id && entry.id > latest) {
+          latest = entry.id;
+        }
+      }
+    });
+    return latest;
   }
 
   function appendEntry(entry: LogEntry) {
@@ -1103,6 +1124,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     resolveCommandTrace,
     appendEntry,
     appendEntries,
+    latestEntryID,
     clearOutput,
     setAvailableBuffers,
     renderHotkeys,

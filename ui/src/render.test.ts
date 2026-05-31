@@ -185,6 +185,21 @@ describe('renderer command trace reconciliation', () => {
     expect(lineAfter?.textContent).not.toContain('bash $t1');
     expect(lineAfter?.querySelector('[data-client-command-id="cmd-3"]')).toBeNull();
   });
+
+  it('deduplicates overlapping catch-up entries and exposes the latest entry id', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    renderer.appendEntries([{ id: 1, text: 'first', buffer: 'main' }]);
+    renderer.appendEntries([
+      { id: 1, text: 'first duplicate', buffer: 'main' },
+      { id: 2, text: 'second', buffer: 'main' },
+    ]);
+
+    const lines = Array.from(document.querySelectorAll('.output-line')).map((line) => line.textContent || '');
+    expect(lines).toEqual(['first', 'second']);
+    expect(renderer.latestEntryID()).toBe(2);
+  });
 });
 
 describe('renderer BEL metadata', () => {
