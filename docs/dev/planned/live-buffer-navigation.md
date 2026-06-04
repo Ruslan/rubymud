@@ -22,6 +22,33 @@ This plan is separate from `log-browsing.md`.
 3. keep the live UI lightweight and low-latency
 4. avoid turning the live screen into the full admin log browser
 
+## Stage 1: Toggle-Only Temporary Split
+
+Start with an explicit toggle-only MVP to validate the interaction before adding automatic scroll behavior or shortcuts.
+
+The pane header should expose a small scroll/split toggle button near the buffer selector/title. The icon should visually suggest splitting the pane for scrollback, for example two horizontal regions separated by a divider. The active state means a temporary duplicate live pane is currently open.
+
+Behavior:
+
+1. toggle on creates a temporary split below the current pane using the same buffer
+2. the upper pane remains available for normal browser wheel scrolling and scrollback reading
+3. the lower temporary pane is the live view and is forced to scroll to bottom
+4. new entries are appended through the existing pane rendering path to both panes
+5. toggle off removes the temporary split and leaves the lower/live pane as the surviving view
+6. when the split is removed, the surviving live pane is forced to scroll to bottom
+7. the temporary split is in-memory only and must not be saved to `pane-layout` in `localStorage`
+8. the temporary split height can be resized, but the ratio is only remembered in JS memory for this session/page lifetime
+
+This stage intentionally does not require `PageUp`, `PageDown`, `End`, or `Esc`. Those shortcuts can be layered on later after the temporary split behavior is proven.
+
+Implementation notes:
+
+1. do not call the existing persistent `Split Down` action directly
+2. model the auto-created pane as a special temporary split type
+3. prevent nested temporary splits from the temporary live pane
+4. preserve the existing renderer behavior for ANSI, links, buttons, command hints, and pruning
+5. accept the temporary DOM overhead because this mode only exists while the user is reading older output
+
 ## PageUp Scrollback Mode
 
 When the user enters scrollback mode, the buffer should split horizontally into two regions:
@@ -37,6 +64,8 @@ Behavior:
 4. new MUD output continues to appear in the lower live region
 5. leaving scrollback mode returns to the normal single live buffer view
 6. `End`, `Esc`, or an explicit UI control may exit scrollback mode
+
+Shortcuts must not override active profile hotkeys. If a current profile binds `PageUp`, `PageDown`, `End`, or `Esc`, the profile hotkey wins and the app scrollback shortcut is disabled for that key. The explicit pane toggle remains available even when a shortcut is occupied.
 
 The split should preserve playability: the user can still see fresh combat/chat/output while reviewing recent history above.
 

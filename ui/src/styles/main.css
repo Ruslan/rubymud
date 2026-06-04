@@ -860,7 +860,7 @@ body {
 .pane-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 4px;
   padding: 4px 8px;
   background: #1a2027;
   border-bottom: 1px solid #232a31;
@@ -880,6 +880,7 @@ body {
 .pane-actions {
   display: flex;
   gap: 4px;
+  margin-left: auto;
 }
 
 .pane-btn {
@@ -896,6 +897,20 @@ body {
 .pane-btn:hover {
   background: #30363d;
   color: #e8edf2;
+}
+
+.pane-live-split-btn {
+  margin-left: 4px;
+  font-size: 12px;
+}
+
+.pane-live-split-btn.active,
+.pane_live-temporary .pane-header {
+  color: #7dcfff;
+}
+
+.pane-live-split-btn.active {
+  background: #1f6feb33;
 }
 
 .pane-btn.danger:hover {

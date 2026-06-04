@@ -30,6 +30,8 @@ const trailingUrlPunctuation = /[.,;:!?]+$/;
 interface PaneNode {
   id: string;
   buffer: string;
+  isTemporaryLive?: boolean;
+  temporaryLiveFor?: string;
 }
 
 interface ColumnNode {
@@ -48,7 +50,7 @@ interface RenderedPane {
   el: HTMLElement;
   outputEl: HTMLElement;
   scrollButtonEl: HTMLButtonElement;
-  selectEl: HTMLSelectElement;
+  selectEl?: HTMLSelectElement;
   ansiUp: AnsiUp;
 }
 
@@ -102,8 +104,38 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     updateAllSelects();
   }
 
+  function persistentLayoutSnapshot(): Layout {
+    return {
+      columns: layout.columns.map((col) => {
+        const panes: PaneNode[] = [];
+        const rowSizes: number[] = [];
+
+        col.panes.forEach((pane, idx) => {
+          const size = col.rowSizes[idx] ?? 0;
+          if (pane.isTemporaryLive) {
+            const sourceIdx = panes.findIndex((candidate) => candidate.id === pane.temporaryLiveFor);
+            if (sourceIdx >= 0) {
+              rowSizes[sourceIdx] = (rowSizes[sourceIdx] ?? 0) + size;
+            }
+            return;
+          }
+
+          panes.push({ id: pane.id, buffer: pane.buffer });
+          rowSizes.push(size);
+        });
+
+        if (panes.length === 0) {
+          return { id: col.id, panes: [{ id: generateId('pane'), buffer: 'main' }], rowSizes: [100] };
+        }
+
+        return { id: col.id, panes, rowSizes };
+      }),
+      colSizes: [...layout.colSizes],
+    };
+  }
+
   function saveLayout() {
-    localStorage.setItem('pane-layout', JSON.stringify(layout));
+    localStorage.setItem('pane-layout', JSON.stringify(persistentLayoutSnapshot()));
   }
 
   function loadLayout() {
@@ -150,88 +182,116 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   function createPaneDOM(node: PaneNode): HTMLElement {
     const el = document.createElement('div');
     el.className = 'pane';
-    
-    const headerEl = document.createElement('div');
-    headerEl.className = 'pane-header';
+    let selectEl: HTMLSelectElement | undefined;
 
-    const selectEl = document.createElement('select');
-    selectEl.className = 'pane-select';
-    selectEl.addEventListener('change', () => {
-      node.buffer = selectEl.value;
-      saveLayout();
-      renderPaneBuffer(node.id);
-    });
-    headerEl.appendChild(selectEl);
+    if (!node.isTemporaryLive) {
+      const headerEl = document.createElement('div');
+      headerEl.className = 'pane-header';
 
-    const isTopLeftPane = layout.columns[0]?.panes[0]?.id === node.id;
-    if (fontSizeControls && isTopLeftPane) {
-      headerEl.appendChild(fontSizeControls);
+      selectEl = document.createElement('select');
+      selectEl.className = 'pane-select';
+      selectEl.addEventListener('change', () => {
+        node.buffer = selectEl!.value;
+        const collapsed = collapseTemporaryLiveSplit(node.id, 'source');
+        saveLayout();
+        updateAllSelects();
+        renderPaneBuffer(node.id);
+        setTimeout(() => scrollPaneToBottom(node.id), 0);
+        if (collapsed) return;
+      });
+      headerEl.appendChild(selectEl);
+
+      const liveSplitBtn = document.createElement('button');
+      liveSplitBtn.className = 'pane-btn pane-live-split-btn';
+      liveSplitBtn.type = 'button';
+      liveSplitBtn.textContent = '⇵';
+      liveSplitBtn.title = 'Toggle live split';
+      liveSplitBtn.setAttribute('aria-label', 'Toggle live split');
+      liveSplitBtn.dataset['paneId'] = node.id;
+      const hasLiveSplit = hasTemporaryLiveSplit(node.id);
+      if (hasLiveSplit) {
+        liveSplitBtn.classList.add('active');
+      }
+      liveSplitBtn.addEventListener('click', () => toggleTemporaryLiveSplit(node.id));
+      headerEl.appendChild(liveSplitBtn);
+
+      const actionsEl = document.createElement('div');
+      actionsEl.className = 'pane-actions';
+
+      const isTopLeftPane = layout.columns[0]?.panes[0]?.id === node.id;
+      if (fontSizeControls && isTopLeftPane) {
+        actionsEl.appendChild(fontSizeControls);
+      }
+
+      // Dropdown for split/close
+      const menuBtn = document.createElement('button');
+      menuBtn.className = 'pane-btn';
+      menuBtn.innerHTML = '⋮';
+      
+      const menuEl = document.createElement('div');
+      menuEl.className = 'dropdown-menu';
+      menuEl.style.display = 'none';
+
+      const splitDownBtn = document.createElement('button');
+      splitDownBtn.className = 'dropdown-item';
+      splitDownBtn.textContent = 'Split Down';
+      splitDownBtn.disabled = hasLiveSplit;
+      splitDownBtn.addEventListener('click', () => {
+        if (hasTemporaryLiveSplit(node.id)) return;
+        menuEl.style.display = 'none';
+        addPaneBelow(node.id);
+      });
+
+      const splitRightBtn = document.createElement('button');
+      splitRightBtn.className = 'dropdown-item';
+      splitRightBtn.textContent = 'Split Right';
+      splitRightBtn.disabled = hasLiveSplit;
+      splitRightBtn.addEventListener('click', () => {
+        if (hasTemporaryLiveSplit(node.id)) return;
+        menuEl.style.display = 'none';
+        addColumnRight(node.id);
+      });
+
+      const closeBtn = document.createElement('button');
+      closeBtn.className = 'dropdown-item danger';
+      closeBtn.textContent = 'Close';
+      closeBtn.disabled = hasLiveSplit;
+      closeBtn.addEventListener('click', () => {
+        if (hasTemporaryLiveSplit(node.id)) return;
+        menuEl.style.display = 'none';
+        removePane(node.id);
+      });
+
+      menuEl.appendChild(splitDownBtn);
+      menuEl.appendChild(splitRightBtn);
+      menuEl.appendChild(closeBtn);
+
+      menuBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const isVisible = menuEl.style.display === 'block';
+        document.querySelectorAll('.dropdown-menu').forEach((el: any) => el.style.display = 'none');
+        menuEl.style.display = isVisible ? 'none' : 'block';
+      });
+
+      // Close menu on outside click
+      document.addEventListener('click', () => {
+        menuEl.style.display = 'none';
+      });
+
+      // We only show Close if it's not the absolutely last pane
+      const totalPanes = layout.columns.reduce((sum, col) => sum + col.panes.length, 0);
+      if (totalPanes <= 1) {
+        closeBtn.style.display = 'none';
+      }
+
+      const menuWrapper = document.createElement('div');
+      menuWrapper.style.position = 'relative';
+      menuWrapper.appendChild(menuBtn);
+      menuWrapper.appendChild(menuEl);
+      actionsEl.appendChild(menuWrapper);
+      headerEl.appendChild(actionsEl);
+      el.appendChild(headerEl);
     }
-
-    const actionsEl = document.createElement('div');
-    actionsEl.className = 'pane-actions';
-
-    // Dropdown for split/close
-    const menuBtn = document.createElement('button');
-    menuBtn.className = 'pane-btn';
-    menuBtn.innerHTML = '⋮';
-    
-    const menuEl = document.createElement('div');
-    menuEl.className = 'dropdown-menu';
-    menuEl.style.display = 'none';
-
-    const splitDownBtn = document.createElement('button');
-    splitDownBtn.className = 'dropdown-item';
-    splitDownBtn.textContent = 'Split Down';
-    splitDownBtn.addEventListener('click', () => {
-      menuEl.style.display = 'none';
-      addPaneBelow(node.id);
-    });
-
-    const splitRightBtn = document.createElement('button');
-    splitRightBtn.className = 'dropdown-item';
-    splitRightBtn.textContent = 'Split Right';
-    splitRightBtn.addEventListener('click', () => {
-      menuEl.style.display = 'none';
-      addColumnRight(node.id);
-    });
-
-    const closeBtn = document.createElement('button');
-    closeBtn.className = 'dropdown-item danger';
-    closeBtn.textContent = 'Close';
-    closeBtn.addEventListener('click', () => {
-      menuEl.style.display = 'none';
-      removePane(node.id);
-    });
-
-    menuEl.appendChild(splitDownBtn);
-    menuEl.appendChild(splitRightBtn);
-    menuEl.appendChild(closeBtn);
-
-    menuBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const isVisible = menuEl.style.display === 'block';
-      document.querySelectorAll('.dropdown-menu').forEach((el: any) => el.style.display = 'none');
-      menuEl.style.display = isVisible ? 'none' : 'block';
-    });
-
-    // Close menu on outside click
-    document.addEventListener('click', () => {
-      menuEl.style.display = 'none';
-    });
-
-    // We only show Close if it's not the absolutely last pane
-    const totalPanes = layout.columns.reduce((sum, col) => sum + col.panes.length, 0);
-    if (totalPanes <= 1) {
-      closeBtn.style.display = 'none';
-    }
-
-    const menuWrapper = document.createElement('div');
-    menuWrapper.style.position = 'relative';
-    menuWrapper.appendChild(menuBtn);
-    menuWrapper.appendChild(menuEl);
-    actionsEl.appendChild(menuWrapper);
-    headerEl.appendChild(actionsEl);
 
     const bodyEl = document.createElement('div');
     bodyEl.className = 'pane-body';
@@ -255,13 +315,17 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       updateScrollButtonVisibility(renderedPanes.get(node.id));
     });
 
-    el.appendChild(headerEl);
     bodyEl.appendChild(outputEl);
     bodyEl.appendChild(scrollButtonEl);
     el.appendChild(bodyEl);
 
     const paneAnsiUp = new AnsiUp();
     paneAnsiUp.use_classes = true;
+
+    if (node.isTemporaryLive) {
+      el.classList.add('pane_live-temporary');
+      outputEl.classList.add('pane-output_live-temporary');
+    }
 
     renderedPanes.set(node.id, { node, el, outputEl, scrollButtonEl, selectEl, ansiUp: paneAnsiUp });
 
@@ -295,6 +359,142 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     rebuildDOM();
   }
 
+  function findPanePosition(paneId: string): { col: ColumnNode; colIdx: number; paneIdx: number } | null {
+    const colIdx = layout.columns.findIndex(c => c.panes.some(p => p.id === paneId));
+    if (colIdx === -1) return null;
+    const col = layout.columns[colIdx]!;
+    const paneIdx = col.panes.findIndex(p => p.id === paneId);
+    return { col, colIdx, paneIdx };
+  }
+
+  function liveSplitRatioKey(buffer: string): string {
+    return `liveSplitRatio:v1:${buffer || 'main'}`;
+  }
+
+  function readLiveSplitRatio(buffer: string): number {
+    const raw = localStorage.getItem(liveSplitRatioKey(buffer));
+    const parsed = raw ? Number(raw) : NaN;
+    if (!Number.isFinite(parsed)) return 50;
+    return Math.min(90, Math.max(10, parsed));
+  }
+
+  function saveLiveSplitRatio(buffer: string, liveRatio: number) {
+    const clamped = Math.min(90, Math.max(10, liveRatio));
+    localStorage.setItem(liveSplitRatioKey(buffer), String(clamped));
+  }
+
+  function persistLiveSplitRatioForRow(col: ColumnNode, index: number) {
+    const first = col.panes[index];
+    const second = col.panes[index + 1];
+    if (!first || !second) return;
+
+    let source: PaneNode | undefined;
+    let live: PaneNode | undefined;
+    let liveSize = 0;
+    const firstSize = col.rowSizes[index] ?? 0;
+    const secondSize = col.rowSizes[index + 1] ?? 0;
+
+    if (second.isTemporaryLive && second.temporaryLiveFor === first.id) {
+      source = first;
+      live = second;
+      liveSize = secondSize;
+    } else if (first.isTemporaryLive && first.temporaryLiveFor === second.id) {
+      source = second;
+      live = first;
+      liveSize = firstSize;
+    }
+
+    if (!source || !live) return;
+    const total = firstSize + secondSize;
+    if (total <= 0) return;
+    saveLiveSplitRatio(source.buffer, (liveSize / total) * 100);
+  }
+
+  function hasTemporaryLiveSplit(sourcePaneId: string): boolean {
+    return layout.columns.some(col => col.panes.some(pane => pane.isTemporaryLive && pane.temporaryLiveFor === sourcePaneId));
+  }
+
+  function findTemporaryLivePane(sourcePaneId: string): { col: ColumnNode; pane: PaneNode; paneIdx: number } | null {
+    for (const col of layout.columns) {
+      const paneIdx = col.panes.findIndex(pane => pane.isTemporaryLive && pane.temporaryLiveFor === sourcePaneId);
+      if (paneIdx !== -1) {
+        return { col, pane: col.panes[paneIdx]!, paneIdx };
+      }
+    }
+    return null;
+  }
+
+  function collapseTemporaryLiveSplit(sourcePaneId: string, survivor: 'source' | 'live'): boolean {
+    const temporaryLive = findTemporaryLivePane(sourcePaneId);
+    if (!temporaryLive) return false;
+
+    const col = temporaryLive.col;
+    const livePaneID = temporaryLive.pane.id;
+    const sourceIdx = col.panes.findIndex(pane => pane.id === sourcePaneId);
+    const liveIdx = col.panes.findIndex(pane => pane.id === livePaneID);
+    if (liveIdx === -1) return false;
+
+    const sourceSize = sourceIdx !== -1 ? col.rowSizes[sourceIdx] ?? 0 : 0;
+    const liveSize = col.rowSizes[liveIdx] ?? 0;
+    const combinedSize = sourceSize + liveSize || 100;
+
+    if (survivor === 'source' && sourceIdx !== -1) {
+      col.panes.splice(liveIdx, 1);
+      col.rowSizes.splice(liveIdx, 1);
+      const adjustedSourceIdx = col.panes.findIndex(pane => pane.id === sourcePaneId);
+      if (adjustedSourceIdx !== -1) {
+        col.rowSizes[adjustedSourceIdx] = combinedSize;
+      }
+      saveLayout();
+      rebuildDOM();
+      return true;
+    }
+
+    if (sourceIdx !== -1) {
+      col.panes.splice(sourceIdx, 1);
+      col.rowSizes.splice(sourceIdx, 1);
+    }
+
+    const adjustedLiveIdx = col.panes.findIndex(pane => pane.id === livePaneID);
+    if (adjustedLiveIdx !== -1) {
+      const livePane = col.panes[adjustedLiveIdx]!;
+      delete livePane.isTemporaryLive;
+      delete livePane.temporaryLiveFor;
+      col.rowSizes[adjustedLiveIdx] = combinedSize;
+    }
+
+    saveLayout();
+    rebuildDOM();
+    setTimeout(() => scrollPaneToBottom(livePaneID), 0);
+    return true;
+  }
+
+  function toggleTemporaryLiveSplit(sourcePaneId: string) {
+    const pos = findPanePosition(sourcePaneId);
+    if (!pos) return;
+    const sourcePane = pos.col.panes[pos.paneIdx]!;
+    if (sourcePane.isTemporaryLive) return;
+
+    if (collapseTemporaryLiveSplit(sourcePaneId, 'live')) {
+      return;
+    }
+
+    const oldSize = pos.col.rowSizes[pos.paneIdx]!;
+    const liveRatio = readLiveSplitRatio(sourcePane.buffer);
+    pos.col.rowSizes[pos.paneIdx] = oldSize * ((100 - liveRatio) / 100);
+    const livePane: PaneNode = {
+      id: generateId('pane'),
+      buffer: sourcePane.buffer,
+      isTemporaryLive: true,
+      temporaryLiveFor: sourcePaneId,
+    };
+    pos.col.panes.splice(pos.paneIdx + 1, 0, livePane);
+    pos.col.rowSizes.splice(pos.paneIdx + 1, 0, oldSize * (liveRatio / 100));
+
+    rebuildDOM();
+    setTimeout(() => scrollPaneToBottom(livePane.id), 0);
+  }
+
   function addPaneBelow(sourcePaneId: string) {
     const col = layout.columns.find(c => c.panes.some(p => p.id === sourcePaneId));
     if (!col) return;
@@ -317,6 +517,16 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     const col = layout.columns[colIdx]!;
 
     const paneIdx = col.panes.findIndex(p => p.id === paneId);
+    const pane = col.panes[paneIdx]!;
+
+    if (pane.isTemporaryLive && pane.temporaryLiveFor) {
+      collapseTemporaryLiveSplit(pane.temporaryLiveFor, 'source');
+      return;
+    }
+
+    if (collapseTemporaryLiveSplit(paneId, 'live')) {
+      return;
+    }
 
     // Distribute size to the previous pane (or next if first)
     const sizeToDistribute = col.rowSizes[paneIdx]!;
@@ -397,6 +607,9 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
         handle.releasePointerCapture(e.pointerId);
         handle.removeEventListener('pointermove', onMove);
         handle.removeEventListener('pointerup', onUp);
+        if (kind === 'row') {
+          persistLiveSplitRatioForRow(parent as ColumnNode, index);
+        }
         saveLayout();
       };
 
@@ -427,7 +640,9 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
   function updateAllSelects() {
     renderedPanes.forEach(pane => {
-      updateSelectOptions(pane.selectEl, pane.node.buffer);
+      if (pane.selectEl) {
+        updateSelectOptions(pane.selectEl, pane.node.buffer);
+      }
     });
   }
 
@@ -475,6 +690,13 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     return line;
   }
 
+  function scrollPaneToBottom(paneId: string) {
+    const pane = renderedPanes.get(paneId);
+    if (!pane) return;
+    pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
+    updateScrollButtonVisibility(pane);
+  }
+
   function renderPaneBuffer(paneId: string) {
     const pane = renderedPanes.get(paneId);
     if (!pane) return;
@@ -490,7 +712,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     }
     pane.outputEl.appendChild(fragment);
     
-    if (!state.restoreInProgress) {
+    if (!state.restoreInProgress || pane.node.isTemporaryLive) {
       pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
     }
     updateScrollButtonVisibility(pane);
@@ -534,7 +756,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
       renderedPanes.forEach(pane => {
         if (pane.node.buffer === bufferName) {
-          const shouldScroll = shouldStickToBottom(pane);
+          const shouldScroll = pane.node.isTemporaryLive || shouldStickToBottom(pane);
           const fragment = document.createDocumentFragment();
 
           for (const entry of newEntries) {
@@ -555,7 +777,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
             }
           }
 
-          if (shouldScroll && !state.restoreInProgress) {
+          if (shouldScroll && (!state.restoreInProgress || pane.node.isTemporaryLive)) {
             pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
           }
 

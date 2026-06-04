@@ -29,12 +29,13 @@ function setupDOM() {
   `;
 }
 
-function createTestRenderer(state = { activePanel: null as const, restoreInProgress: false }) {
+function createTestRenderer(state = { activePanel: null as const, restoreInProgress: false }, fontSizeControls?: HTMLElement) {
   setupDOM();
 
   return createRenderer({
     elements: getAppElements(),
     ansiUp: new AnsiUp(),
+    fontSizeControls,
     sendCommand: vi.fn(() => true),
     requestVariables: vi.fn(),
     requestGroups: vi.fn(),
@@ -134,6 +135,198 @@ describe('renderer buffer catalog', () => {
     const select = document.querySelector<HTMLSelectElement>('.pane-select');
     expect(select?.value).toBe('kills');
     expect(paneSelectOptions()).toEqual(['kills', 'main']);
+  });
+});
+
+describe('renderer temporary live split', () => {
+  it('toggles a temporary live split with the same buffer', async () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.setAvailableBuffers(['combat']);
+
+    const select = document.querySelector<HTMLSelectElement>('.pane-select');
+    if (!select) throw new Error('Missing pane select');
+    select.value = 'combat';
+    select.dispatchEvent(new Event('change'));
+
+    document.querySelector<HTMLButtonElement>('.pane-live-split-btn')?.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const panes = Array.from(document.querySelectorAll<HTMLElement>('.pane'));
+    expect(panes).toHaveLength(2);
+    expect(document.querySelectorAll('.pane_live-temporary')).toHaveLength(1);
+    expect(document.querySelectorAll<HTMLSelectElement>('.pane-select')).toHaveLength(1);
+    expect(document.querySelector<HTMLSelectElement>('.pane-select')?.value).toBe('combat');
+    expect(document.querySelectorAll('.pane-live-split-btn')).toHaveLength(1);
+  });
+
+  it('temporary live pane has no header but keeps body, output, and scroll button', async () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    document.querySelector<HTMLButtonElement>('.pane-live-split-btn')?.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const livePane = document.querySelector<HTMLElement>('.pane_live-temporary');
+    expect(livePane).not.toBeNull();
+    expect(livePane?.querySelector('.pane-header')).toBeNull();
+    expect(livePane?.querySelector('.pane-body')).not.toBeNull();
+    expect(livePane?.querySelector('.pane-output')).not.toBeNull();
+    expect(livePane?.querySelector('.pane-scroll-bottom')).not.toBeNull();
+  });
+
+  it('places the toggle immediately after the source pane select', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    const select = document.querySelector<HTMLSelectElement>('.pane-header .pane-select');
+    const toggle = document.querySelector<HTMLButtonElement>('.pane-header .pane-live-split-btn');
+    expect(select?.nextElementSibling).toBe(toggle);
+  });
+
+  it('keeps font controls in the right action group while the toggle stays next to the select', () => {
+    const fontControls = document.createElement('div');
+    fontControls.className = 'font-size-controls';
+    const renderer = createTestRenderer({ activePanel: null, restoreInProgress: false }, fontControls);
+    renderer.loadLayout();
+
+    const select = document.querySelector<HTMLSelectElement>('.pane-header .pane-select');
+    const toggle = document.querySelector<HTMLButtonElement>('.pane-header .pane-live-split-btn');
+    expect(select?.nextElementSibling).toBe(toggle);
+    expect(document.querySelector('.pane-actions .font-size-controls')).toBe(fontControls);
+  });
+
+  it('does not persist the temporary split into pane-layout', async () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    document.querySelector<HTMLButtonElement>('.pane-live-split-btn')?.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(document.querySelectorAll('.pane')).toHaveLength(2);
+    expect(localStorage.getItem('pane-layout')).toBeNull();
+
+    const rendererAfterRefresh = createTestRenderer();
+    rendererAfterRefresh.loadLayout();
+    expect(document.querySelectorAll('.pane')).toHaveLength(1);
+  });
+
+  it('toggle off leaves the live pane as the surviving view and forces scroll bottom', async () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.appendEntries([{ id: 1, text: 'first', buffer: 'main' }]);
+
+    const scrollHeightSpy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(321);
+    document.querySelector<HTMLButtonElement>('.pane-live-split-btn')?.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    document.querySelector<HTMLButtonElement>('.pane-live-split-btn.active')?.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const panes = Array.from(document.querySelectorAll<HTMLElement>('.pane'));
+    expect(panes).toHaveLength(1);
+    expect(document.querySelectorAll('.pane_live-temporary')).toHaveLength(0);
+    const output = document.querySelector<HTMLElement>('.pane-output');
+    expect(output?.textContent).toContain('first');
+    expect(output?.scrollTop).toBe(321);
+    scrollHeightSpy.mockRestore();
+  });
+
+  it('renders newly appended entries in both panes through the existing append path', async () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    document.querySelector<HTMLButtonElement>('.pane-live-split-btn')?.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    renderer.appendEntries([{ id: 1, text: 'shared line', buffer: 'main' }]);
+
+    const outputs = Array.from(document.querySelectorAll<HTMLElement>('.pane-output'));
+    expect(outputs).toHaveLength(2);
+    expect(outputs.map(output => output.textContent)).toEqual(['shared line', 'shared line']);
+  });
+
+  it('disables menu close and persistent split actions while source has active mini-split', async () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    document.querySelector<HTMLButtonElement>('.pane-live-split-btn')?.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const actions = Array.from(document.querySelectorAll<HTMLButtonElement>('.pane:not(.pane_live-temporary) .dropdown-item'));
+    expect(actions.map(action => action.textContent)).toEqual(['Split Down', 'Split Right', 'Close']);
+    expect(actions.every(action => action.disabled)).toBe(true);
+
+    actions[0]?.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(document.querySelectorAll('.pane')).toHaveLength(2);
+  });
+
+  it('source selector change collapses mini-split with source as survivor and selected buffer active', async () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.setAvailableBuffers(['combat']);
+
+    document.querySelector<HTMLButtonElement>('.pane-live-split-btn')?.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const sourceSelect = document.querySelector<HTMLSelectElement>('.pane:not(.pane_live-temporary) .pane-select');
+    if (!sourceSelect) throw new Error('Missing source select');
+    sourceSelect.value = 'combat';
+    sourceSelect.dispatchEvent(new Event('change'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(document.querySelectorAll('.pane')).toHaveLength(1);
+    expect(document.querySelectorAll('.pane_live-temporary')).toHaveLength(0);
+    expect(document.querySelector<HTMLSelectElement>('.pane-select')?.value).toBe('combat');
+
+    renderer.appendEntries([
+      { id: 1, text: 'old main line', buffer: 'main' },
+      { id: 2, text: 'combat line', buffer: 'combat' },
+    ]);
+
+    expect(document.querySelector<HTMLElement>('.pane-output')?.textContent).toBe('combat line');
+  });
+
+  it('reuses the persisted live split ratio for the same buffer', async () => {
+    localStorage.setItem('liveSplitRatio:v1:main', '30');
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    document.querySelector<HTMLButtonElement>('.pane-live-split-btn')?.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const panes = Array.from(document.querySelectorAll<HTMLElement>('.pane'));
+    expect(panes.map(pane => pane.style.flexBasis)).toEqual(['70%', '30%']);
+  });
+
+  it('persists the live split ratio for the buffer after row resize', async () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    document.querySelector<HTMLButtonElement>('.pane-live-split-btn')?.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    const clientHeightSpy = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(100);
+    const setPointerCapture = vi.fn();
+    const releasePointerCapture = vi.fn();
+    Object.defineProperty(HTMLElement.prototype, 'setPointerCapture', { configurable: true, value: setPointerCapture });
+    Object.defineProperty(HTMLElement.prototype, 'releasePointerCapture', { configurable: true, value: releasePointerCapture });
+
+    const handle = document.querySelector<HTMLElement>('.row-resize-handle');
+    if (!handle) throw new Error('Missing row resize handle');
+    const pointerDown = new Event('pointerdown') as PointerEvent;
+    Object.defineProperties(pointerDown, { pointerId: { value: 1 }, clientY: { value: 0 } });
+    handle.dispatchEvent(pointerDown);
+    const pointerMove = new Event('pointermove') as PointerEvent;
+    Object.defineProperties(pointerMove, { pointerId: { value: 1 }, clientY: { value: 20 } });
+    handle.dispatchEvent(pointerMove);
+    const pointerUp = new Event('pointerup') as PointerEvent;
+    Object.defineProperty(pointerUp, 'pointerId', { value: 1 });
+    handle.dispatchEvent(pointerUp);
+
+    expect(localStorage.getItem('liveSplitRatio:v1:main')).toBe('30');
+    clientHeightSpy.mockRestore();
   });
 });
 
