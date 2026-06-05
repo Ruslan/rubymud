@@ -37,7 +37,7 @@ Behavior:
 5. toggle off removes the temporary split and leaves the lower/live pane as the surviving view
 6. when the split is removed, the surviving live pane is forced to scroll to bottom
 7. the temporary split is in-memory only and must not be saved to `pane-layout` in `localStorage`
-8. the temporary split height can be resized, but the ratio is only remembered in JS memory for this session/page lifetime
+8. the temporary split height can be resized, and the live-region ratio is remembered per buffer in localStorage using an app-level preference key
 
 This stage intentionally does not require `PageUp`, `PageDown`, `End`, or `Esc`. Those shortcuts can be layered on later after the temporary split behavior is proven.
 
@@ -75,11 +75,21 @@ Add search inside the active buffer instead of relying on browser `Ctrl+F`.
 
 Behavior:
 
-1. search is scoped to the active MUD buffer, not the whole browser page
-2. matches are found within currently loaded/rendered live buffer history
-3. navigation supports next/previous match
-4. search should work naturally with scrollback mode
-5. browser `Ctrl+F` may remain available, but the app should provide its own buffer search shortcut/control
+1. search is scoped to one pane's current MUD buffer, not the whole browser page
+2. matches are found within in-memory live buffer history only; older archive search remains in Settings -> Logs
+3. search is always case-insensitive, including Cyrillic
+4. search is based on ANSI-stripped MUD output text from `LogEntry.text` after runtime substitutions/replacements
+5. search does not match command hints or trigger button labels appended to output lines
+6. query changes select the newest/lower match by default and show a `current/total` count
+7. navigation supports wrapping previous/next match movement, where `↑` means older/upper and `↓` means newer/lower
+8. all matches are weakly highlighted and the current match is strongly highlighted
+9. opening search on the `main` buffer only opens the search UI; it does not split until the query has matches
+10. a `main` buffer search auto-enables the temporary mini-split only when the trimmed query is non-empty, total matches are greater than zero, and the source pane is not already split
+11. empty queries and no-result searches do not auto-enable mini-split
+12. opening/searching auxiliary buffers does not auto-enable mini-split; the user may toggle it manually
+13. browser `Ctrl+F` may remain available, but the app provides its own buffer search control in the pane header
+
+Current UX note: closing the search UI intentionally leaves any search-created `main` mini-split open. Changing a successful search to a no-result query also leaves an existing mini-split open. Whether search close/no-results should also close an auto-opened split is left for usage evaluation.
 
 Possible shortcuts:
 

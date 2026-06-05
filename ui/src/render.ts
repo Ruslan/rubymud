@@ -26,6 +26,7 @@ const maxRenderedLines = 5000;
 const pruneRenderedLines = 500;
 const httpsUrlPattern = /https:\/\/[^\s<>"']+/g;
 const trailingUrlPunctuation = /[.,;:!?]+$/;
+const ansiEscapePattern = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 
 interface PaneNode {
   id: string;
@@ -45,12 +46,21 @@ interface Layout {
   colSizes: number[];
 }
 
+interface SearchState {
+  open: boolean;
+  query: string;
+  current: number;
+  total: number;
+}
+
 interface RenderedPane {
   node: PaneNode;
   el: HTMLElement;
   outputEl: HTMLElement;
   scrollButtonEl: HTMLButtonElement;
   selectEl?: HTMLSelectElement;
+  searchInputEl?: HTMLInputElement;
+  searchCountEl?: HTMLElement;
   ansiUp: AnsiUp;
 }
 
@@ -67,6 +77,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   const bufferData = new Map<string, LogEntry[]>();
   const pendingCommandHints = new Map<string, { buffer: string; entry: LogEntry; source: string; commandIndex: number }>();
   const renderedPanes = new Map<string, RenderedPane>();
+  const searchStates = new Map<string, SearchState>();
 
   function getBufferData(name: string): LogEntry[] {
     if (!bufferData.has(name)) {
@@ -183,6 +194,8 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     const el = document.createElement('div');
     el.className = 'pane';
     let selectEl: HTMLSelectElement | undefined;
+    let searchInputEl: HTMLInputElement | undefined;
+    let searchCountEl: HTMLElement | undefined;
 
     if (!node.isTemporaryLive) {
       const headerEl = document.createElement('div');
@@ -214,6 +227,54 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       }
       liveSplitBtn.addEventListener('click', () => toggleTemporaryLiveSplit(node.id));
       headerEl.appendChild(liveSplitBtn);
+
+      const searchButton = document.createElement('button');
+      searchButton.className = 'pane-btn pane-search-toggle';
+      searchButton.type = 'button';
+      searchButton.textContent = '⌕';
+      searchButton.title = 'Search this buffer';
+      searchButton.setAttribute('aria-label', 'Search this buffer');
+      headerEl.appendChild(searchButton);
+
+      const searchControls = document.createElement('div');
+      searchControls.className = 'pane-search-controls';
+      searchInputEl = document.createElement('input');
+      searchInputEl.className = 'pane-search-input';
+      searchInputEl.type = 'search';
+      searchInputEl.placeholder = 'Search buffer';
+      const olderBtn = document.createElement('button');
+      olderBtn.className = 'pane-btn pane-search-prev';
+      olderBtn.type = 'button';
+      olderBtn.textContent = '↑';
+      olderBtn.title = 'Older match';
+      const newerBtn = document.createElement('button');
+      newerBtn.className = 'pane-btn pane-search-next';
+      newerBtn.type = 'button';
+      newerBtn.textContent = '↓';
+      newerBtn.title = 'Newer match';
+      searchCountEl = document.createElement('span');
+      searchCountEl.className = 'pane-search-count';
+      const closeSearchBtn = document.createElement('button');
+      closeSearchBtn.className = 'pane-btn pane-search-close';
+      closeSearchBtn.type = 'button';
+      closeSearchBtn.textContent = '×';
+      closeSearchBtn.title = 'Close search';
+      searchControls.appendChild(searchInputEl);
+      searchControls.appendChild(olderBtn);
+      searchControls.appendChild(newerBtn);
+      searchControls.appendChild(searchCountEl);
+      searchControls.appendChild(closeSearchBtn);
+      headerEl.appendChild(searchControls);
+
+      const searchState = searchStates.get(node.id);
+      searchInputEl.value = searchState?.query || '';
+      searchControls.hidden = !searchState?.open;
+      searchButton.classList.toggle('active', !!searchState?.open);
+      searchButton.addEventListener('click', () => openPaneSearch(node.id));
+      searchInputEl.addEventListener('input', () => updatePaneSearchQuery(node.id, searchInputEl!.value));
+      olderBtn.addEventListener('click', () => navigatePaneSearch(node.id, -1));
+      newerBtn.addEventListener('click', () => navigatePaneSearch(node.id, 1));
+      closeSearchBtn.addEventListener('click', () => closePaneSearch(node.id));
 
       const actionsEl = document.createElement('div');
       actionsEl.className = 'pane-actions';
@@ -327,7 +388,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       outputEl.classList.add('pane-output_live-temporary');
     }
 
-    renderedPanes.set(node.id, { node, el, outputEl, scrollButtonEl, selectEl, ansiUp: paneAnsiUp });
+    renderedPanes.set(node.id, { node, el, outputEl, scrollButtonEl, selectEl, searchInputEl, searchCountEl, ansiUp: paneAnsiUp });
 
     // Initial render
     // Defer slight to ensure it's in DOM
@@ -646,7 +707,198 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     });
   }
 
-  function createEntryDOM(entry: LogEntry, pane: RenderedPane): HTMLElement {
+  function plainOutputText(text: string): string {
+    return text.replace(ansiEscapePattern, '');
+  }
+
+  function normalizedSearchText(text: string): string {
+    return text.toLocaleLowerCase();
+  }
+
+  function countQueryMatches(text: string, query: string): number {
+    if (!query) return 0;
+    const haystack = normalizedSearchText(text);
+    const needle = normalizedSearchText(query);
+    if (!needle) return 0;
+    let count = 0;
+    let index = haystack.indexOf(needle);
+    while (index !== -1) {
+      count++;
+      index = haystack.indexOf(needle, index + needle.length);
+    }
+    return count;
+  }
+
+  function entryMatchCounts(data: LogEntry[], query: string): number[] {
+    return data.map(entry => countQueryMatches(plainOutputText(entry.text || ''), query));
+  }
+
+  function ensureSearchState(paneId: string): SearchState {
+    const existing = searchStates.get(paneId);
+    if (existing) return existing;
+    const state: SearchState = { open: false, query: '', current: 0, total: 0 };
+    searchStates.set(paneId, state);
+    return state;
+  }
+
+  function refreshSearchStateForPane(pane: RenderedPane, counts?: number[]) {
+    const search = searchStates.get(pane.node.id);
+    if (!search) return;
+    const data = getBufferData(pane.node.buffer);
+    const matchCounts = counts || entryMatchCounts(data, search.query.trim());
+    search.total = matchCounts.reduce((sum, count) => sum + count, 0);
+    if (!search.query.trim() || search.total === 0) {
+      search.current = 0;
+    } else if (search.current < 1 || search.current > search.total) {
+      search.current = search.total;
+    }
+    updateSearchControls(pane);
+  }
+
+  function updateSearchControls(pane: RenderedPane) {
+    const search = searchStates.get(pane.node.id);
+    if (!pane.searchInputEl || !pane.searchCountEl || !search) return;
+    pane.searchInputEl.value = search.query;
+    const controls = pane.searchInputEl.closest<HTMLElement>('.pane-search-controls');
+    const toggle = pane.el.querySelector<HTMLElement>('.pane-search-toggle');
+    if (controls) controls.hidden = !search.open;
+    toggle?.classList.toggle('active', search.open);
+    pane.searchCountEl.textContent = search.query.trim() ? `${search.current}/${search.total}` : '0/0';
+  }
+
+  function maybeAutoEnableSearchSplit(paneId: string) {
+    const pane = renderedPanes.get(paneId);
+    const search = searchStates.get(paneId);
+    if (!pane || !search) return;
+    if (pane.node.buffer !== 'main') return;
+    if (!search.query.trim()) return;
+    if (search.total <= 0) return;
+    if (hasTemporaryLiveSplit(paneId)) return;
+
+    setTimeout(() => {
+      const currentPane = renderedPanes.get(paneId);
+      const currentSearch = searchStates.get(paneId);
+      if (!currentPane || !currentSearch) return;
+      if (currentPane.node.buffer !== 'main') return;
+      if (!currentSearch.query.trim() || currentSearch.total <= 0) return;
+      if (hasTemporaryLiveSplit(paneId)) return;
+
+      toggleTemporaryLiveSplit(paneId);
+      setTimeout(() => {
+        const rebuilt = renderedPanes.get(paneId);
+        if (rebuilt) {
+          refreshSearchStateForPane(rebuilt);
+          rebuilt.searchInputEl?.focus();
+          rebuilt.searchInputEl?.setSelectionRange(rebuilt.searchInputEl.value.length, rebuilt.searchInputEl.value.length);
+        }
+      }, 0);
+    }, 0);
+  }
+
+  function openPaneSearch(paneId: string) {
+    const pane = renderedPanes.get(paneId);
+    if (!pane || pane.node.isTemporaryLive) return;
+    const search = ensureSearchState(paneId);
+    search.open = true;
+    refreshSearchStateForPane(pane);
+    updateSearchControls(pane);
+    pane.searchInputEl?.focus();
+  }
+
+  function closePaneSearch(paneId: string) {
+    const search = ensureSearchState(paneId);
+    search.open = false;
+    const pane = renderedPanes.get(paneId);
+    if (pane) {
+      updateSearchControls(pane);
+      renderPaneBuffer(paneId);
+    }
+  }
+
+  function updatePaneSearchQuery(paneId: string, query: string) {
+    const search = ensureSearchState(paneId);
+    search.open = true;
+    search.query = query;
+    search.current = 0;
+    renderPaneBuffer(paneId);
+    maybeAutoEnableSearchSplit(paneId);
+  }
+
+  function navigatePaneSearch(paneId: string, delta: -1 | 1) {
+    const pane = renderedPanes.get(paneId);
+    const search = ensureSearchState(paneId);
+    if (!pane || search.total === 0) return;
+    search.current = ((search.current - 1 + delta + search.total) % search.total) + 1;
+    renderPaneBuffer(paneId);
+  }
+
+  function highlightSearchMatches(root: HTMLElement, query: string, currentOrdinal: number, ordinalStart: number): number {
+    const needle = normalizedSearchText(query);
+    if (!needle) return 0;
+
+    const textNodes: Array<{ node: Text; start: number; end: number }> = [];
+    let fullText = '';
+    const collect = (node: Node) => {
+      node.childNodes.forEach((child) => {
+        if (child.nodeType === Node.TEXT_NODE) {
+          const text = child.textContent || '';
+          const start = fullText.length;
+          fullText += text;
+          textNodes.push({ node: child as Text, start, end: fullText.length });
+        } else if (child.nodeType === Node.ELEMENT_NODE) {
+          collect(child);
+        }
+      });
+    };
+    collect(root);
+
+    const normalized = normalizedSearchText(fullText);
+    const ranges: Array<{ start: number; end: number; ordinal: number }> = [];
+    let ordinal = ordinalStart;
+    let index = normalized.indexOf(needle);
+    while (index !== -1) {
+      ordinal++;
+      ranges.push({ start: index, end: index + query.length, ordinal });
+      index = normalized.indexOf(needle, index + needle.length);
+    }
+    if (ranges.length === 0) return 0;
+
+    textNodes.forEach(({ node, start, end }) => {
+      const overlapping = ranges.filter(range => range.start < end && range.end > start);
+      if (overlapping.length === 0) return;
+
+      const text = node.textContent || '';
+      const fragment = document.createDocumentFragment();
+      let cursor = 0;
+      overlapping.forEach((range) => {
+        const localStart = Math.max(0, range.start - start);
+        const localEnd = Math.min(text.length, range.end - start);
+        if (localStart > cursor) {
+          fragment.appendChild(document.createTextNode(text.slice(cursor, localStart)));
+        }
+        const mark = document.createElement('mark');
+        mark.className = range.ordinal === currentOrdinal ? 'buffer-search-match buffer-search-current' : 'buffer-search-match';
+        mark.textContent = text.slice(localStart, localEnd);
+        fragment.appendChild(mark);
+        cursor = localEnd;
+      });
+      if (cursor < text.length) {
+        fragment.appendChild(document.createTextNode(text.slice(cursor)));
+      }
+      node.parentNode?.replaceChild(fragment, node);
+    });
+
+    return ranges.length;
+  }
+
+  function scrollCurrentSearchMatchIntoView(pane: RenderedPane) {
+    const current = pane.outputEl.querySelector<HTMLElement>('.buffer-search-current');
+    if (current && typeof current.scrollIntoView === 'function') {
+      current.scrollIntoView({ block: 'center' });
+    }
+  }
+
+  function createEntryDOM(entry: LogEntry, pane: RenderedPane, searchContext?: { query: string; current: number; ordinalStart: number }): HTMLElement {
     const line = document.createElement('div');
     line.className = 'output-line';
     if (entry.id) {
@@ -654,8 +906,12 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     }
 
     const span = document.createElement('span');
+    span.className = 'output-text';
     span.innerHTML = entry.text ? renderANSI(pane, entry.text) : '&nbsp;';
     linkifyHttpsUrls(span);
+    if (searchContext?.query) {
+      highlightSearchMatches(span, searchContext.query, searchContext.current, searchContext.ordinalStart);
+    }
     line.appendChild(span);
 
     const assignedPendingCommandIDs = new Set<string>();
@@ -704,15 +960,27 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     pane.ansiUp = new AnsiUp();
     pane.ansiUp.use_classes = true;
     const data = getBufferData(pane.node.buffer);
+    const search = searchStates.get(pane.node.id);
+    const activeQuery = search?.open ? search.query.trim() : '';
+    const counts = activeQuery ? entryMatchCounts(data, activeQuery) : [];
+    if (search) {
+      refreshSearchStateForPane(pane, counts);
+    }
     
     const fragment = document.createDocumentFragment();
-    const startIdx = Math.max(0, data.length - maxRenderedLines);
+    const startIdx = activeQuery ? 0 : Math.max(0, data.length - maxRenderedLines);
+    let ordinal = counts.slice(0, startIdx).reduce((sum, count) => sum + count, 0);
     for (let i = startIdx; i < data.length; i++) {
-      fragment.appendChild(createEntryDOM(data[i]!, pane));
+      const count = counts[i] || 0;
+      fragment.appendChild(createEntryDOM(data[i]!, pane, activeQuery ? { query: activeQuery, current: search?.current || 0, ordinalStart: ordinal } : undefined));
+      ordinal += count;
     }
     pane.outputEl.appendChild(fragment);
+    if (activeQuery) {
+      scrollCurrentSearchMatchIntoView(pane);
+    }
     
-    if (!state.restoreInProgress || pane.node.isTemporaryLive) {
+    if (!activeQuery && (!state.restoreInProgress || pane.node.isTemporaryLive)) {
       pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
     }
     updateScrollButtonVisibility(pane);
@@ -756,6 +1024,15 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
       renderedPanes.forEach(pane => {
         if (pane.node.buffer === bufferName) {
+          const activeSearch = searchStates.get(pane.node.id);
+          if (activeSearch?.open && activeSearch.query.trim()) {
+            renderPaneBuffer(pane.node.id);
+            if (!state.restoreInProgress && newEntries.some(entry => (entry.bell_positions || []).length > 0)) {
+              triggerVisualBell(pane.outputEl);
+            }
+            return;
+          }
+
           const shouldScroll = pane.node.isTemporaryLive || shouldStickToBottom(pane);
           const fragment = document.createDocumentFragment();
 

@@ -768,7 +768,7 @@ elements.panesContainer.addEventListener('click', (event) => {
     return;
   }
 
-  if ((event.target as HTMLElement | null)?.closest('button') || (event.target as HTMLElement | null)?.closest('select')) {
+  if ((event.target as HTMLElement | null)?.closest('button, input, select, textarea')) {
     return;
   }
 

@@ -330,6 +330,268 @@ describe('renderer temporary live split', () => {
   });
 });
 
+describe('renderer buffer-local search', () => {
+  it('places search controls after the mini-split toggle in the pane header', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    const toggle = document.querySelector<HTMLElement>('.pane-live-split-btn');
+    const search = document.querySelector<HTMLElement>('.pane-search-toggle');
+    expect(document.querySelector<HTMLElement>('.pane-select')?.nextElementSibling).toBe(toggle);
+    expect(toggle?.nextElementSibling).toBe(search);
+  });
+
+  it('searches only the current pane buffer', async () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.setAvailableBuffers(['combat']);
+    renderer.addColumnRight();
+    renderer.appendEntries([
+      { id: 1, text: 'main only', buffer: 'main' },
+      { id: 2, text: 'combat only', buffer: 'combat' },
+    ]);
+
+    const secondSelect = document.querySelectorAll<HTMLSelectElement>('.pane-select')[1];
+    if (!secondSelect) throw new Error('Missing second select');
+    secondSelect.value = 'combat';
+    secondSelect.dispatchEvent(new Event('change'));
+
+    const secondPane = document.querySelectorAll<HTMLElement>('.pane')[1];
+    secondPane?.querySelector<HTMLButtonElement>('.pane-search-toggle')?.click();
+    const input = secondPane?.querySelector<HTMLInputElement>('.pane-search-input');
+    if (!input) throw new Error('Missing search input');
+    input.value = 'main';
+    input.dispatchEvent(new Event('input'));
+
+    expect(secondPane?.querySelector('.pane-search-count')?.textContent).toBe('0/0');
+    expect(secondPane?.querySelector('.buffer-search-match')).toBeNull();
+  });
+
+  it('search is case-insensitive with Cyrillic', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.appendEntries([{ id: 1, text: 'ПрИвЕт мир', buffer: 'main' }]);
+
+    document.querySelector<HTMLButtonElement>('.pane-search-toggle')?.click();
+    const input = document.querySelector<HTMLInputElement>('.pane-search-input');
+    if (!input) throw new Error('Missing search input');
+    input.value = 'привет';
+    input.dispatchEvent(new Event('input'));
+
+    expect(document.querySelector('.pane-search-count')?.textContent).toBe('1/1');
+    expect(document.querySelector('.buffer-search-current')?.textContent).toBe('ПрИвЕт');
+  });
+
+  it('searches ANSI-stripped output and highlights rendered text', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.appendEntries([{ id: 1, text: '\x1b[31mRed target\x1b[0m', buffer: 'main' }]);
+
+    document.querySelector<HTMLButtonElement>('.pane-search-toggle')?.click();
+    const input = document.querySelector<HTMLInputElement>('.pane-search-input');
+    if (!input) throw new Error('Missing search input');
+    input.value = 'target';
+    input.dispatchEvent(new Event('input'));
+
+    expect(document.querySelector('.pane-search-count')?.textContent).toBe('1/1');
+    expect(document.querySelector('.buffer-search-current')?.textContent).toBe('target');
+    expect(document.querySelector('.output-line')?.innerHTML).toContain('ansi-red-fg');
+  });
+
+  it('matches text across ANSI style boundaries', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.appendEntries([{ id: 1, text: '\x1b[31mtar\x1b[0mget', buffer: 'main' }]);
+
+    document.querySelector<HTMLButtonElement>('.pane-search-toggle')?.click();
+    const input = document.querySelector<HTMLInputElement>('.pane-search-input');
+    if (!input) throw new Error('Missing search input');
+    input.value = 'target';
+    input.dispatchEvent(new Event('input'));
+
+    expect(document.querySelector('.pane-search-count')?.textContent).toBe('1/1');
+    const currentText = Array.from(document.querySelectorAll('.buffer-search-current')).map(el => el.textContent).join('');
+    expect(currentText).toBe('target');
+    expect(document.querySelector('.output-line')?.innerHTML).toContain('ansi-red-fg');
+  });
+
+  it('ignores command hints and trigger button labels', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.appendEntries([{ id: 1, text: 'plain output', buffer: 'main', buttons: [{ label: 'target button', command: 'look' }] }]);
+    renderer.addCommandHint(1, 'main', 'target hint');
+
+    document.querySelector<HTMLButtonElement>('.pane-search-toggle')?.click();
+    const input = document.querySelector<HTMLInputElement>('.pane-search-input');
+    if (!input) throw new Error('Missing search input');
+    input.value = 'target';
+    input.dispatchEvent(new Event('input'));
+
+    expect(document.querySelector('.pane-search-count')?.textContent).toBe('0/0');
+    expect(document.querySelector('.buffer-search-match')).toBeNull();
+    expect(document.querySelector('.output-line')?.textContent).toContain('target button');
+    expect(document.querySelector('.output-line')?.textContent).toContain('target hint');
+  });
+
+  it('query change selects newest match and older/newer navigation wraps', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.appendEntries([
+      { id: 1, text: 'old target', buffer: 'main' },
+      { id: 2, text: 'new target', buffer: 'main' },
+    ]);
+
+    document.querySelector<HTMLButtonElement>('.pane-search-toggle')?.click();
+    const input = document.querySelector<HTMLInputElement>('.pane-search-input');
+    if (!input) throw new Error('Missing search input');
+    input.value = 'target';
+    input.dispatchEvent(new Event('input'));
+
+    expect(document.querySelector('.pane-search-count')?.textContent).toBe('2/2');
+    expect(document.querySelector('.buffer-search-current')?.closest('.output-line')?.textContent).toContain('new target');
+
+    document.querySelector<HTMLButtonElement>('.pane-search-prev')?.click();
+    expect(document.querySelector('.pane-search-count')?.textContent).toBe('1/2');
+    expect(document.querySelector('.buffer-search-current')?.closest('.output-line')?.textContent).toContain('old target');
+
+    document.querySelector<HTMLButtonElement>('.pane-search-next')?.click();
+    expect(document.querySelector('.pane-search-count')?.textContent).toBe('2/2');
+    document.querySelector<HTMLButtonElement>('.pane-search-next')?.click();
+    expect(document.querySelector('.pane-search-count')?.textContent).toBe('1/2');
+  });
+
+  it('opening search on main does not create mini-split before a matching query', async () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    document.querySelector<HTMLButtonElement>('.pane-search-toggle')?.click();
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(document.querySelectorAll('.pane')).toHaveLength(1);
+    expect(document.querySelector<HTMLInputElement>('.pane-search-input')).not.toBeNull();
+  });
+
+  it('entering a query with no results on main does not create mini-split', async () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.appendEntries([{ id: 1, text: 'hello world', buffer: 'main' }]);
+
+    document.querySelector<HTMLButtonElement>('.pane-search-toggle')?.click();
+    const input = document.querySelector<HTMLInputElement>('.pane-search-input');
+    if (!input) throw new Error('Missing search input');
+    input.value = 'missing';
+    input.dispatchEvent(new Event('input'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(document.querySelectorAll('.pane')).toHaveLength(1);
+    expect(document.querySelector('.pane-search-count')?.textContent).toBe('0/0');
+  });
+
+  it('entering a matching query on main creates mini-split and keeps search input usable after rebuild', async () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.appendEntries([{ id: 1, text: 'hello target', buffer: 'main' }]);
+
+    document.querySelector<HTMLButtonElement>('.pane-search-toggle')?.click();
+    const input = document.querySelector<HTMLInputElement>('.pane-search-input');
+    if (!input) throw new Error('Missing search input');
+    input.value = 'target';
+    input.dispatchEvent(new Event('input'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(document.querySelectorAll('.pane')).toHaveLength(2);
+    expect(document.querySelector('.pane_live-temporary .pane-header')).toBeNull();
+    const rebuiltInput = document.querySelector<HTMLInputElement>('.pane:not(.pane_live-temporary) .pane-search-input');
+    expect(rebuiltInput?.value).toBe('target');
+    expect(document.querySelector('.pane-search-count')?.textContent).toBe('1/1');
+    expect(document.activeElement).toBe(rebuiltInput);
+  });
+
+  it('changing a successful main search to no results leaves the existing mini-split open', async () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.appendEntries([{ id: 1, text: 'hello target', buffer: 'main' }]);
+
+    document.querySelector<HTMLButtonElement>('.pane-search-toggle')?.click();
+    let input = document.querySelector<HTMLInputElement>('.pane-search-input');
+    if (!input) throw new Error('Missing search input');
+    input.value = 'target';
+    input.dispatchEvent(new Event('input'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(document.querySelectorAll('.pane')).toHaveLength(2);
+
+    input = document.querySelector<HTMLInputElement>('.pane:not(.pane_live-temporary) .pane-search-input');
+    if (!input) throw new Error('Missing rebuilt search input');
+    input.value = 'missing';
+    input.dispatchEvent(new Event('input'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(document.querySelectorAll('.pane')).toHaveLength(2);
+    expect(document.querySelector('.pane-search-count')?.textContent).toBe('0/0');
+  });
+
+  it('non-main query with results does not auto-split', async () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.setAvailableBuffers(['combat']);
+    renderer.appendEntries([{ id: 1, text: 'combat target', buffer: 'combat' }]);
+
+    const select = document.querySelector<HTMLSelectElement>('.pane-select');
+    if (!select) throw new Error('Missing select');
+    select.value = 'combat';
+    select.dispatchEvent(new Event('change'));
+    document.querySelector<HTMLButtonElement>('.pane-search-toggle')?.click();
+    const input = document.querySelector<HTMLInputElement>('.pane-search-input');
+    if (!input) throw new Error('Missing search input');
+    input.value = 'target';
+    input.dispatchEvent(new Event('input'));
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    expect(document.querySelectorAll('.pane')).toHaveLength(1);
+    expect(document.querySelector<HTMLSelectElement>('.pane-select')?.value).toBe('combat');
+    expect(document.querySelector('.pane-search-count')?.textContent).toBe('1/1');
+  });
+
+  it('marks all matches weakly and the current match strongly', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.appendEntries([{ id: 1, text: 'target and target', buffer: 'main' }]);
+
+    document.querySelector<HTMLButtonElement>('.pane-search-toggle')?.click();
+    const input = document.querySelector<HTMLInputElement>('.pane-search-input');
+    if (!input) throw new Error('Missing search input');
+    input.value = 'target';
+    input.dispatchEvent(new Event('input'));
+
+    expect(document.querySelectorAll('.buffer-search-match')).toHaveLength(2);
+    expect(document.querySelectorAll('.buffer-search-current')).toHaveLength(1);
+    expect(document.querySelector('.pane-search-count')?.textContent).toBe('2/2');
+  });
+
+  it('renders in-memory matches outside the normal rendered tail while search is active', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    const entries = Array.from({ length: 5001 }, (_, index) => ({
+      id: index + 1,
+      text: index === 0 ? 'old hidden target' : `line ${index}`,
+      buffer: 'main',
+    }));
+    renderer.appendEntries(entries);
+
+    expect(document.querySelector('.output-line')?.textContent).not.toContain('old hidden target');
+
+    document.querySelector<HTMLButtonElement>('.pane-search-toggle')?.click();
+    const input = document.querySelector<HTMLInputElement>('.pane-search-input');
+    if (!input) throw new Error('Missing search input');
+    input.value = 'target';
+    input.dispatchEvent(new Event('input'));
+
+    expect(document.querySelector('.pane-search-count')?.textContent).toBe('1/1');
+    expect(document.querySelector('.buffer-search-current')?.closest('.output-line')?.textContent).toContain('old hidden target');
+  });
+});
+
 describe('renderer command trace reconciliation', () => {
   it('replaces a pending source hint with canonical commands', () => {
     const renderer = createTestRenderer();
