@@ -22,82 +22,111 @@ This plan is separate from `log-browsing.md`.
 3. keep the live UI lightweight and low-latency
 4. avoid turning the live screen into the full admin log browser
 
-## Stage 1: Toggle-Only Temporary Split
+## Status
 
-Start with an explicit toggle-only MVP to validate the interaction before adding automatic scroll behavior or shortcuts.
+- Stage 1 (pane-based temporary split) was implemented, shipped, and has been replaced.
+- Buffer-local search v1 (live per-keystroke search + auto-split) was implemented, shipped, and has been replaced.
+- Stage 2 (in-pane scrollback region + explicit search execution) is implemented. Remaining planned work: `PageUp` scrollback shortcuts.
 
-The pane header should expose a small scroll/split toggle button near the buffer selector/title. The icon should visually suggest splitting the pane for scrollback, for example two horizontal regions separated by a divider. The active state means a temporary duplicate live pane is currently open.
+## Stage 1: Toggle-Only Temporary Split (implemented, superseded)
 
-Behavior:
+Shipped model: the pane header exposes a split toggle; toggle on creates a temporary duplicate live pane (`isTemporaryLive`, `temporaryLiveFor`) below the source pane as a real `PaneNode` in the layout; the source pane above becomes the scrollback view; toggle off collapses the split with the live pane surviving. The temporary pane is in-memory only and never saved to `pane-layout`.
 
-1. toggle on creates a temporary split below the current pane using the same buffer
-2. the upper pane remains available for normal browser wheel scrolling and scrollback reading
-3. the lower temporary pane is the live view and is forced to scroll to bottom
-4. new entries are appended through the existing pane rendering path to both panes
-5. toggle off removes the temporary split and leaves the lower/live pane as the surviving view
-6. when the split is removed, the surviving live pane is forced to scroll to bottom
-7. the temporary split is in-memory only and must not be saved to `pane-layout` in `localStorage`
-8. the temporary split height can be resized, and the live-region ratio is remembered per buffer in localStorage using an app-level preference key
+### Why it is superseded
 
-This stage intentionally does not require `PageUp`, `PageDown`, `End`, or `Esc`. Those shortcuts can be layered on later after the temporary split behavior is proven.
+Every layout mutation goes through a full `rebuildDOM()` (`panesContainer.innerHTML = ''` + `renderedPanes.clear()`). Opening or closing the temporary split therefore destroys and recreates the live output DOM, re-parses ANSI for thousands of lines, and visibly flickers. Reordering the panes (scrollback above, live below) would not fix this: as long as the split is a layout mutation, `rebuildDOM()` recreates the live pane anyway.
 
-Implementation notes:
+The fix is not to patch the rebuild but to change the model: the temporary scrollback is not a pane, it is ephemeral state of one pane.
 
-1. do not call the existing persistent `Split Down` action directly
-2. model the auto-created pane as a special temporary split type
-3. prevent nested temporary splits from the temporary live pane
-4. preserve the existing renderer behavior for ANSI, links, buttons, command hints, and pruning
-5. accept the temporary DOM overhead because this mode only exists while the user is reading older output
+## Stage 2: In-Pane Scrollback Region (current plan)
+
+### Model
+
+The scrollback/search view is a region inserted **inside the existing pane element**, between the header and the live output:
+
+```
+before:                       after open:
++- .pane ---------+           +- .pane ----------------+
+| header          |           | header (+search UI)    |
+|                 |           +------------------------+
+| outputEl        |           | scrollbackEl           |  <- flex-basis from saved ratio
+| flex: 1         |           | overflow: auto         |
+|                 |           +------------------------+
+|                 |           | outputEl  flex: 1      |  <- same DOM node, just shrinks
++-----------------+           +------------------------+
+```
+
+`.pane` is already a flex column and `.pane-output` is `flex: 1`, so inserting `scrollbackEl` with a `flex-basis` shrinks the live output geometrically without recreating it. No layout-model mutation happens at all.
+
+### Behavior
+
+1. open: `insertBefore(scrollbackEl, outputEl)`, then re-stick the live output to bottom (`scrollTop = scrollHeight`)
+2. close: `scrollbackEl.remove()`, then re-stick the live output to bottom
+3. the live output element is never rebuilt, re-rendered, or detached — no flicker by construction
+4. the single pane header stays on top and controls both regions
+5. the region is in-memory only; the layout model and `pane-layout` in `localStorage` are untouched by design
+6. the region height ratio is remembered per buffer via the existing app-level preference key (`readLiveSplitRatio`)
+7. v1 may ship with a fixed ratio; a drag divider between the regions is a follow-up
+8. a temporary-live region cannot be nested (the region has no header/controls of its own)
+
+### Performance rules
+
+1. the scrollback region renders a window capped by `maxRenderedLines`, extended backward only as far as the oldest match of an executed query (bounded overall by the in-memory buffer cap `maxRenderedLines + pruneRenderedLines`); match counting scans the full in-memory buffer, but the DOM holds only the window
+2. new entries are appended to the scrollback region incrementally via the existing `createEntryDOM` path, with match highlighting applied only to the new entries; `current/total` is updated by addition, not recount
+3. a full scrollback re-render happens only when the search query is (re-)executed
+4. the live region below never participates in search: no highlighting, no re-render on message — the hot append path stays untouched
+
+### Migration / removal
+
+Replacing Stage 1 deletes code rather than adding it:
+
+1. remove `isTemporaryLive` / `temporaryLiveFor` from `PaneNode` and all special-casing in `rebuildDOM`, `renderPane`, `removePane`
+2. remove `toggleTemporaryLiveSplit`, `collapseTemporaryLiveSplit`, `findTemporaryLivePane`, `hasTemporaryLiveSplit` survivor logic
+3. remove `maybeAutoEnableSearchSplit` and its nested `setTimeout` re-checks (obsoleted by explicit search execution, see below)
+4. the split toggle button in the pane header now opens/closes the scrollback region instead of creating a pane
+5. port existing temporary-split and search tests to the region model; behaviors like "live view survives close" become trivially true
 
 ## PageUp Scrollback Mode
 
-When the user enters scrollback mode, the buffer should split horizontally into two regions:
-
-1. upper region: scrollback/history view
-2. lower region: pinned live tail that continues showing new incoming messages
+`PageUp` opens the same in-pane scrollback region (no search query) and scrolls it upward.
 
 Behavior:
 
-1. `PageUp` enters scrollback mode and scrolls the upper region upward
-2. `PageDown` scrolls the upper region downward
-3. the lower region stays attached to the live stream
-4. new MUD output continues to appear in the lower live region
-5. leaving scrollback mode returns to the normal single live buffer view
-6. `End`, `Esc`, or an explicit UI control may exit scrollback mode
+1. `PageUp` opens the region if closed and scrolls the scrollback region upward
+2. `PageDown` scrolls the scrollback region downward
+3. the lower live region stays attached to the live stream
+4. `End`, `Esc`, or the header toggle closes the region and returns to the normal single live view
 
 Shortcuts must not override active profile hotkeys. If a current profile binds `PageUp`, `PageDown`, `End`, or `Esc`, the profile hotkey wins and the app scrollback shortcut is disabled for that key. The explicit pane toggle remains available even when a shortcut is occupied.
 
-The split should preserve playability: the user can still see fresh combat/chat/output while reviewing recent history above.
-
 ## Buffer-Local Search
 
-Add search inside the active buffer instead of relying on browser `Ctrl+F`.
+Search inside the active buffer instead of relying on browser `Ctrl+F`. Runs in the scrollback region.
 
-Behavior:
+### Execution model: explicit, not live
+
+Typing in the search input changes only the query string — it triggers no buffer scan and no render. Search executes explicitly:
+
+1. `⌕` in the pane header opens the search input (UI only; nothing is scanned or split yet)
+2. `Enter` or the search button executes the query: matches are counted, and if there are matches the scrollback region opens (if closed), highlights render, and the view jumps to the newest match
+3. after execution, `Enter` moves to the next older match (search walks backward through history); `Shift+Enter` moves to the next newer match; the `↑`/`↓` buttons navigate the same way with wrapping (`↑` = older/upper, `↓` = newer/lower); navigation only swaps the strong-highlight class — the scrollback DOM is not re-rendered
+4. `Esc` closes search
+5. an empty query or a query with zero matches shows `0/0` and does not open the region
+6. editing the query after an executed search marks the current count/highlights as stale (e.g., dimmed count) until the next `Enter`
+7. closing the search UI closes a search-opened region; a manually-toggled region stays open
+
+Live-as-you-type search (with debounce) is a possible later enhancement; nothing in the model prevents it.
+
+### Semantics (unchanged from v1)
 
 1. search is scoped to one pane's current MUD buffer, not the whole browser page
 2. matches are found within in-memory live buffer history only; older archive search remains in Settings -> Logs
 3. search is always case-insensitive, including Cyrillic
-4. search is based on ANSI-stripped MUD output text from `LogEntry.text` after runtime substitutions/replacements
+4. search is based on ANSI-stripped MUD output text from `LogEntry.text` after runtime substitutions/replacements, and matches across ANSI style boundaries
 5. search does not match command hints or trigger button labels appended to output lines
-6. query changes select the newest/lower match by default and show a `current/total` count
-7. navigation supports wrapping previous/next match movement, where `↑` means older/upper and `↓` means newer/lower
-8. all matches are weakly highlighted and the current match is strongly highlighted
-9. opening search on the `main` buffer only opens the search UI; it does not split until the query has matches
-10. a `main` buffer search auto-enables the temporary mini-split only when the trimmed query is non-empty, total matches are greater than zero, and the source pane is not already split
-11. empty queries and no-result searches do not auto-enable mini-split
-12. opening/searching auxiliary buffers does not auto-enable mini-split; the user may toggle it manually
-13. browser `Ctrl+F` may remain available, but the app provides its own buffer search control in the pane header
-
-Current UX note: closing the search UI intentionally leaves any search-created `main` mini-split open. Changing a successful search to a no-result query also leaves an existing mini-split open. Whether search close/no-results should also close an auto-opened split is left for usage evaluation.
-
-Possible shortcuts:
-
-1. `/` or `Ctrl+F` opens buffer-local search if it can be done without fighting browser behavior
-2. `Enter` / `Shift+Enter` move next/previous
-3. `Esc` closes search
-
-Exact shortcut choices can be decided during implementation.
+6. executing a query selects the newest/lower match by default and shows a `current/total` count
+7. all matches are weakly highlighted and the current match is strongly highlighted
+8. browser `Ctrl+F` may remain available, but the app provides its own buffer search control in the pane header
 
 ## Relationship To Admin Log Browsing
 
@@ -119,13 +148,15 @@ If the user searches beyond loaded live history, the UI may offer an "Open full 
 3. loading the entire session log into the live DOM
 4. complex search query language
 5. analytics-style filtering
+6. keyed/incremental `rebuildDOM()` for persistent layout operations — valuable on its own (pane add/remove and column drag also flicker today) but orthogonal to this plan; tracked separately
 
 ## Acceptance Criteria
 
-1. `PageUp` lets the user review older live-buffer lines without losing sight of new incoming output.
-2. In scrollback mode, the buffer is split horizontally into scrollback and live-tail regions.
-3. The lower live-tail region continues receiving new messages.
-4. The user can exit scrollback mode and return to the normal live view.
-5. The user can search inside the active buffer without browser-wide `Ctrl+F` noise.
-6. Search supports next/previous match navigation.
-7. The implementation does not disable pruning/virtualization safeguards or overload the live DOM.
+1. Opening and closing the scrollback region (via toggle, search, or `PageUp`) does not rebuild, re-render, or visibly flicker the live output; the live output element is the same DOM node before and after.
+2. The scrollback region lets the user review older live-buffer lines while new output keeps arriving in the live region below.
+3. Typing in the search input causes no rendering or buffer scanning; search work happens only on explicit execution.
+4. Executed search shows weak/strong highlighting, a `current/total` count, and supports wrapping next/previous navigation.
+5. Case-insensitive matching works for Cyrillic and across ANSI style boundaries.
+6. While search is active, new messages append incrementally to both regions; no full pane re-render occurs per message.
+7. The scrollback region DOM stays within the in-memory buffer cap (`maxRenderedLines`, extended only to reach older matches); pruning/virtualization safeguards remain in force.
+8. The layout model and `pane-layout` persistence are unaffected by opening/closing the region.

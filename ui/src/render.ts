@@ -31,8 +31,6 @@ const ansiEscapePattern = /\x1b\[[0-?]*[ -/]*[@-~]/g;
 interface PaneNode {
   id: string;
   buffer: string;
-  isTemporaryLive?: boolean;
-  temporaryLiveFor?: string;
 }
 
 interface ColumnNode {
@@ -49,8 +47,12 @@ interface Layout {
 interface SearchState {
   open: boolean;
   query: string;
+  executedQuery: string;
+  stale: boolean;
   current: number;
   total: number;
+  regionOpen: boolean;
+  regionOpenedBySearch: boolean;
 }
 
 interface RenderedPane {
@@ -62,6 +64,12 @@ interface RenderedPane {
   searchInputEl?: HTMLInputElement;
   searchCountEl?: HTMLElement;
   ansiUp: AnsiUp;
+  // In-pane scrollback region: present while open. The live outputEl is never
+  // rebuilt when the region opens or closes.
+  scrollbackEl?: HTMLElement | undefined;
+  scrollbackOutputEl?: HTMLElement | undefined;
+  scrollbackDividerEl?: HTMLElement | undefined;
+  scrollbackAnsiUp?: AnsiUp | undefined;
 }
 
 export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand, requestVariables, requestGroups, toggleGroup, onButtonRendered, state }: RendererDeps) {
@@ -115,38 +123,8 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     updateAllSelects();
   }
 
-  function persistentLayoutSnapshot(): Layout {
-    return {
-      columns: layout.columns.map((col) => {
-        const panes: PaneNode[] = [];
-        const rowSizes: number[] = [];
-
-        col.panes.forEach((pane, idx) => {
-          const size = col.rowSizes[idx] ?? 0;
-          if (pane.isTemporaryLive) {
-            const sourceIdx = panes.findIndex((candidate) => candidate.id === pane.temporaryLiveFor);
-            if (sourceIdx >= 0) {
-              rowSizes[sourceIdx] = (rowSizes[sourceIdx] ?? 0) + size;
-            }
-            return;
-          }
-
-          panes.push({ id: pane.id, buffer: pane.buffer });
-          rowSizes.push(size);
-        });
-
-        if (panes.length === 0) {
-          return { id: col.id, panes: [{ id: generateId('pane'), buffer: 'main' }], rowSizes: [100] };
-        }
-
-        return { id: col.id, panes, rowSizes };
-      }),
-      colSizes: [...layout.colSizes],
-    };
-  }
-
   function saveLayout() {
-    localStorage.setItem('pane-layout', JSON.stringify(persistentLayoutSnapshot()));
+    localStorage.setItem('pane-layout', JSON.stringify(layout));
   }
 
   function loadLayout() {
@@ -197,162 +175,168 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     let searchInputEl: HTMLInputElement | undefined;
     let searchCountEl: HTMLElement | undefined;
 
-    if (!node.isTemporaryLive) {
-      const headerEl = document.createElement('div');
-      headerEl.className = 'pane-header';
+    const headerEl = document.createElement('div');
+    headerEl.className = 'pane-header';
 
-      selectEl = document.createElement('select');
-      selectEl.className = 'pane-select';
-      selectEl.addEventListener('change', () => {
-        node.buffer = selectEl!.value;
-        const collapsed = collapseTemporaryLiveSplit(node.id, 'source');
-        saveLayout();
-        updateAllSelects();
-        renderPaneBuffer(node.id);
-        setTimeout(() => scrollPaneToBottom(node.id), 0);
-        if (collapsed) return;
-      });
-      headerEl.appendChild(selectEl);
+    selectEl = document.createElement('select');
+    selectEl.className = 'pane-select';
+    selectEl.addEventListener('change', () => {
+      node.buffer = selectEl!.value;
+      closeScrollbackRegion(node.id);
+      resetPaneSearch(node.id);
+      saveLayout();
+      updateAllSelects();
+      renderPaneBuffer(node.id);
+      setTimeout(() => scrollPaneToBottom(node.id), 0);
+    });
+    headerEl.appendChild(selectEl);
 
-      const liveSplitBtn = document.createElement('button');
-      liveSplitBtn.className = 'pane-btn pane-live-split-btn';
-      liveSplitBtn.type = 'button';
-      liveSplitBtn.textContent = '⇵';
-      liveSplitBtn.title = 'Toggle live split';
-      liveSplitBtn.setAttribute('aria-label', 'Toggle live split');
-      liveSplitBtn.dataset['paneId'] = node.id;
-      const hasLiveSplit = hasTemporaryLiveSplit(node.id);
-      if (hasLiveSplit) {
-        liveSplitBtn.classList.add('active');
-      }
-      liveSplitBtn.addEventListener('click', () => toggleTemporaryLiveSplit(node.id));
-      headerEl.appendChild(liveSplitBtn);
-
-      const searchButton = document.createElement('button');
-      searchButton.className = 'pane-btn pane-search-toggle';
-      searchButton.type = 'button';
-      searchButton.textContent = '⌕';
-      searchButton.title = 'Search this buffer';
-      searchButton.setAttribute('aria-label', 'Search this buffer');
-      headerEl.appendChild(searchButton);
-
-      const searchControls = document.createElement('div');
-      searchControls.className = 'pane-search-controls';
-      searchInputEl = document.createElement('input');
-      searchInputEl.className = 'pane-search-input';
-      searchInputEl.type = 'search';
-      searchInputEl.placeholder = 'Search buffer';
-      const olderBtn = document.createElement('button');
-      olderBtn.className = 'pane-btn pane-search-prev';
-      olderBtn.type = 'button';
-      olderBtn.textContent = '↑';
-      olderBtn.title = 'Older match';
-      const newerBtn = document.createElement('button');
-      newerBtn.className = 'pane-btn pane-search-next';
-      newerBtn.type = 'button';
-      newerBtn.textContent = '↓';
-      newerBtn.title = 'Newer match';
-      searchCountEl = document.createElement('span');
-      searchCountEl.className = 'pane-search-count';
-      const closeSearchBtn = document.createElement('button');
-      closeSearchBtn.className = 'pane-btn pane-search-close';
-      closeSearchBtn.type = 'button';
-      closeSearchBtn.textContent = '×';
-      closeSearchBtn.title = 'Close search';
-      searchControls.appendChild(searchInputEl);
-      searchControls.appendChild(olderBtn);
-      searchControls.appendChild(newerBtn);
-      searchControls.appendChild(searchCountEl);
-      searchControls.appendChild(closeSearchBtn);
-      headerEl.appendChild(searchControls);
-
-      const searchState = searchStates.get(node.id);
-      searchInputEl.value = searchState?.query || '';
-      searchControls.hidden = !searchState?.open;
-      searchButton.classList.toggle('active', !!searchState?.open);
-      searchButton.addEventListener('click', () => openPaneSearch(node.id));
-      searchInputEl.addEventListener('input', () => updatePaneSearchQuery(node.id, searchInputEl!.value));
-      olderBtn.addEventListener('click', () => navigatePaneSearch(node.id, -1));
-      newerBtn.addEventListener('click', () => navigatePaneSearch(node.id, 1));
-      closeSearchBtn.addEventListener('click', () => closePaneSearch(node.id));
-
-      const actionsEl = document.createElement('div');
-      actionsEl.className = 'pane-actions';
-
-      const isTopLeftPane = layout.columns[0]?.panes[0]?.id === node.id;
-      if (fontSizeControls && isTopLeftPane) {
-        actionsEl.appendChild(fontSizeControls);
-      }
-
-      // Dropdown for split/close
-      const menuBtn = document.createElement('button');
-      menuBtn.className = 'pane-btn';
-      menuBtn.innerHTML = '⋮';
-      
-      const menuEl = document.createElement('div');
-      menuEl.className = 'dropdown-menu';
-      menuEl.style.display = 'none';
-
-      const splitDownBtn = document.createElement('button');
-      splitDownBtn.className = 'dropdown-item';
-      splitDownBtn.textContent = 'Split Down';
-      splitDownBtn.disabled = hasLiveSplit;
-      splitDownBtn.addEventListener('click', () => {
-        if (hasTemporaryLiveSplit(node.id)) return;
-        menuEl.style.display = 'none';
-        addPaneBelow(node.id);
-      });
-
-      const splitRightBtn = document.createElement('button');
-      splitRightBtn.className = 'dropdown-item';
-      splitRightBtn.textContent = 'Split Right';
-      splitRightBtn.disabled = hasLiveSplit;
-      splitRightBtn.addEventListener('click', () => {
-        if (hasTemporaryLiveSplit(node.id)) return;
-        menuEl.style.display = 'none';
-        addColumnRight(node.id);
-      });
-
-      const closeBtn = document.createElement('button');
-      closeBtn.className = 'dropdown-item danger';
-      closeBtn.textContent = 'Close';
-      closeBtn.disabled = hasLiveSplit;
-      closeBtn.addEventListener('click', () => {
-        if (hasTemporaryLiveSplit(node.id)) return;
-        menuEl.style.display = 'none';
-        removePane(node.id);
-      });
-
-      menuEl.appendChild(splitDownBtn);
-      menuEl.appendChild(splitRightBtn);
-      menuEl.appendChild(closeBtn);
-
-      menuBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        const isVisible = menuEl.style.display === 'block';
-        document.querySelectorAll('.dropdown-menu').forEach((el: any) => el.style.display = 'none');
-        menuEl.style.display = isVisible ? 'none' : 'block';
-      });
-
-      // Close menu on outside click
-      document.addEventListener('click', () => {
-        menuEl.style.display = 'none';
-      });
-
-      // We only show Close if it's not the absolutely last pane
-      const totalPanes = layout.columns.reduce((sum, col) => sum + col.panes.length, 0);
-      if (totalPanes <= 1) {
-        closeBtn.style.display = 'none';
-      }
-
-      const menuWrapper = document.createElement('div');
-      menuWrapper.style.position = 'relative';
-      menuWrapper.appendChild(menuBtn);
-      menuWrapper.appendChild(menuEl);
-      actionsEl.appendChild(menuWrapper);
-      headerEl.appendChild(actionsEl);
-      el.appendChild(headerEl);
+    const liveSplitBtn = document.createElement('button');
+    liveSplitBtn.className = 'pane-btn pane-live-split-btn';
+    liveSplitBtn.type = 'button';
+    liveSplitBtn.textContent = '⇵';
+    liveSplitBtn.title = 'Toggle scrollback split';
+    liveSplitBtn.setAttribute('aria-label', 'Toggle scrollback split');
+    liveSplitBtn.dataset['paneId'] = node.id;
+    if (searchStates.get(node.id)?.regionOpen) {
+      liveSplitBtn.classList.add('active');
     }
+    liveSplitBtn.addEventListener('click', () => toggleScrollbackRegion(node.id));
+    headerEl.appendChild(liveSplitBtn);
+
+    const searchButton = document.createElement('button');
+    searchButton.className = 'pane-btn pane-search-toggle';
+    searchButton.type = 'button';
+    searchButton.textContent = '⌕';
+    searchButton.title = 'Search this buffer';
+    searchButton.setAttribute('aria-label', 'Search this buffer');
+    headerEl.appendChild(searchButton);
+
+    const searchControls = document.createElement('div');
+    searchControls.className = 'pane-search-controls';
+    searchInputEl = document.createElement('input');
+    searchInputEl.className = 'pane-search-input';
+    searchInputEl.type = 'search';
+    searchInputEl.placeholder = 'Search buffer';
+    const olderBtn = document.createElement('button');
+    olderBtn.className = 'pane-btn pane-search-prev';
+    olderBtn.type = 'button';
+    olderBtn.textContent = '↑';
+    olderBtn.title = 'Older match';
+    const newerBtn = document.createElement('button');
+    newerBtn.className = 'pane-btn pane-search-next';
+    newerBtn.type = 'button';
+    newerBtn.textContent = '↓';
+    newerBtn.title = 'Newer match';
+    searchCountEl = document.createElement('span');
+    searchCountEl.className = 'pane-search-count';
+    const closeSearchBtn = document.createElement('button');
+    closeSearchBtn.className = 'pane-btn pane-search-close';
+    closeSearchBtn.type = 'button';
+    closeSearchBtn.textContent = '×';
+    closeSearchBtn.title = 'Close search';
+    searchControls.appendChild(searchInputEl);
+    searchControls.appendChild(olderBtn);
+    searchControls.appendChild(newerBtn);
+    searchControls.appendChild(searchCountEl);
+    searchControls.appendChild(closeSearchBtn);
+    headerEl.appendChild(searchControls);
+
+    const searchState = searchStates.get(node.id);
+    searchInputEl.value = searchState?.query || '';
+    searchControls.hidden = !searchState?.open;
+    searchButton.classList.toggle('active', !!searchState?.open);
+    searchButton.addEventListener('click', () => openOrExecutePaneSearch(node.id));
+    searchInputEl.addEventListener('input', () => {
+      const search = ensureSearchState(node.id);
+      search.query = searchInputEl!.value;
+      search.stale = search.query.trim() !== search.executedQuery;
+      const pane = renderedPanes.get(node.id);
+      if (pane) updateSearchControls(pane);
+    });
+    searchInputEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        navigatePaneSearch(node.id, e.shiftKey ? 1 : -1);
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closePaneSearch(node.id);
+      }
+    });
+    olderBtn.addEventListener('click', () => navigatePaneSearch(node.id, -1));
+    newerBtn.addEventListener('click', () => navigatePaneSearch(node.id, 1));
+    closeSearchBtn.addEventListener('click', () => closePaneSearch(node.id));
+
+    const actionsEl = document.createElement('div');
+    actionsEl.className = 'pane-actions';
+
+    const isTopLeftPane = layout.columns[0]?.panes[0]?.id === node.id;
+    if (fontSizeControls && isTopLeftPane) {
+      actionsEl.appendChild(fontSizeControls);
+    }
+
+    // Dropdown for split/close
+    const menuBtn = document.createElement('button');
+    menuBtn.className = 'pane-btn';
+    menuBtn.innerHTML = '⋮';
+
+    const menuEl = document.createElement('div');
+    menuEl.className = 'dropdown-menu';
+    menuEl.style.display = 'none';
+
+    const splitDownBtn = document.createElement('button');
+    splitDownBtn.className = 'dropdown-item';
+    splitDownBtn.textContent = 'Split Down';
+    splitDownBtn.addEventListener('click', () => {
+      menuEl.style.display = 'none';
+      addPaneBelow(node.id);
+    });
+
+    const splitRightBtn = document.createElement('button');
+    splitRightBtn.className = 'dropdown-item';
+    splitRightBtn.textContent = 'Split Right';
+    splitRightBtn.addEventListener('click', () => {
+      menuEl.style.display = 'none';
+      addColumnRight(node.id);
+    });
+
+    const closeBtn = document.createElement('button');
+    closeBtn.className = 'dropdown-item danger';
+    closeBtn.textContent = 'Close';
+    closeBtn.addEventListener('click', () => {
+      menuEl.style.display = 'none';
+      removePane(node.id);
+    });
+
+    menuEl.appendChild(splitDownBtn);
+    menuEl.appendChild(splitRightBtn);
+    menuEl.appendChild(closeBtn);
+
+    menuBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const isVisible = menuEl.style.display === 'block';
+      document.querySelectorAll('.dropdown-menu').forEach((el: any) => el.style.display = 'none');
+      menuEl.style.display = isVisible ? 'none' : 'block';
+    });
+
+    // Close menu on outside click
+    document.addEventListener('click', () => {
+      menuEl.style.display = 'none';
+    });
+
+    // We only show Close if it's not the absolutely last pane
+    const totalPanes = layout.columns.reduce((sum, col) => sum + col.panes.length, 0);
+    if (totalPanes <= 1) {
+      closeBtn.style.display = 'none';
+    }
+
+    const menuWrapper = document.createElement('div');
+    menuWrapper.style.position = 'relative';
+    menuWrapper.appendChild(menuBtn);
+    menuWrapper.appendChild(menuEl);
+    actionsEl.appendChild(menuWrapper);
+    headerEl.appendChild(actionsEl);
+    el.appendChild(headerEl);
 
     const bodyEl = document.createElement('div');
     bodyEl.className = 'pane-body';
@@ -383,16 +367,20 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     const paneAnsiUp = new AnsiUp();
     paneAnsiUp.use_classes = true;
 
-    if (node.isTemporaryLive) {
-      el.classList.add('pane_live-temporary');
-      outputEl.classList.add('pane-output_live-temporary');
-    }
+    const pane: RenderedPane = { node, el, outputEl, scrollButtonEl, selectEl, searchInputEl, searchCountEl, ansiUp: paneAnsiUp };
+    renderedPanes.set(node.id, pane);
 
-    renderedPanes.set(node.id, { node, el, outputEl, scrollButtonEl, selectEl, searchInputEl, searchCountEl, ansiUp: paneAnsiUp });
+    // Restore an open scrollback region across layout rebuilds.
+    if (searchState?.regionOpen) {
+      createScrollbackRegionDOM(pane);
+    }
 
     // Initial render
     // Defer slight to ensure it's in DOM
-    setTimeout(() => renderPaneBuffer(node.id), 0);
+    setTimeout(() => {
+      renderPaneBuffer(node.id);
+      renderScrollbackRegion(node.id);
+    }, 0);
 
     return el;
   }
@@ -420,14 +408,6 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     rebuildDOM();
   }
 
-  function findPanePosition(paneId: string): { col: ColumnNode; colIdx: number; paneIdx: number } | null {
-    const colIdx = layout.columns.findIndex(c => c.panes.some(p => p.id === paneId));
-    if (colIdx === -1) return null;
-    const col = layout.columns[colIdx]!;
-    const paneIdx = col.panes.findIndex(p => p.id === paneId);
-    return { col, colIdx, paneIdx };
-  }
-
   function liveSplitRatioKey(buffer: string): string {
     return `liveSplitRatio:v1:${buffer || 'main'}`;
   }
@@ -444,116 +424,99 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     localStorage.setItem(liveSplitRatioKey(buffer), String(clamped));
   }
 
-  function persistLiveSplitRatioForRow(col: ColumnNode, index: number) {
-    const first = col.panes[index];
-    const second = col.panes[index + 1];
-    if (!first || !second) return;
+  function createScrollbackRegionDOM(pane: RenderedPane) {
+    if (pane.scrollbackEl) return;
 
-    let source: PaneNode | undefined;
-    let live: PaneNode | undefined;
-    let liveSize = 0;
-    const firstSize = col.rowSizes[index] ?? 0;
-    const secondSize = col.rowSizes[index + 1] ?? 0;
+    const regionEl = document.createElement('div');
+    regionEl.className = 'pane-scrollback';
+    const liveRatio = readLiveSplitRatio(pane.node.buffer);
+    regionEl.style.flexBasis = `${100 - liveRatio}%`;
 
-    if (second.isTemporaryLive && second.temporaryLiveFor === first.id) {
-      source = first;
-      live = second;
-      liveSize = secondSize;
-    } else if (first.isTemporaryLive && first.temporaryLiveFor === second.id) {
-      source = second;
-      live = first;
-      liveSize = firstSize;
-    }
+    const outputEl = document.createElement('div');
+    outputEl.className = 'pane-output pane-output_scrollback';
+    regionEl.appendChild(outputEl);
 
-    if (!source || !live) return;
-    const total = firstSize + secondSize;
-    if (total <= 0) return;
-    saveLiveSplitRatio(source.buffer, (liveSize / total) * 100);
+    const dividerEl = document.createElement('div');
+    dividerEl.className = 'pane-scrollback-divider';
+    dividerEl.addEventListener('pointerdown', (e) => {
+      dividerEl.setPointerCapture(e.pointerId);
+      const totalPixels = pane.el.clientHeight || 1;
+      const startBasis = parseFloat(regionEl.style.flexBasis) || 50;
+      const startPos = e.clientY;
+
+      const onMove = (moveEvent: PointerEvent) => {
+        const deltaPercent = ((moveEvent.clientY - startPos) / totalPixels) * 100;
+        const scrollbackPercent = Math.min(90, Math.max(10, startBasis + deltaPercent));
+        regionEl.style.flexBasis = `${scrollbackPercent}%`;
+      };
+
+      const onUp = () => {
+        dividerEl.releasePointerCapture(e.pointerId);
+        dividerEl.removeEventListener('pointermove', onMove);
+        dividerEl.removeEventListener('pointerup', onUp);
+        const scrollbackPercent = parseFloat(regionEl.style.flexBasis) || 50;
+        saveLiveSplitRatio(pane.node.buffer, 100 - scrollbackPercent);
+        pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
+      };
+
+      dividerEl.addEventListener('pointermove', onMove);
+      dividerEl.addEventListener('pointerup', onUp);
+    });
+
+    const bodyEl = pane.el.querySelector('.pane-body');
+    pane.el.insertBefore(regionEl, bodyEl);
+    pane.el.insertBefore(dividerEl, bodyEl);
+
+    const scrollbackAnsiUp = new AnsiUp();
+    scrollbackAnsiUp.use_classes = true;
+
+    pane.scrollbackEl = regionEl;
+    pane.scrollbackOutputEl = outputEl;
+    pane.scrollbackDividerEl = dividerEl;
+    pane.scrollbackAnsiUp = scrollbackAnsiUp;
   }
 
-  function hasTemporaryLiveSplit(sourcePaneId: string): boolean {
-    return layout.columns.some(col => col.panes.some(pane => pane.isTemporaryLive && pane.temporaryLiveFor === sourcePaneId));
+  function openScrollbackRegion(paneId: string, openedBySearch: boolean) {
+    const pane = renderedPanes.get(paneId);
+    if (!pane || pane.scrollbackEl) return;
+    const search = ensureSearchState(paneId);
+    search.regionOpen = true;
+    search.regionOpenedBySearch = openedBySearch;
+    createScrollbackRegionDOM(pane);
+    renderScrollbackRegion(paneId);
+    // The live output is untouched DOM: just re-stick it to the bottom after it shrank.
+    pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
+    updateScrollButtonVisibility(pane);
+    pane.el.querySelector('.pane-live-split-btn')?.classList.add('active');
   }
 
-  function findTemporaryLivePane(sourcePaneId: string): { col: ColumnNode; pane: PaneNode; paneIdx: number } | null {
-    for (const col of layout.columns) {
-      const paneIdx = col.panes.findIndex(pane => pane.isTemporaryLive && pane.temporaryLiveFor === sourcePaneId);
-      if (paneIdx !== -1) {
-        return { col, pane: col.panes[paneIdx]!, paneIdx };
-      }
+  function closeScrollbackRegion(paneId: string) {
+    const search = searchStates.get(paneId);
+    if (search) {
+      search.regionOpen = false;
+      search.regionOpenedBySearch = false;
     }
-    return null;
+    const pane = renderedPanes.get(paneId);
+    if (!pane || !pane.scrollbackEl) return;
+    pane.scrollbackEl.remove();
+    pane.scrollbackDividerEl?.remove();
+    pane.scrollbackEl = undefined;
+    pane.scrollbackOutputEl = undefined;
+    pane.scrollbackDividerEl = undefined;
+    pane.scrollbackAnsiUp = undefined;
+    pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
+    updateScrollButtonVisibility(pane);
+    pane.el.querySelector('.pane-live-split-btn')?.classList.remove('active');
   }
 
-  function collapseTemporaryLiveSplit(sourcePaneId: string, survivor: 'source' | 'live'): boolean {
-    const temporaryLive = findTemporaryLivePane(sourcePaneId);
-    if (!temporaryLive) return false;
-
-    const col = temporaryLive.col;
-    const livePaneID = temporaryLive.pane.id;
-    const sourceIdx = col.panes.findIndex(pane => pane.id === sourcePaneId);
-    const liveIdx = col.panes.findIndex(pane => pane.id === livePaneID);
-    if (liveIdx === -1) return false;
-
-    const sourceSize = sourceIdx !== -1 ? col.rowSizes[sourceIdx] ?? 0 : 0;
-    const liveSize = col.rowSizes[liveIdx] ?? 0;
-    const combinedSize = sourceSize + liveSize || 100;
-
-    if (survivor === 'source' && sourceIdx !== -1) {
-      col.panes.splice(liveIdx, 1);
-      col.rowSizes.splice(liveIdx, 1);
-      const adjustedSourceIdx = col.panes.findIndex(pane => pane.id === sourcePaneId);
-      if (adjustedSourceIdx !== -1) {
-        col.rowSizes[adjustedSourceIdx] = combinedSize;
-      }
-      saveLayout();
-      rebuildDOM();
-      return true;
+  function toggleScrollbackRegion(paneId: string) {
+    const pane = renderedPanes.get(paneId);
+    if (!pane) return;
+    if (pane.scrollbackEl) {
+      closeScrollbackRegion(paneId);
+    } else {
+      openScrollbackRegion(paneId, false);
     }
-
-    if (sourceIdx !== -1) {
-      col.panes.splice(sourceIdx, 1);
-      col.rowSizes.splice(sourceIdx, 1);
-    }
-
-    const adjustedLiveIdx = col.panes.findIndex(pane => pane.id === livePaneID);
-    if (adjustedLiveIdx !== -1) {
-      const livePane = col.panes[adjustedLiveIdx]!;
-      delete livePane.isTemporaryLive;
-      delete livePane.temporaryLiveFor;
-      col.rowSizes[adjustedLiveIdx] = combinedSize;
-    }
-
-    saveLayout();
-    rebuildDOM();
-    setTimeout(() => scrollPaneToBottom(livePaneID), 0);
-    return true;
-  }
-
-  function toggleTemporaryLiveSplit(sourcePaneId: string) {
-    const pos = findPanePosition(sourcePaneId);
-    if (!pos) return;
-    const sourcePane = pos.col.panes[pos.paneIdx]!;
-    if (sourcePane.isTemporaryLive) return;
-
-    if (collapseTemporaryLiveSplit(sourcePaneId, 'live')) {
-      return;
-    }
-
-    const oldSize = pos.col.rowSizes[pos.paneIdx]!;
-    const liveRatio = readLiveSplitRatio(sourcePane.buffer);
-    pos.col.rowSizes[pos.paneIdx] = oldSize * ((100 - liveRatio) / 100);
-    const livePane: PaneNode = {
-      id: generateId('pane'),
-      buffer: sourcePane.buffer,
-      isTemporaryLive: true,
-      temporaryLiveFor: sourcePaneId,
-    };
-    pos.col.panes.splice(pos.paneIdx + 1, 0, livePane);
-    pos.col.rowSizes.splice(pos.paneIdx + 1, 0, oldSize * (liveRatio / 100));
-
-    rebuildDOM();
-    setTimeout(() => scrollPaneToBottom(livePane.id), 0);
   }
 
   function addPaneBelow(sourcePaneId: string) {
@@ -578,21 +541,12 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     const col = layout.columns[colIdx]!;
 
     const paneIdx = col.panes.findIndex(p => p.id === paneId);
-    const pane = col.panes[paneIdx]!;
-
-    if (pane.isTemporaryLive && pane.temporaryLiveFor) {
-      collapseTemporaryLiveSplit(pane.temporaryLiveFor, 'source');
-      return;
-    }
-
-    if (collapseTemporaryLiveSplit(paneId, 'live')) {
-      return;
-    }
 
     // Distribute size to the previous pane (or next if first)
     const sizeToDistribute = col.rowSizes[paneIdx]!;
     col.panes.splice(paneIdx, 1);
     col.rowSizes.splice(paneIdx, 1);
+    searchStates.delete(paneId);
 
     if (col.panes.length > 0) {
       const targetIdx = Math.max(0, paneIdx - 1);
@@ -621,11 +575,11 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   function makeDragHandle(kind: 'col' | 'row', parent: Layout | ColumnNode, index: number): HTMLElement {
     const handle = document.createElement('div');
     handle.className = kind === 'col' ? 'col-resize-handle' : 'row-resize-handle';
-    
+
     handle.addEventListener('pointerdown', (e) => {
       handle.setPointerCapture(e.pointerId);
       const sizes = kind === 'col' ? (parent as Layout).colSizes : (parent as ColumnNode).rowSizes;
-      
+
       const startSizeA = sizes[index]!;
       const startSizeB = sizes[index + 1]!;
       const totalPixels = kind === 'col' ? elements.panesContainer.clientWidth : (handle.parentElement!.clientHeight);
@@ -668,9 +622,6 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
         handle.releasePointerCapture(e.pointerId);
         handle.removeEventListener('pointermove', onMove);
         handle.removeEventListener('pointerup', onUp);
-        if (kind === 'row') {
-          persistLiveSplitRatioForRow(parent as ColumnNode, index);
-        }
         saveLayout();
       };
 
@@ -736,100 +687,113 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   function ensureSearchState(paneId: string): SearchState {
     const existing = searchStates.get(paneId);
     if (existing) return existing;
-    const state: SearchState = { open: false, query: '', current: 0, total: 0 };
+    const state: SearchState = { open: false, query: '', executedQuery: '', stale: false, current: 0, total: 0, regionOpen: false, regionOpenedBySearch: false };
     searchStates.set(paneId, state);
     return state;
-  }
-
-  function refreshSearchStateForPane(pane: RenderedPane, counts?: number[]) {
-    const search = searchStates.get(pane.node.id);
-    if (!search) return;
-    const data = getBufferData(pane.node.buffer);
-    const matchCounts = counts || entryMatchCounts(data, search.query.trim());
-    search.total = matchCounts.reduce((sum, count) => sum + count, 0);
-    if (!search.query.trim() || search.total === 0) {
-      search.current = 0;
-    } else if (search.current < 1 || search.current > search.total) {
-      search.current = search.total;
-    }
-    updateSearchControls(pane);
   }
 
   function updateSearchControls(pane: RenderedPane) {
     const search = searchStates.get(pane.node.id);
     if (!pane.searchInputEl || !pane.searchCountEl || !search) return;
-    pane.searchInputEl.value = search.query;
+    if (pane.searchInputEl.value !== search.query) {
+      pane.searchInputEl.value = search.query;
+    }
     const controls = pane.searchInputEl.closest<HTMLElement>('.pane-search-controls');
     const toggle = pane.el.querySelector<HTMLElement>('.pane-search-toggle');
     if (controls) controls.hidden = !search.open;
     toggle?.classList.toggle('active', search.open);
-    pane.searchCountEl.textContent = search.query.trim() ? `${search.current}/${search.total}` : '0/0';
+    pane.searchCountEl.textContent = `${search.current}/${search.total}`;
+    pane.searchCountEl.classList.toggle('stale', search.stale);
   }
 
-  function maybeAutoEnableSearchSplit(paneId: string) {
+  function openOrExecutePaneSearch(paneId: string) {
     const pane = renderedPanes.get(paneId);
-    const search = searchStates.get(paneId);
-    if (!pane || !search) return;
-    if (pane.node.buffer !== 'main') return;
-    if (!search.query.trim()) return;
-    if (search.total <= 0) return;
-    if (hasTemporaryLiveSplit(paneId)) return;
-
-    setTimeout(() => {
-      const currentPane = renderedPanes.get(paneId);
-      const currentSearch = searchStates.get(paneId);
-      if (!currentPane || !currentSearch) return;
-      if (currentPane.node.buffer !== 'main') return;
-      if (!currentSearch.query.trim() || currentSearch.total <= 0) return;
-      if (hasTemporaryLiveSplit(paneId)) return;
-
-      toggleTemporaryLiveSplit(paneId);
-      setTimeout(() => {
-        const rebuilt = renderedPanes.get(paneId);
-        if (rebuilt) {
-          refreshSearchStateForPane(rebuilt);
-          rebuilt.searchInputEl?.focus();
-          rebuilt.searchInputEl?.setSelectionRange(rebuilt.searchInputEl.value.length, rebuilt.searchInputEl.value.length);
-        }
-      }, 0);
-    }, 0);
-  }
-
-  function openPaneSearch(paneId: string) {
-    const pane = renderedPanes.get(paneId);
-    if (!pane || pane.node.isTemporaryLive) return;
+    if (!pane) return;
     const search = ensureSearchState(paneId);
-    search.open = true;
-    refreshSearchStateForPane(pane);
-    updateSearchControls(pane);
+    if (!search.open) {
+      search.open = true;
+      updateSearchControls(pane);
+      pane.searchInputEl?.focus();
+      return;
+    }
+    executePaneSearch(paneId);
     pane.searchInputEl?.focus();
   }
 
   function closePaneSearch(paneId: string) {
-    const search = ensureSearchState(paneId);
-    search.open = false;
     const pane = renderedPanes.get(paneId);
-    if (pane) {
-      updateSearchControls(pane);
-      renderPaneBuffer(paneId);
+    const search = ensureSearchState(paneId);
+    const regionWasSearchOpened = search.regionOpenedBySearch;
+    search.open = false;
+    search.stale = false;
+    search.executedQuery = '';
+    search.current = 0;
+    search.total = 0;
+    if (regionWasSearchOpened) {
+      closeScrollbackRegion(paneId);
+    } else if (pane?.scrollbackEl) {
+      renderScrollbackRegion(paneId);
     }
+    if (pane) updateSearchControls(pane);
   }
 
-  function updatePaneSearchQuery(paneId: string, query: string) {
+  function resetPaneSearch(paneId: string) {
+    const pane = renderedPanes.get(paneId);
     const search = ensureSearchState(paneId);
-    search.open = true;
-    search.query = query;
+    search.open = false;
+    search.query = '';
+    search.executedQuery = '';
+    search.stale = false;
     search.current = 0;
-    renderPaneBuffer(paneId);
-    maybeAutoEnableSearchSplit(paneId);
+    search.total = 0;
+    if (pane) updateSearchControls(pane);
+  }
+
+  // Explicit execution: typing only edits the query; this scans the buffer,
+  // opens the scrollback region when there are matches, and renders highlights.
+  function executePaneSearch(paneId: string) {
+    const pane = renderedPanes.get(paneId);
+    if (!pane) return;
+    const search = ensureSearchState(paneId);
+    const query = search.query.trim();
+    search.executedQuery = query;
+    search.stale = false;
+    const counts = query ? entryMatchCounts(getBufferData(pane.node.buffer), query) : [];
+    search.total = counts.reduce((sum, count) => sum + count, 0);
+    search.current = search.total;
+    if (query && search.total > 0 && !pane.scrollbackEl) {
+      openScrollbackRegion(paneId, true);
+    } else if (pane.scrollbackEl) {
+      renderScrollbackRegion(paneId);
+    }
+    updateSearchControls(pane);
   }
 
   function navigatePaneSearch(paneId: string, delta: -1 | 1) {
     const pane = renderedPanes.get(paneId);
     const search = ensureSearchState(paneId);
-    if (!pane || search.total === 0) return;
+    if (!pane) return;
+    if (search.query.trim() !== search.executedQuery) {
+      executePaneSearch(paneId);
+      return;
+    }
+    if (search.total === 0) return;
     search.current = ((search.current - 1 + delta + search.total) % search.total) + 1;
-    renderPaneBuffer(paneId);
+    setCurrentSearchMatch(pane, search.current);
+    updateSearchControls(pane);
+  }
+
+  // Navigation only swaps the strong-highlight class; the scrollback DOM is not re-rendered.
+  function setCurrentSearchMatch(pane: RenderedPane, ordinal: number) {
+    const container = pane.scrollbackOutputEl;
+    if (!container) return;
+    container.querySelectorAll('.buffer-search-current').forEach(el => el.classList.remove('buffer-search-current'));
+    const marks = container.querySelectorAll<HTMLElement>(`.buffer-search-match[data-search-ordinal="${ordinal}"]`);
+    marks.forEach(el => el.classList.add('buffer-search-current'));
+    const first = marks[0];
+    if (first && typeof first.scrollIntoView === 'function') {
+      first.scrollIntoView({ block: 'center' });
+    }
   }
 
   function highlightSearchMatches(root: HTMLElement, query: string, currentOrdinal: number, ordinalStart: number): number {
@@ -858,7 +822,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     let index = normalized.indexOf(needle);
     while (index !== -1) {
       ordinal++;
-      ranges.push({ start: index, end: index + query.length, ordinal });
+      ranges.push({ start: index, end: index + needle.length, ordinal });
       index = normalized.indexOf(needle, index + needle.length);
     }
     if (ranges.length === 0) return 0;
@@ -878,6 +842,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
         }
         const mark = document.createElement('mark');
         mark.className = range.ordinal === currentOrdinal ? 'buffer-search-match buffer-search-current' : 'buffer-search-match';
+        mark.dataset['searchOrdinal'] = String(range.ordinal);
         mark.textContent = text.slice(localStart, localEnd);
         fragment.appendChild(mark);
         cursor = localEnd;
@@ -892,13 +857,13 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function scrollCurrentSearchMatchIntoView(pane: RenderedPane) {
-    const current = pane.outputEl.querySelector<HTMLElement>('.buffer-search-current');
+    const current = pane.scrollbackOutputEl?.querySelector<HTMLElement>('.buffer-search-current');
     if (current && typeof current.scrollIntoView === 'function') {
       current.scrollIntoView({ block: 'center' });
     }
   }
 
-  function createEntryDOM(entry: LogEntry, pane: RenderedPane, searchContext?: { query: string; current: number; ordinalStart: number }): HTMLElement {
+  function createEntryDOM(entry: LogEntry, entryAnsiUp: AnsiUp, searchContext?: { query: string; current: number; ordinalStart: number }): HTMLElement {
     const line = document.createElement('div');
     line.className = 'output-line';
     if (entry.id) {
@@ -907,7 +872,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
     const span = document.createElement('span');
     span.className = 'output-text';
-    span.innerHTML = entry.text ? renderANSI(pane, entry.text) : '&nbsp;';
+    span.innerHTML = entry.text ? renderANSI(entryAnsiUp, entry.text) : '&nbsp;';
     linkifyHttpsUrls(span);
     if (searchContext?.query) {
       highlightSearchMatches(span, searchContext.query, searchContext.current, searchContext.ordinalStart);
@@ -942,7 +907,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
       line.appendChild(wrapper);
     }
-    
+
     return line;
   }
 
@@ -953,6 +918,8 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     updateScrollButtonVisibility(pane);
   }
 
+  // Renders the live output only. The scrollback region has its own renderer
+  // and the live path never participates in search highlighting.
   function renderPaneBuffer(paneId: string) {
     const pane = renderedPanes.get(paneId);
     if (!pane) return;
@@ -960,30 +927,112 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     pane.ansiUp = new AnsiUp();
     pane.ansiUp.use_classes = true;
     const data = getBufferData(pane.node.buffer);
-    const search = searchStates.get(pane.node.id);
-    const activeQuery = search?.open ? search.query.trim() : '';
-    const counts = activeQuery ? entryMatchCounts(data, activeQuery) : [];
-    if (search) {
-      refreshSearchStateForPane(pane, counts);
-    }
-    
+
     const fragment = document.createDocumentFragment();
-    const startIdx = activeQuery ? 0 : Math.max(0, data.length - maxRenderedLines);
-    let ordinal = counts.slice(0, startIdx).reduce((sum, count) => sum + count, 0);
+    const startIdx = Math.max(0, data.length - maxRenderedLines);
     for (let i = startIdx; i < data.length; i++) {
-      const count = counts[i] || 0;
-      fragment.appendChild(createEntryDOM(data[i]!, pane, activeQuery ? { query: activeQuery, current: search?.current || 0, ordinalStart: ordinal } : undefined));
-      ordinal += count;
+      fragment.appendChild(createEntryDOM(data[i]!, pane.ansiUp));
     }
     pane.outputEl.appendChild(fragment);
-    if (activeQuery) {
-      scrollCurrentSearchMatchIntoView(pane);
-    }
-    
-    if (!activeQuery && (!state.restoreInProgress || pane.node.isTemporaryLive)) {
+
+    if (!state.restoreInProgress || pane.scrollbackEl) {
       pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
     }
     updateScrollButtonVisibility(pane);
+  }
+
+  // Full scrollback render: only on open, query execution, buffer prune, or theme change.
+  function renderScrollbackRegion(paneId: string) {
+    const pane = renderedPanes.get(paneId);
+    if (!pane || !pane.scrollbackOutputEl) return;
+    pane.scrollbackAnsiUp = new AnsiUp();
+    pane.scrollbackAnsiUp.use_classes = true;
+    const data = getBufferData(pane.node.buffer);
+    const search = searchStates.get(paneId);
+    const query = search?.executedQuery || '';
+    const counts = query ? entryMatchCounts(data, query) : [];
+
+    // Windowed render; the window extends backward only to reach older matches.
+    let startIdx = Math.max(0, data.length - maxRenderedLines);
+    if (query) {
+      const firstMatchIdx = counts.findIndex(count => count > 0);
+      if (firstMatchIdx !== -1 && firstMatchIdx < startIdx) {
+        startIdx = firstMatchIdx;
+      }
+    }
+
+    pane.scrollbackOutputEl.innerHTML = '';
+    const fragment = document.createDocumentFragment();
+    let ordinal = counts.slice(0, startIdx).reduce((sum, count) => sum + count, 0);
+    for (let i = startIdx; i < data.length; i++) {
+      fragment.appendChild(createEntryDOM(data[i]!, pane.scrollbackAnsiUp, query ? { query, current: search?.current || 0, ordinalStart: ordinal } : undefined));
+      ordinal += counts[i] || 0;
+    }
+    pane.scrollbackOutputEl.appendChild(fragment);
+
+    if (query && search && search.current > 0) {
+      scrollCurrentSearchMatchIntoView(pane);
+    } else {
+      pane.scrollbackOutputEl.scrollTop = pane.scrollbackOutputEl.scrollHeight;
+    }
+  }
+
+  function scrollbackSticksToBottom(pane: RenderedPane): boolean {
+    const el = pane.scrollbackOutputEl;
+    if (!el) return false;
+    const threshold = 100;
+    return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
+  }
+
+  // Incremental append into the scrollback region: no full re-render per message.
+  function appendToScrollbackRegion(pane: RenderedPane, newEntries: LogEntry[], dataPruned: boolean) {
+    if (!pane.scrollbackOutputEl || !pane.scrollbackAnsiUp) return;
+    const search = searchStates.get(pane.node.id);
+    const query = search?.executedQuery || '';
+
+    if (dataPruned && query) {
+      // In-memory data shifted under the ordinals: recount and re-render the
+      // region (rare, once per pruneRenderedLines entries). Live output untouched.
+      const counts = entryMatchCounts(getBufferData(pane.node.buffer), query);
+      search!.total = counts.reduce((sum, count) => sum + count, 0);
+      if (search!.current > search!.total) {
+        search!.current = search!.total;
+      }
+      renderScrollbackRegion(pane.node.id);
+      updateSearchControls(pane);
+      return;
+    }
+
+    const shouldScroll = scrollbackSticksToBottom(pane);
+    const fragment = document.createDocumentFragment();
+    let ordinal = search?.total ?? 0;
+    let addedMatches = 0;
+    for (const entry of newEntries) {
+      fragment.appendChild(createEntryDOM(entry, pane.scrollbackAnsiUp, query ? { query, current: search?.current || 0, ordinalStart: ordinal } : undefined));
+      if (query) {
+        const count = countQueryMatches(plainOutputText(entry.text || ''), query);
+        ordinal += count;
+        addedMatches += count;
+      }
+    }
+    pane.scrollbackOutputEl.appendChild(fragment);
+
+    if (search && query && addedMatches > 0) {
+      search.total += addedMatches;
+      updateSearchControls(pane);
+    }
+
+    if (pane.scrollbackOutputEl.children.length > maxRenderedLines) {
+      const excess = pane.scrollbackOutputEl.children.length - maxRenderedLines;
+      const toRemove = Math.max(excess, pruneRenderedLines);
+      for (let i = 0; i < toRemove && pane.scrollbackOutputEl.firstChild; i++) {
+        pane.scrollbackOutputEl.removeChild(pane.scrollbackOutputEl.firstChild);
+      }
+    }
+
+    if (shouldScroll) {
+      pane.scrollbackOutputEl.scrollTop = pane.scrollbackOutputEl.scrollHeight;
+    }
   }
 
   function triggerVisualBell(element: HTMLElement) {
@@ -1018,48 +1067,44 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
       data.push(...newEntries);
 
-      if (data.length > maxRenderedLines + pruneRenderedLines) {
+      const dataPruned = data.length > maxRenderedLines + pruneRenderedLines;
+      if (dataPruned) {
         data.splice(0, pruneRenderedLines);
       }
 
       renderedPanes.forEach(pane => {
-        if (pane.node.buffer === bufferName) {
-          const activeSearch = searchStates.get(pane.node.id);
-          if (activeSearch?.open && activeSearch.query.trim()) {
-            renderPaneBuffer(pane.node.id);
-            if (!state.restoreInProgress && newEntries.some(entry => (entry.bell_positions || []).length > 0)) {
-              triggerVisualBell(pane.outputEl);
-            }
-            return;
-          }
+        if (pane.node.buffer !== bufferName) return;
 
-          const shouldScroll = pane.node.isTemporaryLive || shouldStickToBottom(pane);
-          const fragment = document.createDocumentFragment();
+        // While the scrollback region is open the live output plays the pinned
+        // live-tail role and always sticks to the bottom.
+        const shouldScroll = !!pane.scrollbackEl || shouldStickToBottom(pane);
+        const fragment = document.createDocumentFragment();
 
-          for (const entry of newEntries) {
-            fragment.appendChild(createEntryDOM(entry, pane));
-          }
-          pane.outputEl.appendChild(fragment);
-          if (!state.restoreInProgress && newEntries.some(entry => (entry.bell_positions || []).length > 0)) {
-            triggerVisualBell(pane.outputEl);
-          }
-
-          if (pane.outputEl.children.length > maxRenderedLines) {
-            const excess = pane.outputEl.children.length - maxRenderedLines;
-            if (excess > 0) {
-              const toRemove = Math.max(excess, pruneRenderedLines);
-              for (let i = 0; i < toRemove && pane.outputEl.firstChild; i++) {
-                pane.outputEl.removeChild(pane.outputEl.firstChild);
-              }
-            }
-          }
-
-          if (shouldScroll && (!state.restoreInProgress || pane.node.isTemporaryLive)) {
-            pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
-          }
-
-          updateScrollButtonVisibility(pane);
+        for (const entry of newEntries) {
+          fragment.appendChild(createEntryDOM(entry, pane.ansiUp));
         }
+        pane.outputEl.appendChild(fragment);
+        if (!state.restoreInProgress && newEntries.some(entry => (entry.bell_positions || []).length > 0)) {
+          triggerVisualBell(pane.outputEl);
+        }
+
+        if (pane.outputEl.children.length > maxRenderedLines) {
+          const excess = pane.outputEl.children.length - maxRenderedLines;
+          if (excess > 0) {
+            const toRemove = Math.max(excess, pruneRenderedLines);
+            for (let i = 0; i < toRemove && pane.outputEl.firstChild; i++) {
+              pane.outputEl.removeChild(pane.outputEl.firstChild);
+            }
+          }
+        }
+
+        if (shouldScroll && (!state.restoreInProgress || pane.scrollbackEl)) {
+          pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
+        }
+
+        updateScrollButtonVisibility(pane);
+
+        appendToScrollbackRegion(pane, newEntries, dataPruned);
       });
     });
   }
@@ -1080,6 +1125,10 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     appendEntries([entry]);
   }
 
+  function paneOutputContainers(pane: RenderedPane): HTMLElement[] {
+    return pane.scrollbackOutputEl ? [pane.outputEl, pane.scrollbackOutputEl] : [pane.outputEl];
+  }
+
   function addCommandHint(entryId: number, buffer: string, command: string) {
     // 1. Persist in memory so it survives pane re-renders
     const data = getBufferData(buffer);
@@ -1092,9 +1141,11 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     // 2. Update existing DOM if present
     for (const pane of renderedPanes.values()) {
       if (pane.node.buffer === buffer) {
-        const line = pane.outputEl.querySelector<HTMLElement>(`[data-entry-id="${entryId}"]`);
-        if (line) {
-          line.appendChild(createCommandHintElement(command));
+        for (const container of paneOutputContainers(pane)) {
+          const line = container.querySelector<HTMLElement>(`[data-entry-id="${entryId}"]`);
+          if (line) {
+            line.appendChild(createCommandHintElement(command));
+          }
         }
       }
     }
@@ -1118,9 +1169,11 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
     renderedPanes.forEach(pane => {
       if (pane.node.buffer === buffer) {
-        const line = pane.outputEl.lastElementChild;
-        if (line) {
-          line.appendChild(createCommandHintElement(command, clientCommandID));
+        for (const container of paneOutputContainers(pane)) {
+          const line = container.lastElementChild;
+          if (line) {
+            line.appendChild(createCommandHintElement(command, clientCommandID));
+          }
         }
       }
     });
@@ -1155,23 +1208,26 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
         return;
       }
 
-      const hints = pane.outputEl.querySelectorAll<HTMLElement>(`[data-client-command-id="${clientCommandID}"]`);
-      if (!hints.length) {
-        return;
-      }
+      for (const container of paneOutputContainers(pane)) {
+        const hints = container.querySelectorAll<HTMLElement>(`[data-client-command-id="${clientCommandID}"]`);
+        if (!hints.length) {
+          continue;
+        }
 
-      const shouldScroll = shouldStickToBottom(pane);
-      hints.forEach((hint) => {
-        const fragment = document.createDocumentFragment();
-        commands.forEach((command) => {
-          fragment.appendChild(createCommandHintElement(command));
+        const isLiveOutput = container === pane.outputEl;
+        const shouldScroll = isLiveOutput && shouldStickToBottom(pane);
+        hints.forEach((hint) => {
+          const fragment = document.createDocumentFragment();
+          commands.forEach((command) => {
+            fragment.appendChild(createCommandHintElement(command));
+          });
+          hint.replaceWith(fragment);
+          replaced = true;
         });
-        hint.replaceWith(fragment);
-        replaced = true;
-      });
 
-      if (shouldScroll && !state.restoreInProgress) {
-        pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
+        if (shouldScroll && !state.restoreInProgress) {
+          container.scrollTop = container.scrollHeight;
+        }
       }
       updateScrollButtonVisibility(pane);
     });
@@ -1202,6 +1258,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     renderedPanes.forEach(pane => {
       if (pane.node.buffer === pending.buffer) {
         renderPaneBuffer(pane.node.id);
+        renderScrollbackRegion(pane.node.id);
       }
     });
   }
@@ -1210,6 +1267,9 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     bufferData.clear();
     renderedPanes.forEach(pane => {
       pane.outputEl.innerHTML = '';
+      if (pane.scrollbackOutputEl) {
+        pane.scrollbackOutputEl.innerHTML = '';
+      }
       updateScrollButtonVisibility(pane);
     });
     updateAllSelects();
@@ -1243,11 +1303,11 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     elements.keyboardToggle.classList.toggle('panel-tab_active', state.activePanel === 'keyboard');
     elements.variablesToggle.classList.toggle('panel-tab_active', state.activePanel === 'variables');
     elements.groupsToggle.classList.toggle('panel-tab_active', state.activePanel === 'groups');
-    
+
     elements.keyboardPanel.classList.toggle('bottom-panel_active', state.activePanel === 'keyboard');
     elements.variablesPanel.classList.toggle('bottom-panel_active', state.activePanel === 'variables');
     elements.groupsPanel.classList.toggle('bottom-panel_active', state.activePanel === 'groups');
-    
+
     elements.bottomPanels.classList.toggle('bottom-panels_visible', Boolean(state.activePanel));
 
     if (state.activePanel === 'variables') {
@@ -1392,7 +1452,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
       const rowsMap = new Map<number, HTMLElement>();
       const sortedRowNums = Array.from(new Set(positioned.map(h => h.mobile_row!))).sort((a, b) => a - b);
-      
+
       sortedRowNums.forEach(rowNum => {
         const rowEl = document.createElement('div');
         rowEl.className = 'hotkeys-row';
@@ -1435,7 +1495,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
           if (!placed) {
             const freeRows = elements.hotkeysBox.querySelectorAll('.hotkeys-row_free');
             let lastFreeRow = freeRows[freeRows.length - 1] as HTMLElement;
-            
+
             if (lastFreeRow) {
               let currentRowWidth = 0;
               for (const child of Array.from(lastFreeRow.children)) {
@@ -1446,7 +1506,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
                 placed = true;
               }
             }
-            
+
             if (!placed) {
               lastFreeRow = document.createElement('div');
               lastFreeRow.className = 'hotkeys-row hotkeys-row_free';
@@ -1483,7 +1543,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     items.forEach(g => {
       const chip = document.createElement('label');
       chip.className = 'group-chip';
-      
+
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.className = 'group-checkbox';
@@ -1564,7 +1624,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       if (keyStr === focusedKey && focusedValue !== null) {
         input.value = focusedValue;
       }
-      
+
       input.addEventListener('keydown', async (e) => {
         if (e.key === 'Enter') {
           const newVal = input.value.trim();
@@ -1613,7 +1673,10 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function refreshAnsiTheme() {
-    renderedPanes.forEach((pane) => renderPaneBuffer(pane.node.id));
+    renderedPanes.forEach((pane) => {
+      renderPaneBuffer(pane.node.id);
+      renderScrollbackRegion(pane.node.id);
+    });
   }
 
   // Expose API
@@ -1638,8 +1701,8 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     refreshAnsiTheme,
   };
 }
-function renderANSI(pane: RenderedPane, text: string): string {
-  return renderAnsiHtml(pane.ansiUp, text, currentAnsiTheme());
+function renderANSI(entryAnsiUp: AnsiUp, text: string): string {
+  return renderAnsiHtml(entryAnsiUp, text, currentAnsiTheme());
 }
 
 function linkifyHttpsUrls(root: HTMLElement) {

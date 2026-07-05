@@ -904,14 +904,33 @@ body {
   font-size: 12px;
 }
 
-.pane-live-split-btn.active,
-.pane_live-temporary .pane-header {
+.pane-live-split-btn.active {
   color: #7dcfff;
 }
 
 .pane-live-split-btn.active,
 .pane-search-toggle.active {
   background: #1f6feb33;
+}
+
+.pane-scrollback {
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-height: 0;
+}
+
+.pane-scrollback-divider {
+  height: 4px;
+  cursor: row-resize;
+  background: #232a31;
+  flex-shrink: 0;
+  transition: background 0.15s;
+}
+
+.pane-scrollback-divider:hover,
+.pane-scrollback-divider:active {
+  background: #3d4f61;
 }
 
 .pane-search-controls {
@@ -941,6 +960,10 @@ body {
   min-width: 3.5rem;
   color: #97a4b3;
   text-align: center;
+}
+
+.pane-search-count.stale {
+  opacity: 0.55;
 }
 
 .buffer-search-match {
