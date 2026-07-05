@@ -3,6 +3,14 @@ import { AnsiUp } from 'ansi_up';
 
 import { applyAnsiTheme } from './ansi';
 import { getAppElements, fetchWithToken } from './dom';
+import {
+  applyFontSizeVars,
+  clampFontSize,
+  defaultFontSize,
+  fontSizeStorageKey,
+  maxFontSize,
+  minFontSize,
+} from './fontSize';
 import { commandHistoryStorageKey, InputHistory } from './history';
 import { matchHotkey } from './hotkeys';
 import { safeCatchupCursor } from './logCatchup';
@@ -28,10 +36,6 @@ type LiveLogsResponse = {
 };
 
 const wakeLockEnabledStorageKey = 'mudhost.wakeLockEnabled';
-const fontSizeStorageKey = 'mudhost.fontSizePx';
-const defaultFontSize = 16;
-const minFontSize = 4;
-const maxFontSize = 24;
 let currentFontSize = defaultFontSize;
 const fontSizeControls = document.createElement('div');
 fontSizeControls.className = 'font-size-controls';
@@ -61,10 +65,6 @@ function isWakeLockEnabled(): boolean {
   return localStorage.getItem(wakeLockEnabledStorageKey) !== 'false';
 }
 
-function clampFontSize(value: number): number {
-  return Math.max(minFontSize, Math.min(maxFontSize, Math.round(value)));
-}
-
 function readFontSize(): number {
   const stored = Number(localStorage.getItem(fontSizeStorageKey));
   if (!Number.isFinite(stored)) {
@@ -75,9 +75,8 @@ function readFontSize(): number {
 }
 
 function applyFontSize(value: number) {
-  const next = clampFontSize(value);
+  const next = applyFontSizeVars(document.documentElement, value);
   currentFontSize = next;
-  document.documentElement.style.setProperty('--app-font-size', `${next}px`);
   localStorage.setItem(fontSizeStorageKey, String(next));
 }
 

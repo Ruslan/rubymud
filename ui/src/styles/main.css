@@ -6,7 +6,9 @@ body {
   margin: 0;
   background: #111315;
   color: #e8edf2;
-  font: var(--app-font-size, 16px)/1.4 "Fira Code", monospace;
+  /* Integer-pixel line-height: a fractional one (16px × 1.4 = 22.4px) makes
+     output line spacing wobble by 1px as glyphs snap to whole pixels (#4). */
+  font: var(--app-font-size, 16px)/var(--app-line-height, 22px) "Fira Code", monospace;
 }
 
 .app {
@@ -365,7 +367,7 @@ body {
 }
 
 .output-line {
-  min-height: 1.4em;
+  min-height: var(--app-line-height, 22px);
   white-space: pre-wrap;
   word-break: break-word;
   margin: 0;
