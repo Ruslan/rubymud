@@ -71,7 +71,7 @@ func setupMcpTestServer(t *testing.T) (*Server, *session.Session) {
 		record.ID: sess,
 	}))
 
-	s := New(":0", manager, store, os.TempDir())
+	s := New(":0", manager, store, os.TempDir(), BasicAuth{})
 	return s, sess
 }
 

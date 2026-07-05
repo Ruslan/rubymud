@@ -2,6 +2,7 @@ package web
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"embed"
 	"encoding/hex"
 	"encoding/json"
@@ -35,8 +36,33 @@ type Server struct {
 	store                  *storage.Store
 	upgrader               websocket.Upgrader
 	apiToken               string
+	basicAuth              BasicAuth
 	configDir              string
 	restoreAfterCursorHook func(*session.Session) error
+}
+
+// BasicAuth holds optional HTTP basic auth credentials. When both fields are
+// set, every route except the PWA/static assets needed for installation is
+// gated behind basic auth (issue #6). It is an outer gate layered on top of
+// the existing session-token protection.
+type BasicAuth struct {
+	User string
+	Pass string
+}
+
+func (b BasicAuth) enabled() bool {
+	return b.User != "" && b.Pass != ""
+}
+
+// isPublicAsset reports whether a path must stay reachable without basic auth
+// so the PWA can be discovered and installed. A gated manifest or icon breaks
+// install because browsers fetch them without credentials.
+func isPublicAsset(path string) bool {
+	switch path {
+	case "/manifest.webmanifest", "/manifest.json", "/service-worker.js", "/app-icon.svg", "/favicon.ico", "/favicon.svg":
+		return true
+	}
+	return strings.HasPrefix(path, "/assets/")
 }
 
 type clientMessage struct {
@@ -47,7 +73,7 @@ type clientMessage struct {
 	ClientCommandID string `json:"client_command_id"`
 }
 
-func New(listenAddr string, manager *session.Manager, store *storage.Store, configDir string) *Server {
+func New(listenAddr string, manager *session.Manager, store *storage.Store, configDir string, basicAuth BasicAuth) *Server {
 	log.Printf("creating web server on %s", listenAddr)
 
 	apiToken, _ := store.GetSetting("api_token")
@@ -63,6 +89,7 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 		store:     store,
 		configDir: configDir,
 		apiToken:  apiToken,
+		basicAuth: basicAuth,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return sameOriginRequest(r)
@@ -73,6 +100,28 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+
+	// Optional HTTP basic auth: an outer gate in front of the token check.
+	// PWA/static assets stay public so the app can be discovered and installed.
+	if s.basicAuth.enabled() {
+		r.Use(func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if isPublicAsset(r.URL.Path) {
+					next.ServeHTTP(w, r)
+					return
+				}
+				user, pass, ok := r.BasicAuth()
+				userOK := subtle.ConstantTimeCompare([]byte(user), []byte(s.basicAuth.User)) == 1
+				passOK := subtle.ConstantTimeCompare([]byte(pass), []byte(s.basicAuth.Pass)) == 1
+				if !ok || !userOK || !passOK {
+					w.Header().Set("WWW-Authenticate", `Basic realm="mudhost", charset="UTF-8"`)
+					http.Error(w, "Unauthorized", http.StatusUnauthorized)
+					return
+				}
+				next.ServeHTTP(w, r)
+			})
+		})
+	}
 
 	// Token protection: check X-Session-Token header
 	r.Use(func(next http.Handler) http.Handler {

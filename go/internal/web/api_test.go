@@ -838,7 +838,7 @@ func setupTestServer(t *testing.T) (*Server, *session.Session) {
 		record.ID: sess,
 	}))
 
-	s := New(":0", manager, store, t.TempDir())
+	s := New(":0", manager, store, t.TempDir(), BasicAuth{})
 	return s, sess
 }
 

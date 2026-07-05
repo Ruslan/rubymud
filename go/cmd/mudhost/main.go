@@ -67,7 +67,15 @@ func main() {
 		}
 	}
 
-	server := web.New(*listenAddr, manager, store, *configDirPath)
+	basicAuth := web.BasicAuth{
+		User: os.Getenv("MUDHOST_BASIC_AUTH_USER"),
+		Pass: os.Getenv("MUDHOST_BASIC_AUTH_PASS"),
+	}
+
+	server := web.New(*listenAddr, manager, store, *configDirPath, basicAuth)
+	if basicAuth.User != "" && basicAuth.Pass != "" {
+		log.Printf("HTTP basic auth enabled for user %q", basicAuth.User)
+	}
 	log.Printf("mudhost listening on %s using db %s", *listenAddr, *dbPath)
 	log.Printf("open in browser: http://%s", listenURL(*listenAddr))
 	if err := server.ListenAndServe(); err != nil {
