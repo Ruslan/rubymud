@@ -381,6 +381,10 @@ body {
   margin-left: 8px;
   color: #97a4b3;
   font-size: 80%;
+  /* Keep this smaller inline element inside the line's strut. Baseline-aligned
+     80% text at the inherited line-height sinks its descent ~1px below the box,
+     making the echo line taller than plain output lines (#4). */
+  line-height: 1;
   font-style: italic;
   opacity: 0.9;
 }
