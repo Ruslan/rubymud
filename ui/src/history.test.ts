@@ -215,6 +215,59 @@ describe('InputHistory', () => {
     expect(history.up('north')).toBe('look');
   });
 
+  it('keeps arrow navigation position across a backend restore merge', () => {
+    const history = historyWith(['осмотреться', 'убить орка', 'сказать привет']);
+
+    expect(history.up('')).toBe('сказать привет');
+    expect(history.up('сказать привет')).toBe('убить орка');
+
+    // A silent reconnect merges the restored backend history mid-navigation.
+    history.merge(['осмотреться', 'убить орка', 'сказать привет']);
+
+    // Down must return to the newer entry the user just passed, not re-anchor
+    // on the recalled command as a new prefix filter.
+    expect(history.down('убить орка')).toBe('сказать привет');
+  });
+
+  it('preserves the draft prefix filter across a merge', () => {
+    const history = historyWith(['убить орка', 'север', 'убить гоблина']);
+
+    expect(history.up('убить')).toBe('убить гоблина');
+    expect(history.up('убить гоблина')).toBe('убить орка');
+
+    history.merge(['убить орка', 'север', 'убить гоблина']);
+
+    expect(history.down('убить орка')).toBe('убить гоблина');
+  });
+
+  it('reanchors navigation to the moved entry when a merge reorders history', () => {
+    const history = new InputHistory();
+    history.merge([]);
+    history.push('осмотреться');
+    history.push('убить орка');
+    history.push('сказать привет');
+
+    expect(history.up('')).toBe('сказать привет');
+    expect(history.up('сказать привет')).toBe('убить орка');
+
+    // Remote restore says the recalled command is actually the most recent.
+    history.merge(['убить орка']);
+
+    expect(history.up('убить орка')).toBe('сказать привет');
+  });
+
+  it('keeps arrow navigation position when another tab syncs history', () => {
+    localStorage.setItem('commandHistory', JSON.stringify(['осмотреться', 'убить орка']));
+    const history = new InputHistory();
+
+    expect(history.up('')).toBe('убить орка');
+
+    localStorage.setItem('commandHistory', JSON.stringify(['осмотреться', 'убить орка', 'новая команда']));
+    expect(history.syncFromStorage()).toBe(true);
+
+    expect(history.down('убить орка')).toBe('новая команда');
+  });
+
   it('manual reset closes reverse search so the next search starts fresh', () => {
     const history = historyWith(['kill goblin old', 'look', 'say orc', 'kill goblin new']);
 

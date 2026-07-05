@@ -89,6 +89,7 @@ export class InputHistory {
   }
 
   merge(remoteHistory: string[]) {
+    const navigationValue = this.activeNavigationValue();
     const localHistory = [...this.history];
     const pendingLocal = this.hasMergedRemoteHistory ? [] : [...this.pendingLocalBeforeRemoteRestore];
     this.history = [];
@@ -97,11 +98,13 @@ export class InputHistory {
     this.mergeValues(pendingLocal);
     this.pendingLocalBeforeRemoteRestore = [];
     this.hasMergedRemoteHistory = true;
-    this.resetNavigation();
+    this.reanchorNavigation(navigationValue);
+    this.resetReverseSearch();
     this.saveHistory();
   }
 
   syncFromStorage(): boolean {
+    const navigationValue = this.activeNavigationValue();
     const storedHistory = this.readStoredHistory();
     const previous = [...this.history];
     const pendingLocal = this.hasMergedRemoteHistory ? [] : [...this.pendingLocalBeforeRemoteRestore];
@@ -111,7 +114,8 @@ export class InputHistory {
     this.mergeValues(pendingLocal);
     const changed = !this.historiesEqual(previous, this.history);
     if (changed) {
-      this.resetNavigation();
+      this.reanchorNavigation(navigationValue);
+      this.resetReverseSearch();
     }
     return changed;
   }
@@ -261,6 +265,34 @@ export class InputHistory {
       query: '',
       index: this.history.length,
     };
+  }
+
+  private activeNavigationValue(): string | undefined {
+    if (!this.navigation.active) return undefined;
+    return this.history[this.navigation.index];
+  }
+
+  // Re-anchor an active arrow-navigation session after the history array was
+  // rebuilt (backend restore merge on reconnect, cross-tab storage sync). A
+  // blanket reset here would make the next arrow press adopt the recalled
+  // command from the input as a new prefix filter, so up/down would suddenly
+  // skip to unrelated entries (GitHub issue #3).
+  private reanchorNavigation(previousValue: string | undefined) {
+    if (!this.navigation.active) {
+      this.resetArrowNavigation();
+      return;
+    }
+    if (previousValue === undefined) {
+      // The session was anchored at the draft position past the newest entry.
+      this.navigation.index = this.history.length;
+      return;
+    }
+    const index = this.history.lastIndexOf(previousValue);
+    if (index === -1) {
+      this.resetArrowNavigation();
+      return;
+    }
+    this.navigation.index = index;
   }
 
   private ensureNavigation(currentValue: string) {
