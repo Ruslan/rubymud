@@ -984,6 +984,33 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     return el.scrollHeight - el.scrollTop - el.clientHeight <= threshold;
   }
 
+  // Recount search totals against the changed in-memory data and re-render the
+  // region. Used when the data shifted under the DOM (prune, out-of-order merge).
+  function refreshScrollbackForDataChange(pane: RenderedPane) {
+    const el = pane.scrollbackOutputEl;
+    if (!el) return;
+    const search = searchStates.get(pane.node.id);
+    const query = search?.executedQuery || '';
+    if (search && query) {
+      const counts = entryMatchCounts(getBufferData(pane.node.buffer), query);
+      search.total = counts.reduce((sum, count) => sum + count, 0);
+      if (search.current > search.total) {
+        search.current = search.total;
+      }
+    }
+    const stick = scrollbackSticksToBottom(pane);
+    const prevScrollTop = el.scrollTop;
+    const prevScrollHeight = el.scrollHeight;
+    renderScrollbackRegion(pane.node.id);
+    if (!query && !stick) {
+      // Keep the reading position stable while data shifted underneath.
+      el.scrollTop = prevScrollTop + (el.scrollHeight - prevScrollHeight);
+    }
+    if (search) {
+      updateSearchControls(pane);
+    }
+  }
+
   // Incremental append into the scrollback region: no full re-render per message.
   function appendToScrollbackRegion(pane: RenderedPane, newEntries: LogEntry[], dataPruned: boolean) {
     if (!pane.scrollbackOutputEl || !pane.scrollbackAnsiUp) return;
@@ -993,13 +1020,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     if (dataPruned && query) {
       // In-memory data shifted under the ordinals: recount and re-render the
       // region (rare, once per pruneRenderedLines entries). Live output untouched.
-      const counts = entryMatchCounts(getBufferData(pane.node.buffer), query);
-      search!.total = counts.reduce((sum, count) => sum + count, 0);
-      if (search!.current > search!.total) {
-        search!.current = search!.total;
-      }
-      renderScrollbackRegion(pane.node.id);
-      updateSearchControls(pane);
+      refreshScrollbackForDataChange(pane);
       return;
     }
 
@@ -1042,6 +1063,36 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     element.classList.add('visual-bell');
   }
 
+  function lastEntryIDIn(data: LogEntry[]): number {
+    for (let i = data.length - 1; i >= 0; i--) {
+      const id = data[i]!.id;
+      if (id) return id;
+    }
+    return 0;
+  }
+
+  // Merge incoming entries into id-sorted buffer data. Entries without an id
+  // (local client messages) keep their original position relative to neighbors.
+  function mergeEntriesByID(data: LogEntry[], incoming: LogEntry[]): LogEntry[] {
+    const sortedIncoming = [...incoming].sort((a, b) => (a.id || 0) - (b.id || 0));
+    const merged: LogEntry[] = [];
+    let idx = 0;
+    for (const existing of data) {
+      if (existing.id) {
+        while (idx < sortedIncoming.length && (sortedIncoming[idx]!.id || 0) < existing.id) {
+          merged.push(sortedIncoming[idx]!);
+          idx++;
+        }
+      }
+      merged.push(existing);
+    }
+    while (idx < sortedIncoming.length) {
+      merged.push(sortedIncoming[idx]!);
+      idx++;
+    }
+    return merged;
+  }
+
   function appendEntries(entries: LogEntry[]) {
     if (entries.length === 0) return;
 
@@ -1055,7 +1106,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     }
 
     byBuffer.forEach((bufferEntries, bufferName) => {
-      const data = getBufferData(bufferName);
+      let data = getBufferData(bufferName);
       const seenIDs = new Set(data.map(entry => entry.id).filter((id): id is number => !!id));
       const newEntries = bufferEntries.filter((entry) => {
         if (!entry.id) return true;
@@ -1065,7 +1116,19 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       });
       if (newEntries.length === 0) return;
 
-      data.push(...newEntries);
+      // The HTTP catch-up can race the live WS stream: a page of older entries
+      // may arrive after newer live output already rendered. Keep the buffer
+      // ordered by id; the ordered append is the hot path.
+      const minIncomingID = newEntries.reduce((min, entry) => (entry.id && (min === 0 || entry.id < min)) ? entry.id : min, 0);
+      const batchSorted = newEntries.every((entry, i) => i === 0 || !entry.id || !newEntries[i - 1]!.id || newEntries[i - 1]!.id! <= entry.id);
+      const outOfOrder = (minIncomingID > 0 && minIncomingID <= lastEntryIDIn(data)) || !batchSorted;
+
+      if (outOfOrder) {
+        data = mergeEntriesByID(data, newEntries);
+        bufferData.set(bufferName, data);
+      } else {
+        data.push(...newEntries);
+      }
 
       const dataPruned = data.length > maxRenderedLines + pruneRenderedLines;
       if (dataPruned) {
@@ -1074,6 +1137,25 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
       renderedPanes.forEach(pane => {
         if (pane.node.buffer !== bufferName) return;
+
+        if (outOfOrder) {
+          // Out-of-order backfill (reconnect/wake catch-up): re-render so both
+          // order and sequential ANSI state stay correct. Rare, one-shot.
+          const stick = !!pane.scrollbackEl || shouldStickToBottom(pane);
+          const prevScrollTop = pane.outputEl.scrollTop;
+          const prevScrollHeight = pane.outputEl.scrollHeight;
+          renderPaneBuffer(pane.node.id);
+          if (!stick) {
+            // Backfilled rows land above the viewport: compensate to keep it stable.
+            pane.outputEl.scrollTop = prevScrollTop + (pane.outputEl.scrollHeight - prevScrollHeight);
+            updateScrollButtonVisibility(pane);
+          }
+          if (!state.restoreInProgress && newEntries.some(entry => (entry.bell_positions || []).length > 0)) {
+            triggerVisualBell(pane.outputEl);
+          }
+          refreshScrollbackForDataChange(pane);
+          return;
+        }
 
         // While the scrollback region is open the live output plays the pinned
         // live-tail role and always sticks to the bottom.

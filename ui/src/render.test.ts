@@ -702,6 +702,107 @@ describe('renderer buffer-local search', () => {
   });
 });
 
+describe('renderer out-of-order entries', () => {
+  function liveLineTexts(): string[] {
+    return Array.from(document.querySelectorAll('.pane-body .output-line')).map(line => line.textContent || '');
+  }
+
+  it('inserts catch-up backfill before newer live entries that raced ahead', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    renderer.appendEntries([
+      { id: 1, text: 'one', buffer: 'main' },
+      { id: 2, text: 'two', buffer: 'main' },
+    ]);
+    // Live WS output raced ahead of the HTTP catch-up.
+    renderer.appendEntries([{ id: 5, text: 'five', buffer: 'main' }]);
+    // Catch-up backfill arrives late.
+    renderer.appendEntries([
+      { id: 3, text: 'three', buffer: 'main' },
+      { id: 4, text: 'four', buffer: 'main' },
+    ]);
+
+    expect(liveLineTexts()).toEqual(['one', 'two', 'three', 'four', 'five']);
+  });
+
+  it('deduplicates overlap while restoring order', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    renderer.appendEntries([{ id: 1, text: 'one', buffer: 'main' }]);
+    renderer.appendEntries([{ id: 5, text: 'five', buffer: 'main' }]);
+    // Catch-up page overlaps with the already-delivered live entry.
+    renderer.appendEntries([
+      { id: 3, text: 'three', buffer: 'main' },
+      { id: 5, text: 'five duplicate', buffer: 'main' },
+    ]);
+
+    expect(liveLineTexts()).toEqual(['one', 'three', 'five']);
+    expect(renderer.latestEntryID()).toBe(5);
+  });
+
+  it('keeps local id-less entries anchored to their insertion moment', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    renderer.appendEntries([{ id: 1, text: 'one', buffer: 'main' }]);
+    renderer.appendEntries([{ text: '[disconnected]', buffer: 'main' }]);
+    renderer.appendEntries([{ id: 5, text: 'five', buffer: 'main' }]);
+    renderer.appendEntries([{ id: 3, text: 'three', buffer: 'main' }]);
+
+    expect(liveLineTexts()).toEqual(['one', '[disconnected]', 'three', 'five']);
+  });
+
+  it('sorts an out-of-order batch itself', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    renderer.appendEntries([{ id: 4, text: 'four', buffer: 'main' }]);
+    renderer.appendEntries([
+      { id: 3, text: 'three', buffer: 'main' },
+      { id: 1, text: 'one', buffer: 'main' },
+      { id: 2, text: 'two', buffer: 'main' },
+    ]);
+
+    expect(liveLineTexts()).toEqual(['one', 'two', 'three', 'four']);
+  });
+
+  it('re-renders an open scrollback region in order and refreshes search totals', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.appendEntries([
+      { id: 1, text: 'target one', buffer: 'main' },
+      { id: 5, text: 'target five', buffer: 'main' },
+    ]);
+
+    openSearch();
+    setSearchQuery('target');
+    pressSearchKey('Enter');
+    expect(document.querySelector('.pane-search-count')?.textContent).toBe('2/2');
+
+    renderer.appendEntries([{ id: 3, text: 'target three', buffer: 'main' }]);
+
+    const scrollbackLines = Array.from(document.querySelectorAll('.pane-scrollback .output-line')).map(line => line.textContent || '');
+    expect(scrollbackLines).toEqual(['target one', 'target three', 'target five']);
+    expect(document.querySelector('.pane-search-count')?.textContent).toBe('2/3');
+    expect(document.querySelectorAll('.pane-scrollback .buffer-search-match')).toHaveLength(3);
+  });
+
+  it('does not disturb in-order live appends', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    renderer.appendEntries([{ id: 1, text: 'one', buffer: 'main' }]);
+    const lineBefore = document.querySelector<HTMLElement>('.pane-body [data-entry-id="1"]');
+    renderer.appendEntries([{ id: 2, text: 'two', buffer: 'main' }]);
+
+    // The hot path stays incremental: existing DOM nodes are untouched.
+    expect(document.querySelector<HTMLElement>('.pane-body [data-entry-id="1"]')).toBe(lineBefore);
+    expect(liveLineTexts()).toEqual(['one', 'two']);
+  });
+});
+
 describe('renderer command trace reconciliation', () => {
   it('replaces a pending source hint with canonical commands', () => {
     const renderer = createTestRenderer();
