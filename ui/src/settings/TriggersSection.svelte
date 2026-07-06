@@ -1,5 +1,6 @@
 <script lang="ts">
   import './settings-section.css';
+  import { inlineEditKeys } from './inline-edit-keys';
   import type { Profile, Trigger } from './types';
 
   export let currentProfile: Profile | undefined;
@@ -87,7 +88,7 @@
       {#if editingTriggerID === t.id}
         <tr class="inline-edit-row">
           <td colspan="6">
-            <div class="inline-edit-panel">
+            <div class="inline-edit-panel" use:inlineEditKeys={{ save: saveInlineTriggerEdit, cancel: cancelInlineTriggerEdit }}>
               <div class="inline-edit-grid">
                 <label>Position <input class="inline-position-input" type="number" bind:value={editingTriggerDraft.position} aria-label="Trigger position" /></label>
                 <label>Name <input type="text" bind:value={editingTriggerDraft.name} aria-label="Trigger name" placeholder="Name" /></label>

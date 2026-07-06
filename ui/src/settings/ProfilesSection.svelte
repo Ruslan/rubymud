@@ -1,5 +1,6 @@
 <script lang="ts">
   import './settings-section.css';
+  import { inlineEditKeys } from './inline-edit-keys';
   import type { Profile } from './types';
 
   export let formError = '';
@@ -59,7 +60,7 @@
       {#if editingProfileID === p.id}
         <tr class="inline-edit-row">
           <td colspan="3">
-            <div class="inline-edit-panel">
+            <div class="inline-edit-panel" use:inlineEditKeys={{ save: saveInlineProfileEdit, cancel: cancelInlineProfileEdit }}>
               <div class="inline-edit-grid">
                 <label>Name <input type="text" bind:value={editingProfileDraft.name} aria-label="Profile name" /></label>
                 <label class="inline-field-wide">Description <input type="text" bind:value={editingProfileDraft.description} aria-label="Profile description" /></label>

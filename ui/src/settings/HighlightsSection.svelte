@@ -1,5 +1,6 @@
 <script lang="ts">
   import './settings-section.css';
+  import { inlineEditKeys } from './inline-edit-keys';
   import type { Highlight, NamedColor, Profile } from './types';
 
   export let currentProfile: Profile | undefined;
@@ -140,7 +141,7 @@
       {#if editingHighlightID === h.id}
         <tr class="inline-edit-row">
           <td colspan="7">
-            <div class="inline-edit-panel">
+            <div class="inline-edit-panel" use:inlineEditKeys={{ save: saveInlineHighlightEdit, cancel: cancelInlineHighlightEdit }}>
               <div class="inline-edit-grid">
                 <label>Position <input class="inline-position-input" type="number" bind:value={editingHighlightDraft.position} aria-label="Highlight position" /></label>
                 <label class="inline-field-wide">Pattern <input type="text" bind:value={editingHighlightDraft.pattern} aria-label="Highlight pattern" /></label>

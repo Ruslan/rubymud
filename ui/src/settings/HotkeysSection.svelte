@@ -1,5 +1,6 @@
 <script lang="ts">
   import './settings-section.css';
+  import { inlineEditKeys } from './inline-edit-keys';
   import { formatKeyboardShortcut } from './shortcut';
   import type { Hotkey, Profile } from './types';
 
@@ -101,7 +102,7 @@
       {#if editingHotkeyID === h.id}
         <tr class="inline-edit-row">
           <td colspan="6">
-            <div class="inline-edit-panel">
+            <div class="inline-edit-panel" use:inlineEditKeys={{ save: saveInlineHotkeyEdit, cancel: cancelInlineHotkeyEdit }}>
               <div class="inline-edit-grid">
                 <label>Shortcut <input type="text" bind:value={editingHotkeyDraft.shortcut} aria-label="Hotkey shortcut" /></label>
                 <div class="capture-panel">

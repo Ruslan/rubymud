@@ -1,5 +1,6 @@
 <script lang="ts">
   import './settings-section.css';
+  import { inlineEditKeys } from './inline-edit-keys';
   import type { Profile, Session, SessionProfile } from './types';
 
   export let formError = '';
@@ -81,7 +82,7 @@
       {#if editingSessionID === s.id}
         <tr class="inline-edit-row">
           <td colspan="5">
-            <div class="inline-edit-panel">
+            <div class="inline-edit-panel" use:inlineEditKeys={{ save: saveInlineSessionEdit, cancel: cancelInlineSessionEdit }}>
               <div class="inline-edit-grid">
                 <label>Name <input type="text" bind:value={editingSessionDraft.name} aria-label="Session name" /></label>
                 <label>MUD Host <input type="text" bind:value={editingSessionDraft.mud_host} aria-label="MUD host" /></label>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import './settings-section.css';
+  import { inlineEditKeys } from './inline-edit-keys';
   import type { Profile, Substitute } from './types';
 
   export let currentProfile: Profile | undefined;
@@ -80,7 +81,7 @@
       {#if editingSubID === sub.id}
         <tr class="inline-edit-row">
           <td colspan="7">
-            <div class="inline-edit-panel">
+            <div class="inline-edit-panel" use:inlineEditKeys={{ save: saveInlineSubEdit, cancel: cancelInlineSubEdit }}>
               <div class="inline-edit-grid">
                 <label>Position <input class="inline-position-input" type="number" bind:value={editingSubDraft.position} aria-label="Substitution position" /></label>
                 <label class="inline-field-wide">Pattern <input type="text" bind:value={editingSubDraft.pattern} aria-label="Substitution pattern" /></label>

@@ -1,5 +1,6 @@
 <script lang="ts">
   import './settings-section.css';
+  import { inlineEditKeys } from './inline-edit-keys';
   import type { Alias, Profile } from './types';
 
   export let currentProfile: Profile | undefined;
@@ -64,7 +65,7 @@
       {#if editingAliasID === a.id}
         <tr class="inline-edit-row">
           <td colspan="6">
-            <div class="inline-edit-panel">
+            <div class="inline-edit-panel" use:inlineEditKeys={{ save: saveInlineAliasEdit, cancel: cancelInlineAliasEdit }}>
               <div class="inline-edit-grid">
                 <label>Position <input class="inline-position-input" type="number" bind:value={editingAliasDraft.position} aria-label="Alias position" /></label>
                 <label>Name <input type="text" bind:value={editingAliasDraft.name} aria-label="Alias name" /></label>

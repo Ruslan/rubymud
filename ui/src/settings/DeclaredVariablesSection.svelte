@@ -1,5 +1,6 @@
 <script lang="ts">
   import './settings-section.css';
+  import { inlineEditKeys } from './inline-edit-keys';
   import type { Profile, ProfileVariable } from './types';
 
   export let currentProfile: Profile | undefined;
@@ -54,7 +55,7 @@
       {#if editingProfileVariableID === v.id}
         <tr class="inline-edit-row">
           <td colspan="5">
-            <div class="inline-edit-panel">
+            <div class="inline-edit-panel" use:inlineEditKeys={{ save: saveInlineProfileVariableEdit, cancel: cancelInlineProfileVariableEdit }}>
               <div class="inline-edit-grid">
                 <label>Position <input class="inline-position-input" type="number" bind:value={editingProfileVariableDraft.position} aria-label="Declared variable position" /></label>
                 <label>Name <input type="text" bind:value={editingProfileVariableDraft.name} aria-label="Declared variable name" /></label>

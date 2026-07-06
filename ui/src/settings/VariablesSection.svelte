@@ -1,5 +1,6 @@
 <script lang="ts">
   import './settings-section.css';
+  import { inlineEditKeys } from './inline-edit-keys';
   import type { Session, Variable } from './types';
 
   export let currentSession: Session | undefined;
@@ -46,7 +47,7 @@
       {#if editingVariableKey === v.key}
         <tr class="inline-edit-row">
           <td colspan="3">
-            <div class="inline-edit-panel">
+            <div class="inline-edit-panel" use:inlineEditKeys={{ save: saveInlineVariableEdit, cancel: cancelInlineVariableEdit }}>
               <div class="inline-edit-grid">
                 <label>Key <input type="text" bind:value={editingVariableDraft.key} aria-label="Variable key" /></label>
                 <label class="inline-field-wide">Value <input type="text" bind:value={editingVariableDraft.value} aria-label="Variable value" /></label>
