@@ -329,6 +329,62 @@ describe('renderer scrollback region', () => {
   });
 });
 
+describe('renderer scrollback keyboard shortcuts', () => {
+  function key(k: string): KeyboardEvent {
+    return new KeyboardEvent('keydown', { key: k });
+  }
+
+  it('PageUp opens the scrollback region on the active pane and scrolls it up', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    renderer.appendEntries([{ id: 1, text: 'old line', buffer: 'main' }]);
+    const scrollHeightSpy = vi.spyOn(HTMLElement.prototype, 'scrollHeight', 'get').mockReturnValue(1000);
+    const clientHeightSpy = vi.spyOn(HTMLElement.prototype, 'clientHeight', 'get').mockReturnValue(100);
+
+    const handled = renderer.handleScrollbackKey(key('PageUp'));
+
+    expect(handled).toBe(true);
+    expect(document.querySelector('.pane-scrollback')).not.toBeNull();
+    // Region sticks to bottom (scrollHeight) then pages up by clientHeight minus overlap.
+    const output = document.querySelector<HTMLElement>('.pane-scrollback .pane-output');
+    expect(output?.scrollTop).toBe(1000 - (100 - 24));
+    scrollHeightSpy.mockRestore();
+    clientHeightSpy.mockRestore();
+  });
+
+  it('End and Escape close an open region; both are ignored when it is closed', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    expect(renderer.handleScrollbackKey(key('End'))).toBe(false);
+    expect(renderer.handleScrollbackKey(key('Escape'))).toBe(false);
+    expect(renderer.handleScrollbackKey(key('PageDown'))).toBe(false);
+    expect(document.querySelector('.pane-scrollback')).toBeNull();
+
+    renderer.handleScrollbackKey(key('PageUp'));
+    expect(document.querySelector('.pane-scrollback')).not.toBeNull();
+    expect(renderer.handleScrollbackKey(key('End'))).toBe(true);
+    expect(document.querySelector('.pane-scrollback')).toBeNull();
+
+    renderer.handleScrollbackKey(key('PageUp'));
+    expect(renderer.handleScrollbackKey(key('Escape'))).toBe(true);
+    expect(document.querySelector('.pane-scrollback')).toBeNull();
+  });
+
+  it('defers to the pane search input for its own key navigation', () => {
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    openSearch();
+
+    const searchInput = document.querySelector<HTMLInputElement>('.pane-search-input');
+    const event = key('PageUp');
+    Object.defineProperty(event, 'target', { value: searchInput });
+
+    expect(renderer.handleScrollbackKey(event)).toBe(false);
+    expect(document.querySelector('.pane-scrollback')).toBeNull();
+  });
+});
+
 describe('renderer buffer-local search', () => {
   it('places search controls after the region toggle in the pane header', () => {
     const renderer = createTestRenderer();

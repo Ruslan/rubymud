@@ -86,6 +86,9 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   const pendingCommandHints = new Map<string, { buffer: string; entry: LogEntry; source: string; commandIndex: number }>();
   const renderedPanes = new Map<string, RenderedPane>();
   const searchStates = new Map<string, SearchState>();
+  // The pane most recently interacted with; target for app-level scrollback
+  // shortcuts (PageUp/PageDown/End). Falls back to the first pane in the layout.
+  let activePaneId: string | null = null;
 
   function getBufferData(name: string): LogEntry[] {
     if (!bufferData.has(name)) {
@@ -171,6 +174,9 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   function createPaneDOM(node: PaneNode): HTMLElement {
     const el = document.createElement('div');
     el.className = 'pane';
+    // Track the most recently touched pane so keyboard scrollback shortcuts act
+    // on the pane the user is actually looking at.
+    el.addEventListener('pointerdown', () => { activePaneId = node.id; }, true);
     let selectEl: HTMLSelectElement | undefined;
     let searchInputEl: HTMLInputElement | undefined;
     let searchCountEl: HTMLElement | undefined;
@@ -516,6 +522,52 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       closeScrollbackRegion(paneId);
     } else {
       openScrollbackRegion(paneId, false);
+    }
+  }
+
+  function getActivePaneId(): string | null {
+    if (activePaneId && renderedPanes.has(activePaneId)) return activePaneId;
+    const first = layout.columns[0]?.panes[0]?.id;
+    if (first && renderedPanes.has(first)) return first;
+    return renderedPanes.keys().next().value ?? null;
+  }
+
+  function scrollScrollbackByPage(pane: RenderedPane, direction: -1 | 1) {
+    const el = pane.scrollbackOutputEl;
+    if (!el) return;
+    // Leave a line of overlap between pages so nothing is skipped.
+    el.scrollTop += direction * Math.max(0, el.clientHeight - 24);
+  }
+
+  // App-level scrollback shortcuts on the active pane. Returns true when the key
+  // was consumed. Callers invoke this AFTER profile-hotkey matching, so a profile
+  // binding on PageUp/PageDown/End/Esc always wins.
+  function handleScrollbackKey(event: KeyboardEvent): boolean {
+    // The pane search input owns its own Enter/Escape navigation.
+    if ((event.target as HTMLElement | null)?.closest('.pane-search-controls')) return false;
+
+    const paneId = getActivePaneId();
+    if (!paneId) return false;
+    const pane = renderedPanes.get(paneId);
+    if (!pane) return false;
+    const regionOpen = !!pane.scrollbackEl;
+
+    switch (event.key) {
+      case 'PageUp':
+        if (!regionOpen) openScrollbackRegion(paneId, false);
+        scrollScrollbackByPage(renderedPanes.get(paneId)!, -1);
+        return true;
+      case 'PageDown':
+        if (!regionOpen) return false;
+        scrollScrollbackByPage(pane, 1);
+        return true;
+      case 'End':
+      case 'Escape':
+        if (!regionOpen) return false;
+        closeScrollbackRegion(paneId);
+        return true;
+      default:
+        return false;
     }
   }
 
@@ -1776,6 +1828,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     renderGroups,
     renderTimers,
     scrollOutputToBottom,
+    handleScrollbackKey,
     setActivePanel,
     updateConnectionStatus,
     loadLayout,

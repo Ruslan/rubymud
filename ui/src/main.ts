@@ -713,6 +713,12 @@ window.addEventListener('keydown', (event) => {
     return;
   }
 
+  // Scrollback shortcuts run after hotkey matching so a profile binding wins.
+  if (renderer.handleScrollbackKey(event)) {
+    event.preventDefault();
+    return;
+  }
+
   if (focusInputForTyping(event)) {
     return;
   }
