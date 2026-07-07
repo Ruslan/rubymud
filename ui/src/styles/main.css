@@ -1,6 +1,9 @@
 @import "@fontsource/fira-code/400.css";
 @import "@fontsource/fira-code/700.css";
 @import "./ansi-themes.css";
+/* ansi_up class mappings + text-attribute classes; shared with the colored HTML
+   log export (which inlines this file via ?raw) as the single source of truth. */
+@import "./ansi-classes.css";
 
 body {
   margin: 0;
@@ -534,77 +537,6 @@ body {
   color: #798694;
 }
 
-.ansi-black-fg { color: var(--ansi-black-fg); }
-.ansi-red-fg { color: var(--ansi-red-fg); }
-.ansi-green-fg { color: var(--ansi-green-fg); }
-.ansi-yellow-fg { color: var(--ansi-yellow-fg); }
-.ansi-blue-fg { color: var(--ansi-blue-fg); }
-.ansi-magenta-fg { color: var(--ansi-magenta-fg); }
-.ansi-cyan-fg { color: var(--ansi-cyan-fg); }
-.ansi-white-fg { color: var(--ansi-white-fg); }
-.ansi-bright-black-fg { color: var(--ansi-bright-black-fg); }
-.ansi-bright-red-fg { color: var(--ansi-bright-red-fg); }
-.ansi-bright-green-fg { color: var(--ansi-bright-green-fg); }
-.ansi-bright-yellow-fg { color: var(--ansi-bright-yellow-fg); }
-.ansi-bright-blue-fg { color: var(--ansi-bright-blue-fg); }
-.ansi-bright-magenta-fg { color: var(--ansi-bright-magenta-fg); }
-.ansi-bright-cyan-fg { color: var(--ansi-bright-cyan-fg); }
-.ansi-bright-white-fg { color: var(--ansi-bright-white-fg); }
-
-.ansi-black-bg { background-color: var(--ansi-black-bg); }
-.ansi-red-bg { background-color: var(--ansi-red-bg); }
-.ansi-green-bg { background-color: var(--ansi-green-bg); }
-.ansi-yellow-bg { background-color: var(--ansi-yellow-bg); }
-.ansi-blue-bg { background-color: var(--ansi-blue-bg); }
-.ansi-magenta-bg { background-color: var(--ansi-magenta-bg); }
-.ansi-cyan-bg { background-color: var(--ansi-cyan-bg); }
-.ansi-white-bg {
-  background-color: var(--ansi-white-bg);
-  color: #111315;
-}
-.ansi-bright-black-bg { background-color: var(--ansi-bright-black-bg); }
-.ansi-bright-red-bg { background-color: var(--ansi-bright-red-bg); }
-.ansi-bright-green-bg { background-color: var(--ansi-bright-green-bg); }
-.ansi-bright-yellow-bg { background-color: var(--ansi-bright-yellow-bg); }
-.ansi-bright-blue-bg { background-color: var(--ansi-bright-blue-bg); }
-.ansi-bright-magenta-bg { background-color: var(--ansi-bright-magenta-bg); }
-.ansi-bright-cyan-bg { background-color: var(--ansi-bright-cyan-bg); }
-.ansi-bright-white-bg {
-  background-color: var(--ansi-bright-white-bg);
-  color: #111315;
-}
-
-.ansi-bold {
-  font-weight: 700;
-}
-
-.ansi-underline {
-  text-decoration: underline;
-}
-
-.ansi-strikethrough {
-  text-decoration: line-through;
-}
-
-.ansi-italic {
-  font-style: italic;
-}
-
-.ansi-faint {
-  opacity: 0.7;
-}
-
-.ansi-blink {
-  animation: ansi-blink 1s step-end infinite;
-}
-
-@keyframes ansi-blink {
-  50% { opacity: 0; }
-}
-
-.ansi-conceal {
-  visibility: hidden;
-}
 
 @media (max-width: 640px) {
   body {

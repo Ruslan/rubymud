@@ -197,3 +197,27 @@ export function buildLogDownloadURL(sessionID: number, from: string, to: string)
   if (tz) params.set('tz', tz);
   return `/api/sessions/${sessionID}/logs/download?${params}`;
 }
+
+export interface LogExportHTMLOptions {
+  from: string;
+  to: string;
+  commands: boolean;
+  theme: string;
+  title?: string;
+  buffer?: string;
+}
+
+// buildLogExportHTMLURL builds the server-side streaming colored-HTML export URL
+// (mirrors buildLogDownloadURL). The server streams a self-contained .html file.
+export function buildLogExportHTMLURL(sessionID: number, opts: LogExportHTMLOptions): string {
+  const params = new URLSearchParams({ token: apiToken() });
+  if (opts.from) params.set('from', opts.from);
+  if (opts.to) params.set('to', opts.to);
+  params.set('commands', opts.commands ? '1' : '0');
+  if (opts.theme) params.set('theme', opts.theme);
+  if (opts.title) params.set('title', opts.title);
+  if (opts.buffer) params.set('buffer', opts.buffer);
+  const tz = browserTimezone();
+  if (tz) params.set('tz', tz);
+  return `/api/sessions/${sessionID}/logs/export-html?${params}`;
+}

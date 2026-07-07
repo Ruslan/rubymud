@@ -18,11 +18,21 @@ func (o *LogOverlay) TableName() string {
 	return "log_overlays"
 }
 
+// AppendLogEntry records a LOCAL client echo line (#showme/#wecho, command
+// echo, local command output). It is tagged source_type="echo" so the export
+// stream can exclude it — only genuine server output (source_type="mud", via
+// AppendLogEntryWithOverlays) is exported.
 func (s *Store) AppendLogEntry(sessionID int64, buffer, rawText, plainText string) (int64, error) {
-	return s.AppendLogEntryWithOverlays(sessionID, buffer, rawText, plainText, nil)
+	return s.appendLogEntry(sessionID, buffer, rawText, plainText, "echo", nil)
 }
 
+// AppendLogEntryWithOverlays records genuine server network output
+// (source_type="mud"), optionally with overlays.
 func (s *Store) AppendLogEntryWithOverlays(sessionID int64, buffer, rawText, plainText string, overlays []LogOverlay) (int64, error) {
+	return s.appendLogEntry(sessionID, buffer, rawText, plainText, "mud", overlays)
+}
+
+func (s *Store) appendLogEntry(sessionID int64, buffer, rawText, plainText, sourceType string, overlays []LogOverlay) (int64, error) {
 	if buffer == "" {
 		buffer = "main"
 	}
@@ -32,7 +42,7 @@ func (s *Store) AppendLogEntryWithOverlays(sessionID int64, buffer, rawText, pla
 		Stream:     "mud",
 		RawText:    rawText,
 		PlainText:  plainText,
-		SourceType: "mud",
+		SourceType: sourceType,
 		CreatedAt:  nowSQLiteTime(),
 		ReceivedAt: nowSQLiteTime(),
 	}
@@ -308,6 +318,138 @@ func (s *Store) AppendButtonOverlay(logEntryID int64, label, command string) err
 		CreatedAt:   nowSQLiteTime(),
 	}
 	return s.db.Create(&overlay).Error
+}
+
+// exportSortKeyExpr normalizes created_at into a fixed-width, lexicographically
+// sortable key: the 19-char "YYYY-MM-DDTHH:MM:SS" prefix followed by 9-digit,
+// right-padded nanoseconds. This makes ordering strictly chronological even
+// though RFC3339Nano trims trailing zeros in the fractional part (which would
+// otherwise make a raw TEXT compare non-monotonic). Timestamps are always stored
+// as UTC RFC3339Nano ("...Z" / "....fffZ") by nowSQLiteTime / SQLiteTime.Value.
+const exportSortKeyExpr = "(substr(created_at,1,19) || (CASE WHEN substr(created_at,20,1)='.' THEN substr(replace(substr(created_at,21),'Z','')||'000000000',1,9) ELSE '000000000' END))"
+
+// ExportStreamItem is one row of the merged, time-ordered export stream: either
+// a received MUD output line or a sent player command.
+type ExportStreamItem struct {
+	Kind      string     `json:"kind"`   // "output" | "command"
+	Ansi      string     `json:"ansi"`   // output: raw_text (pre-overlay); command: canonical outgoing text
+	Buffer    string     `json:"buffer"` // window_name; commands inherit their anchor entry's buffer
+	CreatedAt SQLiteTime `json:"created_at"`
+	RowID     int64      `json:"row_id"` // PK within the item's source table; unique per (Kind, RowID)
+}
+
+// ExportStreamOptions selects and filters the merged export stream.
+type ExportStreamOptions struct {
+	SessionID       int64
+	Buffer          string // optional; filters window_name
+	From            SQLiteTime
+	To              SQLiteTime
+	IncludeCommands bool
+}
+
+// buildExportUnion builds the inner UNION query (server "mud" output + optional
+// command_hint commands) with its filter args, used by the streaming
+// StreamExportLog.
+//
+// Only genuine server output (source_type="mud") is exported; local client echo
+// (source_type="echo") is excluded. Index-friendly via log_entries_source_idx
+// (session_id, source_type, created_at). Caveat: rows written before echo
+// tagging landed are all "mud" and can't be retroactively distinguished, so very
+// old ranges may still include some echo.
+func buildExportUnion(opts ExportStreamOptions) (string, []any) {
+	var args []any
+	buffer := strings.TrimSpace(opts.Buffer)
+
+	outputSQL := "SELECT 'output' AS kind, raw_text AS ansi, window_name AS buffer, created_at AS created_at, id AS row_id FROM log_entries WHERE session_id = ? AND source_type = 'mud'"
+	args = append(args, opts.SessionID)
+	if buffer != "" {
+		outputSQL += " AND window_name = ?"
+		args = append(args, buffer)
+	}
+	if !opts.From.Time.IsZero() {
+		outputSQL += " AND created_at >= ?"
+		args = append(args, opts.From)
+	}
+	if !opts.To.Time.IsZero() {
+		outputSQL += " AND created_at <= ?"
+		args = append(args, opts.To)
+	}
+
+	if !opts.IncludeCommands {
+		return outputSQL, args
+	}
+
+	// payload_json is decoded in Go (decodeCommandItem) so we avoid depending on
+	// the SQLite JSON1 extension.
+	cmdSQL := "SELECT 'command' AS kind, o.payload_json AS ansi, le.window_name AS buffer, o.created_at AS created_at, o.id AS row_id FROM log_overlays o JOIN log_entries le ON le.id = o.log_entry_id WHERE o.overlay_type = 'command_hint' AND le.session_id = ?"
+	args = append(args, opts.SessionID)
+	if buffer != "" {
+		cmdSQL += " AND le.window_name = ?"
+		args = append(args, buffer)
+	}
+	if !opts.From.Time.IsZero() {
+		cmdSQL += " AND o.created_at >= ?"
+		args = append(args, opts.From)
+	}
+	if !opts.To.Time.IsZero() {
+		cmdSQL += " AND o.created_at <= ?"
+		args = append(args, opts.To)
+	}
+	return outputSQL + " UNION ALL " + cmdSQL, args
+}
+
+// decodeCommandItem replaces a command item's raw payload_json with its
+// canonical command text. Output items are left untouched.
+func decodeCommandItem(item *ExportStreamItem) error {
+	if item.Kind != "command" {
+		return nil
+	}
+	var payload commandOverlayPayload
+	if err := json.Unmarshal([]byte(item.Ansi), &payload); err != nil {
+		return err
+	}
+	item.Ansi = payload.Command
+	return nil
+}
+
+// StreamExportLog runs the merged export query as a SINGLE ordered cursor and
+// invokes fn once per row, ordered by the normalized sort key then (kind,
+// row_id) — WITHOUT buffering the whole result set (used by the streaming HTML
+// export so arbitrarily large ranges never sit in memory).
+//
+// Output items carry raw_text — the ORIGINAL server ANSI, BEFORE any
+// substitution/highlight/gag overlay. Gagged lines are intentionally INCLUDED
+// (the export hides nothing).
+//
+// Command items are canonical outgoing commands sourced from command_hint
+// overlays. We deliberately do NOT use history_entries(kind='expanded'): that
+// table is deduplicated by (session_id, line) via an upsert, so repeated
+// commands collapse into a single row keeping only the latest timestamp, which
+// is unusable for a time-ordered replay. command_hint overlays are appended
+// once per send, each with its own created_at, giving a faithful stream.
+func (s *Store) StreamExportLog(opts ExportStreamOptions, fn func(ExportStreamItem) error) error {
+	union, args := buildExportUnion(opts)
+	query := "SELECT kind, ansi, buffer, created_at, row_id FROM (SELECT kind, ansi, buffer, created_at, row_id, " + exportSortKeyExpr + " AS sort_key FROM (" + union + ") AS merged) AS keyed ORDER BY sort_key ASC, kind ASC, row_id ASC"
+
+	rows, err := s.db.Raw(query, args...).Rows()
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var item ExportStreamItem
+		if err := s.db.ScanRows(rows, &item); err != nil {
+			return err
+		}
+		if err := decodeCommandItem(&item); err != nil {
+			return err
+		}
+		if err := fn(item); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
 }
 
 func (s *Store) loadOverlays(entries []LogEntry) error {

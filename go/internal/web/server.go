@@ -181,6 +181,7 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 					r.Get("/search", s.listSearch)
 					r.Get("/{entryID}/context", s.getLogContext)
 					r.Get("/download", s.downloadLogs)
+					r.Get("/export-html", s.exportLogHTML)
 				})
 
 				r.Route("/profiles", func(r chi.Router) {

@@ -1,0 +1,37 @@
+/* iTerm2 Builtin Tango Dark
+   Source: https://raw.githubusercontent.com/mbadolato/iTerm2-Color-Schemes/master/schemes/Builtin%20Tango%20Dark.itermcolors */
+:root[data-ansi-theme="tango-dark"] {
+  --ansi-black-fg: #000000;
+  --ansi-red-fg: #cc0000;
+  --ansi-green-fg: #4e9a06;
+  --ansi-yellow-fg: #c4a000;
+  --ansi-blue-fg: #3465a4;
+  --ansi-magenta-fg: #75507b;
+  --ansi-cyan-fg: #06989a;
+  --ansi-white-fg: #d3d7cf;
+  --ansi-bright-black-fg: #555753;
+  --ansi-bright-red-fg: #ef2929;
+  --ansi-bright-green-fg: #8ae234;
+  --ansi-bright-yellow-fg: #fce94f;
+  --ansi-bright-blue-fg: #729fcf;
+  --ansi-bright-magenta-fg: #ad7fa8;
+  --ansi-bright-cyan-fg: #34e2e2;
+  --ansi-bright-white-fg: #eeeeec;
+
+  --ansi-black-bg: #000000;
+  --ansi-red-bg: #cc0000;
+  --ansi-green-bg: #4e9a06;
+  --ansi-yellow-bg: #c4a000;
+  --ansi-blue-bg: #3465a4;
+  --ansi-magenta-bg: #75507b;
+  --ansi-cyan-bg: #06989a;
+  --ansi-white-bg: #d3d7cf;
+  --ansi-bright-black-bg: #555753;
+  --ansi-bright-red-bg: #ef2929;
+  --ansi-bright-green-bg: #8ae234;
+  --ansi-bright-yellow-bg: #fce94f;
+  --ansi-bright-blue-bg: #729fcf;
+  --ansi-bright-magenta-bg: #ad7fa8;
+  --ansi-bright-cyan-bg: #34e2e2;
+  --ansi-bright-white-bg: #eeeeec;
+}

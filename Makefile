@@ -28,6 +28,19 @@ ui-install:
 
 ui:
 	cd "$(UI_DIR)" && npm run build
+	$(MAKE) sync-styles
+
+# sync-styles mirrors the theme/ANSI CSS (single source of truth in ui/src/styles)
+# into the Go tree so it can be go:embed-ed for the server-side HTML log export.
+# Unlike static/, this mirror is COMMITTED to git so `go build`/`go test` work
+# from a clean checkout without a prior UI build; the drift guard test
+# (TestEmbeddedStylesMatchSource) fails if it falls out of sync.
+.PHONY: sync-styles
+sync-styles:
+	mkdir -p "$(GO_DIR)/internal/web/styles/ansi-themes"
+	cp "$(UI_DIR)/src/styles/ansi-classes.css" "$(GO_DIR)/internal/web/styles/ansi-classes.css"
+	cp "$(UI_DIR)/src/styles/export-base.css" "$(GO_DIR)/internal/web/styles/export-base.css"
+	cp "$(UI_DIR)/src/styles/ansi-themes/"*.css "$(GO_DIR)/internal/web/styles/ansi-themes/"
 
 run: build
 	"./$(BIN_DIR)/$(BIN_NAME)" --mud "$(MUD)" --listen "$(LISTEN)" --db "$(DB_PATH)"

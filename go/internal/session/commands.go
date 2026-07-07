@@ -104,6 +104,10 @@ func (s *Session) SendCommandWithTrace(command string, source string) ([]string,
 		if err := s.store.AppendHistoryEntry(s.sessionID, historyKind, cmd); err != nil {
 			log.Printf("append history entry failed: %v", err)
 		}
+		// Skip command_hint overlays for connect-sourced (session-init/auto-login)
+		// commands so auto-login credentials stay out of command_hint overlays —
+		// and therefore out of the colored-HTML log export, which reads those
+		// overlays (see docs/dev/planned/html-log-export.md security note).
 		if source != "connect" {
 			if err := s.store.AppendCommandHintToLatestLogEntry(s.sessionID, cmd); err != nil {
 				log.Printf("append command hint failed: %v", err)

@@ -12,6 +12,8 @@
   import ProfilesSection from './settings/ProfilesSection.svelte';
   import SessionsSection from './settings/SessionsSection.svelte';
   import * as api from './settings/api';
+  import { localDateTimeISO } from './settings/logRange';
+  import { normalizeAnsiTheme } from './ansi';
   import { duplicateHotkeyShortcutError } from './settings/hotkeyValidation';
   import type {
     Alias,
@@ -81,10 +83,23 @@
   let logTotal = 0;
   let logPage = 1;
   let logLimit = 100;
-  let logFrom = new Date().toISOString().split('T')[0];
-  let logTo = new Date().toISOString().split('T')[0];
+  // Logs tab state is mirrored into the URL query (?from&to&q) so a refresh
+  // restores the filter and tabs are shareable/openable. Seed from the URL here.
+  const logsURLParams = new URLSearchParams(window.location.search);
+  const _today = new Date().toISOString().split('T')[0];
 
-  let searchQuery = '';
+  // Log range (datetime-local "YYYY-MM-DDTHH:mm", to-the-minute for a single
+  // raid/event). Drives BOTH the browse preview list AND the .txt/.html exports
+  // — "what you see is what you export". Search is separate and ignores this
+  // range (it searches the whole session history).
+  let logFrom = logsURLParams.get('from') || `${_today}T00:00`;
+  let logTo = logsURLParams.get('to') || `${_today}T23:59`;
+
+  // Colored HTML export: include sent commands toggle.
+  let exportIncludeCommands = true;
+
+  let searchQuery = logsURLParams.get('q') || '';
+  let didAutoSearchFromURL = false; // one-shot: auto-run ?q= search on first load
   let searchResults: LogEntry[][] = []; // Groups of entries (match + context)
   let searchCursor: number | null = null;
   let searchMode = false;
@@ -323,6 +338,12 @@
         appSettings = await api.fetchAppSettings();
       } else if (currentTab === 'logs' && selectedSessionID) {
         await fetchLogs();
+        // If the URL carried ?q=, run that search once on first load so a shared
+        // link / refreshed tab lands directly on the search results.
+        if (!didAutoSearchFromURL && searchQuery) {
+          didAutoSearchFromURL = true;
+          await searchLogs();
+        }
       } else if (currentTab === 'profiles') {
         profileFiles = await api.fetchProfileFiles() || [];
       } else if (currentTab === 'sessions' && selectedSessionID) {
@@ -862,11 +883,34 @@
     await fetchData();
   }
 
+  // syncLogsURL mirrors the current Logs filter into the URL query (?from&to&q)
+  // via replaceState (no history spam), preserving the `#logs` tab hash. So a
+  // refresh restores the same view and the URL can be shared / opened in a tab.
+  function syncLogsURL() {
+    if (currentTab !== 'logs') return;
+    const p = new URLSearchParams(window.location.search);
+    logFrom ? p.set('from', logFrom) : p.delete('from');
+    logTo ? p.set('to', logTo) : p.delete('to');
+    searchQuery ? p.set('q', searchQuery) : p.delete('q');
+    const qs = p.toString();
+    history.replaceState(null, '', window.location.pathname + (qs ? '?' + qs : '') + window.location.hash);
+  }
+
+  // onLogRangeChange: the datetime range drives the browse preview and the
+  // exports; refetch the preview and persist the new range to the URL.
+  function onLogRangeChange() {
+    logPage = 1;
+    searchMode = false;
+    contextMode = false;
+    syncLogsURL();
+    void fetchLogs();
+  }
+
   async function fetchLogs() {
     if (!selectedSessionID) return;
     loading = true;
-    const from = logFrom ? new Date(logFrom).toISOString() : '';
-    const to = logTo ? new Date(logTo + 'T23:59:59Z').toISOString() : '';
+    const from = localDateTimeISO(logFrom);
+    const to = localDateTimeISO(logTo);
 
     try {
         const data = await api.fetchLogsRequest(selectedSessionID, from, to, logPage, logLimit);
@@ -884,6 +928,7 @@
     loading = true;
     searchMode = true;
     contextMode = false;
+    syncLogsURL();
 
     if (!loadMore) {
         searchResults = [];
@@ -941,9 +986,29 @@
 
   function downloadLogs() {
     if (!selectedSessionID) return;
-    const from = logFrom ? new Date(logFrom).toISOString() : '';
-    const to = logTo ? new Date(logTo + 'T23:59:59Z').toISOString() : '';
+    const from = localDateTimeISO(logFrom);
+    const to = localDateTimeISO(logTo);
     window.open(api.buildLogDownloadURL(selectedSessionID, from, to), '_blank');
+  }
+
+  // Opens the server-side streaming colored-HTML export in a new tab, which
+  // downloads a self-contained .html file. Server-side streaming (like the .txt
+  // download) means no browser-side assembly, no size caps, and no OOM risk.
+  function exportLogsHtml() {
+    if (!selectedSessionID) return;
+    const from = localDateTimeISO(logFrom);
+    const to = localDateTimeISO(logTo);
+    const theme = normalizeAnsiTheme(currentSession?.ansi_theme);
+    const url = api.buildLogExportHTMLURL(selectedSessionID, {
+      from,
+      to,
+      commands: exportIncludeCommands,
+      theme,
+      // Scope to the main game buffer: canonical command echoes anchored to side
+      // buffers would otherwise leak into the export. main = the game screen.
+      buffer: 'main',
+    });
+    window.open(url, '_blank');
   }
 
   async function addProfileToSession(profileID: number) {
@@ -1393,34 +1458,49 @@
       </header>
 
       <div class="editor-box">
-          <div class="form-row" style="margin-bottom: 1rem;">
-              <input type="text" placeholder="Search logs..." bind:value={searchQuery} on:keydown={(e) => e.key === 'Enter' && searchLogs()} />
-              <button class="btn-primary" on:click={() => searchLogs()} disabled={!searchQuery || loading}>
-                {loading ? 'Searching...' : 'Search'}
-              </button>
-              {#if searchMode || contextMode}
-                <button class="btn-secondary" on:click={() => { searchMode = false; contextMode = false; fetchLogs(); }}>Back to Browsing</button>
-              {/if}
-          </div>
-          {#if loading && searchMode && searchResults.length === 0}
-            <div style="text-align: center; color: #3498db; margin-bottom: 1rem;">Searching logs for "{searchQuery}"...</div>
-          {/if}
-          {#if searchMode}
-            <div style="font-size: 0.8rem; color: #9ba3af; margin-bottom: 1rem; text-align: center;">
-                💡 Search works across all historical data, ignoring date filters.
-            </div>
-          {/if}
-          <div class="form-row">
-              <div class="form-group">
-                  <label for="log-from">From</label>
-                  <input id="log-from" type="date" bind:value={logFrom} on:change={() => { logPage = 1; searchMode = false; contextMode = false; fetchLogs(); }} />
+          <div class="log-export">
+              <!-- Row 1: date/time range — drives both the preview below and the exports. -->
+              <div class="log-export__row">
+                  <label class="log-export__field" for="log-from">
+                      <span>From</span>
+                      <input id="log-from" type="datetime-local" bind:value={logFrom} on:change={onLogRangeChange} />
+                  </label>
+                  <label class="log-export__field" for="log-to">
+                      <span>To</span>
+                      <input id="log-to" type="datetime-local" bind:value={logTo} on:change={onLogRangeChange} />
+                  </label>
               </div>
-              <div class="form-group">
-                  <label for="log-to">To</label>
-                  <input id="log-to" type="date" bind:value={logTo} on:change={() => { logPage = 1; searchMode = false; contextMode = false; fetchLogs(); }} />
+
+              <!-- Row 2: export the selected range — two buttons, one option, one hint. -->
+              <div class="log-export__row log-export__actions">
+                  <button class="btn-secondary" on:click={downloadLogs} disabled={!selectedSessionID}>Download .txt</button>
+                  <button class="btn-primary" on:click={exportLogsHtml} disabled={!selectedSessionID}>Download .html</button>
+                  <label class="log-export__check">
+                      <input type="checkbox" bind:checked={exportIncludeCommands} />
+                      Include sent commands
+                  </label>
               </div>
-              <div class="form-group" style="align-self: flex-end;">
-                  <button class="btn-secondary" on:click={downloadLogs}>Download (.txt)</button>
+              <p class="log-export__note">
+                  Exports the selected date/time range. <strong>.html</strong> is a self-contained colored file of the raw server output (no highlights or substitutions, nothing gagged) in this session's theme palette; <strong>.txt</strong> is plain text.
+              </p>
+
+              <!-- Row 3: search — independent of the export range (searches the whole session history). -->
+              <div class="log-export__search">
+                  <div class="form-row">
+                      <input type="text" placeholder="Search logs..." bind:value={searchQuery} on:keydown={(e) => e.key === 'Enter' && searchLogs()} />
+                      <button class="btn-primary" on:click={() => searchLogs()} disabled={!searchQuery || loading}>
+                        {loading ? 'Searching...' : 'Search'}
+                      </button>
+                      {#if searchMode || contextMode}
+                        <button class="btn-secondary" on:click={() => { searchMode = false; contextMode = false; searchQuery = ''; syncLogsURL(); fetchLogs(); }}>Back to Browsing</button>
+                      {/if}
+                  </div>
+                  {#if loading && searchMode && searchResults.length === 0}
+                    <div style="text-align: center; color: #3498db; margin-top: 0.75rem;">Searching logs for "{searchQuery}"...</div>
+                  {/if}
+                  <p class="log-export__note">
+                      Search scans the whole session history and ignores the date range above — it does not affect what gets exported.
+                  </p>
               </div>
           </div>
       </div>
@@ -1564,6 +1644,18 @@
   .history-toolbar { justify-content: space-between; flex-wrap: wrap; }
   .history-filter { display: flex; gap: 8px; align-items: center; color: #9ba3af; }
   .history-note { color: #9ba3af; font-size: 0.85rem; margin: 12px 0 0; }
+  .log-export { max-width: 680px; display: flex; flex-direction: column; gap: 14px; }
+  .log-export__row { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 12px; margin: 0; }
+  .log-export__field { display: flex; flex-direction: column; gap: 4px; }
+  .log-export__field > span { font-size: 0.75rem; color: #9ba3af; }
+  .log-export__field input { flex: none; background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 6px 10px; border-radius: 6px; color-scheme: dark; font: inherit; }
+  .log-export__field input[type="text"] { width: 260px; }
+  .log-export__field input[type="datetime-local"] { width: 210px; }
+  .log-export__check { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: #cbd5e1; cursor: pointer; white-space: nowrap; }
+  .log-export__actions { align-items: center; }
+  .log-export__note { color: #9ba3af; font-size: 0.8rem; margin: 2px 0 0; line-height: 1.4; }
+  .log-export__search { margin-top: 16px; padding-top: 16px; border-top: 1px solid #2d333b; }
+  .log-export__search .form-row input[type="text"] { max-width: 320px; }
   input[type="text"] { background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px 12px; border-radius: 6px; flex: 1; }
   .checkbox-label { display: flex; align-items: center; gap: 8px; font-size: 0.85rem; color: #9ba3af; cursor: pointer; }
   .btn-primary { background: #3498db; color: white; border: none; padding: 8px 20px; border-radius: 6px; cursor: pointer; }

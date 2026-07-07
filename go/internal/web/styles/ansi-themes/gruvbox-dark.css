@@ -1,0 +1,37 @@
+/* iTerm2 Gruvbox Dark
+   Source: https://raw.githubusercontent.com/mbadolato/iTerm2-Color-Schemes/master/schemes/Gruvbox%20Dark.itermcolors */
+:root[data-ansi-theme="gruvbox-dark"] {
+  --ansi-black-fg: #282828;
+  --ansi-red-fg: #cc241d;
+  --ansi-green-fg: #98971a;
+  --ansi-yellow-fg: #d79921;
+  --ansi-blue-fg: #458588;
+  --ansi-magenta-fg: #b16286;
+  --ansi-cyan-fg: #689d6a;
+  --ansi-white-fg: #a89984;
+  --ansi-bright-black-fg: #928374;
+  --ansi-bright-red-fg: #fb4934;
+  --ansi-bright-green-fg: #b8bb26;
+  --ansi-bright-yellow-fg: #fabd2f;
+  --ansi-bright-blue-fg: #83a598;
+  --ansi-bright-magenta-fg: #d3869b;
+  --ansi-bright-cyan-fg: #8ec07c;
+  --ansi-bright-white-fg: #ebdbb2;
+
+  --ansi-black-bg: #282828;
+  --ansi-red-bg: #cc241d;
+  --ansi-green-bg: #98971a;
+  --ansi-yellow-bg: #d79921;
+  --ansi-blue-bg: #458588;
+  --ansi-magenta-bg: #b16286;
+  --ansi-cyan-bg: #689d6a;
+  --ansi-white-bg: #a89984;
+  --ansi-bright-black-bg: #928374;
+  --ansi-bright-red-bg: #fb4934;
+  --ansi-bright-green-bg: #b8bb26;
+  --ansi-bright-yellow-bg: #fabd2f;
+  --ansi-bright-blue-bg: #83a598;
+  --ansi-bright-magenta-bg: #d3869b;
+  --ansi-bright-cyan-bg: #8ec07c;
+  --ansi-bright-white-bg: #ebdbb2;
+}

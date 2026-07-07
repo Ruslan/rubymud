@@ -1,0 +1,56 @@
+/*
+ * Base document styling for the self-contained colored HTML log export.
+ * Inlined (via ?raw) into each exported file's <style>; the ANSI palette comes
+ * from a theme file and ansi-classes.css, this only styles the page shell.
+ */
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  margin: 0;
+  background: #111315;
+  color: var(--ansi-white-fg, #e8edf2);
+}
+
+body {
+  font-family: "Fira Code", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 14px;
+  line-height: 1.4;
+}
+
+.log-export {
+  padding: 1rem 1.25rem;
+}
+
+.log-export__title {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--ansi-bright-white-fg, #f7fbff);
+}
+
+.log-export__meta {
+  margin: 0 0 1rem;
+  color: #8b98a7;
+  font-size: 0.8rem;
+}
+
+pre.log-export__body {
+  margin: 0;
+  font-family: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.log-line {
+  display: block;
+  min-height: 1.4em;
+}
+
+/* Sent player commands are visually distinguished from received output. */
+.log-line.log-input {
+  color: var(--ansi-bright-yellow-fg, #f7c97f);
+}
