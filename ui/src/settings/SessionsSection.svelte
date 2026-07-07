@@ -24,6 +24,55 @@
   export let moveSessionProfile: (index: number, direction: -1 | 1) => void | Promise<void>;
   export let removeProfileFromSession: (profileID: number) => void | Promise<void>;
   export let addProfileToSession: (profileID: number) => void | Promise<void>;
+
+  function detectBrowserTimezone(): string {
+    try {
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+    } catch {
+      return '';
+    }
+  }
+
+  const browserTimezone = detectBrowserTimezone();
+
+  function supportedTimezones(): string[] {
+    let zones: string[] = [];
+    try {
+      // @ts-ignore - supportedValuesOf is not yet in older TS lib defs
+      if (typeof Intl.supportedValuesOf === 'function') {
+        // @ts-ignore
+        zones = Intl.supportedValuesOf('timeZone') as string[];
+      }
+    } catch {
+      zones = [];
+    }
+    if (zones.length === 0) {
+      zones = ['UTC', 'Europe/London', 'Europe/Kyiv', 'America/New_York', 'America/Los_Angeles', 'Asia/Tokyo', 'Australia/Sydney'];
+    }
+    return zones;
+  }
+
+  const baseTimezones = supportedTimezones();
+
+  // Ensure the currently-selected zone, the browser zone and UTC are always
+  // available as options even if not present in the platform list.
+  $: timezoneOptions = Array.from(
+    new Set(['UTC', browserTimezone, editingSessionDraft.timezone, ...baseTimezones].filter((z): z is string => !!z))
+  );
+
+  function selectTimezone(value: string) {
+    // Choosing a specific zone pins it (stop following the browser).
+    editingSessionDraft = { ...editingSessionDraft, timezone: value, tz_follow: 0 };
+  }
+
+  function toggleFollowTimezone(follow: boolean) {
+    editingSessionDraft = {
+      ...editingSessionDraft,
+      tz_follow: follow ? 1 : 0,
+      // Re-enabling follow adopts the current browser zone immediately.
+      timezone: follow && browserTimezone ? browserTimezone : editingSessionDraft.timezone,
+    };
+  }
 </script>
 
 <section class="settings-section">
@@ -96,6 +145,25 @@
                       <option value="tango-dark">Tango Dark</option>
                       <option value="dracula">Dracula</option>
                       <option value="gruvbox-dark">Gruvbox Dark</option>
+                  </select>
+                </label>
+                <label class="checkbox-label inline-checkbox">
+                  <input
+                    type="checkbox"
+                    checked={editingSessionDraft.tz_follow === 1}
+                    on:change={(e) => toggleFollowTimezone((e.currentTarget as HTMLInputElement).checked)}
+                  />
+                  Follow browser timezone{browserTimezone ? ` (${browserTimezone})` : ''}
+                </label>
+                <label>Timezone
+                  <select
+                    value={editingSessionDraft.timezone || 'UTC'}
+                    on:change={(e) => selectTimezone((e.currentTarget as HTMLSelectElement).value)}
+                    aria-label="Session timezone"
+                  >
+                    {#each timezoneOptions as tz}
+                      <option value={tz}>{tz}</option>
+                    {/each}
                   </select>
                 </label>
               </div>

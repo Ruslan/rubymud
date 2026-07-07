@@ -89,6 +89,10 @@ func (s *Server) mcpListTools() any {
 		"type":        "integer",
 		"description": "Session ID. Optional — defaults to the first available session.",
 	}
+	tzProp := map[string]any{
+		"type":        "string",
+		"description": "IANA timezone (e.g. 'Europe/Kyiv') used to render timestamps. Optional — defaults to the session's timezone, then UTC.",
+	}
 	return map[string]any{
 		"tools": []any{
 			map[string]any{
@@ -107,6 +111,7 @@ func (s *Server) mcpListTools() any {
 					"properties": map[string]any{
 						"session_id": sessionIDProp,
 						"limit":      map[string]any{"type": "integer", "description": "Number of lines to return (default 200)."},
+						"tz":         tzProp,
 					},
 				},
 			},
@@ -119,6 +124,7 @@ func (s *Server) mcpListTools() any {
 						"session_id": sessionIDProp,
 						"before_id":  map[string]any{"type": "integer", "description": "Return lines with ID less than this value."},
 						"limit":      map[string]any{"type": "integer", "description": "Number of lines to return (default 50)."},
+						"tz":         tzProp,
 					},
 					"required": []string{"before_id"},
 				},
@@ -134,6 +140,7 @@ func (s *Server) mcpListTools() any {
 						"context":    map[string]any{"type": "integer", "description": "Lines of context around each match (default 5)."},
 						"max_groups": map[string]any{"type": "integer", "description": "Maximum number of match groups to return (default 10)."},
 						"before_id":  map[string]any{"type": "integer", "description": "Search only in log entries with ID less than this value. Use to paginate deeper into history."},
+						"tz":         tzProp,
 					},
 					"required": []string{"query"},
 				},
@@ -226,8 +233,9 @@ func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 
 	case "mud_get_output":
 		var args struct {
-			SessionID int64 `json:"session_id"`
-			Limit     int   `json:"limit"`
+			SessionID int64  `json:"session_id"`
+			Limit     int    `json:"limit"`
+			Tz        string `json:"tz"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
 			return nil, err
@@ -245,13 +253,14 @@ func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		content = s.formatMcpEntries(entries, "")
+		content = s.formatMcpEntries(entries, "", s.resolveRequestLocation(sid, args.Tz))
 
 	case "mud_get_output_range":
 		var args struct {
-			SessionID int64 `json:"session_id"`
-			BeforeID  int64 `json:"before_id"`
-			Limit     int   `json:"limit"`
+			SessionID int64  `json:"session_id"`
+			BeforeID  int64  `json:"before_id"`
+			Limit     int    `json:"limit"`
+			Tz        string `json:"tz"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
 			return nil, err
@@ -269,7 +278,7 @@ func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		content = s.formatMcpEntries(entries, "")
+		content = s.formatMcpEntries(entries, "", s.resolveRequestLocation(sid, args.Tz))
 
 	case "mud_search":
 		var args struct {
@@ -278,6 +287,7 @@ func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 			Context   int    `json:"context"`
 			MaxGroups int    `json:"max_groups"`
 			BeforeID  int64  `json:"before_id"`
+			Tz        string `json:"tz"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
 			return nil, err
@@ -307,7 +317,7 @@ func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 			if len(groups) > args.MaxGroups {
 				groups = groups[len(groups)-args.MaxGroups:]
 			}
-			content = formatMcpSearch(groups, args.Query, totalGroups, args.MaxGroups)
+			content = formatMcpSearch(groups, args.Query, totalGroups, args.MaxGroups, s.resolveRequestLocation(sid, args.Tz))
 		}
 
 	case "mud_send_command":
@@ -507,16 +517,18 @@ func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 	}, nil
 }
 
-const mcpTimeFormat = "2006-01-02 15:04:05"
+// mcpTimeFormat carries an explicit UTC offset so a record's calendar day is
+// unambiguous regardless of the caller's zone.
+const mcpTimeFormat = "2006-01-02 15:04:05 -0700"
 
 func stripAnsi(s string) string {
 	return ansiEscapeRE.ReplaceAllString(s, "")
 }
 
-// mcpHeader returns a header line with the current server time and,
-// if entries is non-empty, the timestamp of the first log entry.
-func mcpHeader(entries []storage.LogEntry) string {
-	now := time.Now().Format(mcpTimeFormat)
+// mcpHeader returns a header line with the current time and,
+// if entries is non-empty, the timestamp of the first log entry, both in loc.
+func mcpHeader(entries []storage.LogEntry, loc *time.Location) string {
+	now := time.Now().In(loc).Format(mcpTimeFormat)
 	if len(entries) == 0 {
 		return fmt.Sprintf("Current time: %s\n\n", now)
 	}
@@ -524,7 +536,7 @@ func mcpHeader(entries []storage.LogEntry) string {
 	if first.IsZero() {
 		return fmt.Sprintf("Current time: %s\n\n", now)
 	}
-	return fmt.Sprintf("Current time: %s | Log from: %s\n\n", now, first.Format(mcpTimeFormat))
+	return fmt.Sprintf("Current time: %s | Log from: %s\n\n", now, first.In(loc).Format(mcpTimeFormat))
 }
 
 // formatMcpGroup formats a single group of log entries with optional query highlighting.
@@ -547,14 +559,14 @@ func formatMcpGroup(entries []storage.LogEntry, query string) string {
 }
 
 // formatMcpEntries formats entries for get_output / get_output_range (single block with header).
-func (s *Server) formatMcpEntries(entries []storage.LogEntry, query string) string {
-	return mcpHeader(entries) + formatMcpGroup(entries, query)
+func (s *Server) formatMcpEntries(entries []storage.LogEntry, query string, loc *time.Location) string {
+	return mcpHeader(entries, loc) + formatMcpGroup(entries, query)
 }
 
 // formatMcpSearch formats search results: header + groups separated by dividers with timestamps.
 // totalGroups is the total found before slicing; maxGroups is the limit applied.
-func formatMcpSearch(groups [][]storage.LogEntry, query string, totalGroups, maxGroups int) string {
-	now := time.Now().Format(mcpTimeFormat)
+func formatMcpSearch(groups [][]storage.LogEntry, query string, totalGroups, maxGroups int, loc *time.Location) string {
+	now := time.Now().In(loc).Format(mcpTimeFormat)
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Current time: %s\n", now))
 	if totalGroups > maxGroups {
@@ -577,7 +589,7 @@ func formatMcpSearch(groups [][]storage.LogEntry, query string, totalGroups, max
 			sb.WriteString("\n---\n\n")
 		}
 		if len(group) > 0 && !group[0].CreatedAt.Time.IsZero() {
-			sb.WriteString(fmt.Sprintf("Group %d — %s:\n", i+1, group[0].CreatedAt.Time.Format(mcpTimeFormat)))
+			sb.WriteString(fmt.Sprintf("Group %d — %s:\n", i+1, group[0].CreatedAt.Time.In(loc).Format(mcpTimeFormat)))
 		} else {
 			sb.WriteString(fmt.Sprintf("Group %d:\n", i+1))
 		}

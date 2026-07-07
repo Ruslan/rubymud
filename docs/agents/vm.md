@@ -55,3 +55,22 @@ Keep the matcher abstraction minimal. Prefer `CompiledMatcher` with a regex fiel
 - **Aliases**: Support for recursion (max depth 10) and positional arguments.
 - **Groups**: Rules can be grouped and enabled/disabled together via `#group`.
 - **Expressions**: `#if` supports a full stack-based evaluator for math and logic.
+
+## Built-in Time Variables & Timezone
+
+`$DATE`, `$TIME`, `$HOUR`, `$MINUTE`, `$SECOND` expand in the **session's
+timezone**, not the host zone. The VM holds a `*time.Location` (default UTC);
+`$TIMESTAMP` stays a zone-independent Unix epoch. See `builtinVarAt` in
+`internal/vm/expand.go`.
+
+The location is driven via `(*VM).SetLocation`:
+
+- On connect, `Manager.Connect` seeds it from the session's stored `timezone`.
+- The WS handler passes the browser zone (`tz` query param); a following session
+  (`tz_follow=1`) persists it and pushes it to the VM, while a pinned session
+  (`tz_follow=0`) is left untouched (`Session.ApplyClientTimezone`).
+- A manual Settings edit re-syncs a live VM immediately via
+  `Manager.UpdateSession` → `Session.SetTimezoneLocation`.
+
+`SetLocation` is race-safe (`atomic.Pointer[time.Location]`); a nil location
+resets to UTC. Time text already baked into a stored line is not reformatted.

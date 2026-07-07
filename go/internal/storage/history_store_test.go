@@ -167,6 +167,7 @@ func TestHistoryUniqueLineMigrationDedupesExistingRows(t *testing.T) {
 		"001_init.sql", "002_timers.sql", "003_hotkey_mobile_layout.sql", "004_profile_timers.sql",
 		"005_timer_repeat_mode.sql", "006_mccp_settings.sql", "007_substitute_rules.sql",
 		"008_profile_timer_subscription_removals.sql", "009_session_ansi_theme.sql",
+		"011_session_timezone.sql",
 	} {
 		if err := db.Exec("INSERT INTO schema_migrations (version) VALUES (?)", version).Error; err != nil {
 			t.Fatalf("insert schema migration %s: %v", version, err)

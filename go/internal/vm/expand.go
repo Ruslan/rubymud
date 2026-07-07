@@ -12,15 +12,29 @@ func (v *VM) substituteVars(s string) string {
 		if val, ok := v.variables[key]; ok {
 			return val
 		}
-		if val, ok := builtinVar(key); ok {
+		if val, ok := builtinVarIn(key, v.location()); ok {
 			return val
 		}
 		return match
 	})
 }
 
+// builtinVar expands time-based builtins in the host's local zone. It is used by
+// contexts without a VM/session (e.g. #if expression evaluation).
 func builtinVar(key string) (string, bool) {
-	now := time.Now()
+	return builtinVarIn(key, time.Local)
+}
+
+func builtinVarIn(key string, loc *time.Location) (string, bool) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	return builtinVarAt(time.Now().In(loc), key)
+}
+
+// builtinVarAt expands a time-based builtin for a specific instant. Kept
+// separate from the wall clock so it can be tested deterministically.
+func builtinVarAt(now time.Time, key string) (string, bool) {
 	switch key {
 	case "DATE":
 		return now.Format("02-01-2006"), true

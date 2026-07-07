@@ -28,6 +28,8 @@ type SessionRecord struct {
 	Status                string      `json:"status"`
 	InitialCommands       string      `json:"initial_commands"`
 	AnsiTheme             string      `gorm:"default:classic" json:"ansi_theme"`
+	Timezone              string      `gorm:"default:UTC" json:"timezone"`
+	TZFollow              int         `gorm:"column:tz_follow;default:1" json:"tz_follow"`
 	MCCPEnabled           int         `gorm:"default:1" json:"mccp_enabled"`
 	MCCPActive            bool        `gorm:"-" json:"mccp_active"`
 	MCCPCompressedBytes   uint64      `gorm:"-" json:"mccp_compressed_bytes"`

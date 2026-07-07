@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"regexp"
 	"runtime"
+	"time"
 
 	"rubymud/go/internal/storage"
 )
@@ -28,6 +29,28 @@ func New(store *storage.Store, sessionID int64) *VM {
 	}
 
 	return v
+}
+
+// SetLocation sets the timezone used to expand $DATE/$TIME/$HOUR/$MINUTE/$SECOND.
+// A nil location resets the VM to UTC.
+func (v *VM) SetLocation(loc *time.Location) {
+	if loc == nil {
+		loc = time.UTC
+	}
+	v.loc.Store(loc)
+}
+
+// location returns the VM's configured timezone, defaulting to UTC.
+func (v *VM) location() *time.Location {
+	if loc := v.loc.Load(); loc != nil {
+		return loc
+	}
+	return time.UTC
+}
+
+// Location returns the VM's configured timezone (defaulting to UTC).
+func (v *VM) Location() *time.Location {
+	return v.location()
 }
 
 func (v *VM) SetTimerControl(tc TimerControl) {

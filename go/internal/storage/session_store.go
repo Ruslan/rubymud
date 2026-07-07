@@ -1,6 +1,10 @@
 package storage
 
-import "gorm.io/gorm"
+import (
+	"time"
+
+	"gorm.io/gorm"
+)
 
 func (s *SessionRecord) TableName() string {
 	return "sessions"
@@ -15,8 +19,34 @@ func NormalizeAnsiTheme(theme string) string {
 	}
 }
 
+// NormalizeTimezone returns a concrete IANA zone name, defaulting to "UTC" when
+// empty or unparseable.
+func NormalizeTimezone(name string) string {
+	if name == "" {
+		return "UTC"
+	}
+	if _, err := time.LoadLocation(name); err != nil {
+		return "UTC"
+	}
+	return name
+}
+
+// LoadLocationOrUTC resolves an IANA zone name to a *time.Location, falling back
+// to time.UTC when empty or unparseable.
+func LoadLocationOrUTC(name string) *time.Location {
+	if name == "" {
+		return time.UTC
+	}
+	loc, err := time.LoadLocation(name)
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}
+
 func normalizeSessionRecord(record *SessionRecord) {
 	record.AnsiTheme = NormalizeAnsiTheme(record.AnsiTheme)
+	record.Timezone = NormalizeTimezone(record.Timezone)
 }
 
 func (s *Store) EnsureDefaultSession(host string, port int) (SessionRecord, error) {
@@ -31,6 +61,8 @@ func (s *Store) EnsureDefaultSession(host string, port int) (SessionRecord, erro
 			MudPort:         port,
 			Status:          "disconnected",
 			AnsiTheme:       "classic",
+			Timezone:        "UTC",
+			TZFollow:        1,
 			MCCPEnabled:     1,
 			LastConnectedAt: now,
 		}
@@ -67,6 +99,8 @@ func (s *Store) CreateSession(name, host string, port int) (SessionRecord, error
 		MudPort:     port,
 		Status:      "disconnected",
 		AnsiTheme:   "classic",
+		Timezone:    "UTC",
+		TZFollow:    1,
 		MCCPEnabled: 1,
 	}
 	err := s.db.Create(&record).Error
@@ -93,6 +127,14 @@ func (s *Store) ListSessions() ([]SessionRecord, error) {
 		normalizeSessionRecord(&sessions[i])
 	}
 	return sessions, err
+}
+
+// UpdateSessionTimezone persists only the timezone column (normalized), leaving
+// other columns untouched so concurrent status/connection updates are not
+// clobbered.
+func (s *Store) UpdateSessionTimezone(sessionID int64, tz string) error {
+	return s.db.Model(&SessionRecord{}).Where("id = ?", sessionID).
+		Update("timezone", NormalizeTimezone(tz)).Error
 }
 
 func (s *Store) MarkSessionConnected(sessionID int64) error {

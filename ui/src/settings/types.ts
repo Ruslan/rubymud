@@ -126,6 +126,8 @@ export interface Session {
   status: string;
   initial_commands: string;
   ansi_theme: string;
+  timezone: string;
+  tz_follow: number;
   mccp_enabled: number;
   mccp_active?: boolean;
   mccp_compressed_bytes?: number;

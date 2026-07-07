@@ -167,18 +167,33 @@ export function fetchLogsRequest(sessionID: number, from: string, to: string, pa
   return getJSON(`/api/sessions/${sessionID}/logs?${params}`);
 }
 
+function browserTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
+}
+
+function tzQuery(): string {
+  const tz = browserTimezone();
+  return tz ? `&tz=${encodeURIComponent(tz)}` : '';
+}
+
 export function searchLogsRequest(sessionID: number, query: string, beforeID: number | null) {
-  const url = `/api/sessions/${sessionID}/logs/search?q=${encodeURIComponent(query)}` + (beforeID ? `&before_id=${beforeID}` : '');
+  const url = `/api/sessions/${sessionID}/logs/search?q=${encodeURIComponent(query)}` + (beforeID ? `&before_id=${beforeID}` : '') + tzQuery();
   return getJSON(url);
 }
 
-export const fetchLogContext = (sessionID: number, entryID: number) => getJSON<LogEntry[]>(`/api/sessions/${sessionID}/logs/${entryID}/context?before=20&after=20`);
+export const fetchLogContext = (sessionID: number, entryID: number) => getJSON<LogEntry[]>(`/api/sessions/${sessionID}/logs/${entryID}/context?before=20&after=20${tzQuery()}`);
 export const fetchMoreLogContext = (sessionID: number, entryID: number, direction: 'above' | 'below') => {
   const query = direction === 'above' ? 'before=50&after=0' : 'before=0&after=50';
-  return getJSON<LogEntry[]>(`/api/sessions/${sessionID}/logs/${entryID}/context?${query}`);
+  return getJSON<LogEntry[]>(`/api/sessions/${sessionID}/logs/${entryID}/context?${query}${tzQuery()}`);
 };
 
 export function buildLogDownloadURL(sessionID: number, from: string, to: string): string {
   const params = new URLSearchParams({ from, to, token: apiToken() });
+  const tz = browserTimezone();
+  if (tz) params.set('tz', tz);
   return `/api/sessions/${sessionID}/logs/download?${params}`;
 }

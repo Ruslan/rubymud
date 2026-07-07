@@ -94,7 +94,7 @@
 
   // Sessions State
   let sessions: Session[] = [];
-  const defaultSession = (): Partial<Session> => ({ name: '', mud_host: '', mud_port: 0, initial_commands: '', ansi_theme: 'classic', mccp_enabled: 1 });
+  const defaultSession = (): Partial<Session> => ({ name: '', mud_host: '', mud_port: 0, initial_commands: '', ansi_theme: 'classic', timezone: 'UTC', tz_follow: 1, mccp_enabled: 1 });
   let sessionEditor: Partial<Session> = defaultSession();
   let editingSessionID: number | null = null;
   let editingSessionDraft: Partial<Session> = defaultSession();
@@ -725,7 +725,7 @@
     if (editingSessionID !== null && editingSessionID !== session.id && !confirm('Discard unsaved session changes?')) return;
     inlineSessionError = '';
     editingSessionID = session.id;
-    editingSessionDraft = { ...session, ansi_theme: session.ansi_theme || 'classic' };
+    editingSessionDraft = { ...session, ansi_theme: session.ansi_theme || 'classic', timezone: session.timezone || 'UTC', tz_follow: session.tz_follow ?? 1 };
   }
 
   function cancelInlineSessionEdit() {

@@ -2,12 +2,52 @@ package session
 
 import (
 	"log"
+	"strings"
 	"time"
 
 	"rubymud/go/internal/storage"
 )
 
 const latencyLogThreshold = 50 * time.Millisecond
+
+// ApplyClientTimezone reacts to a connecting client's IANA timezone. When the
+// session is set to follow the browser (tz_follow=1) and the zone parses, it is
+// persisted into the session's timezone and pushed to the VM so $TIME/$DATE
+// render in it. Pinned sessions (tz_follow=0) are left untouched.
+func (s *Session) ApplyClientTimezone(tz string) {
+	tz = strings.TrimSpace(tz)
+	if tz == "" {
+		return
+	}
+	loc, err := time.LoadLocation(tz)
+	if err != nil {
+		return
+	}
+	record, err := s.store.GetSession(s.sessionID)
+	if err != nil {
+		log.Printf("apply client timezone: load session %d: %v", s.sessionID, err)
+		return
+	}
+	if record.TZFollow == 0 {
+		return
+	}
+	if record.Timezone != tz {
+		if err := s.store.UpdateSessionTimezone(s.sessionID, tz); err != nil {
+			log.Printf("apply client timezone: persist %q for session %d: %v", tz, s.sessionID, err)
+			return
+		}
+	}
+	s.vm.SetLocation(loc)
+}
+
+// SetTimezoneLocation pushes a resolved timezone to the live VM so $TIME/$DATE
+// take effect immediately (e.g. after a manual Settings edit while connected).
+func (s *Session) SetTimezoneLocation(loc *time.Location) {
+	if s == nil || s.vm == nil {
+		return
+	}
+	s.vm.SetLocation(loc)
+}
 
 func (s *Session) AttachClient(name string, send func(msg ServerMsg) error) int {
 	s.mu.Lock()

@@ -3,6 +3,8 @@ package vm
 import (
 	"regexp"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"rubymud/go/internal/storage"
 )
@@ -92,6 +94,7 @@ type VM struct {
 	substitutes         []storage.SubstituteRule
 	variables           map[string]string
 	varPattern          *regexp.Regexp
+	loc                 atomic.Pointer[time.Location]
 	ttsFn               func(string)
 	ttsCustom           bool
 	timerCtrl           TimerControl

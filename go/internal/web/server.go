@@ -757,9 +757,15 @@ func (s *Server) listSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	loc := s.resolveRequestLocation(id, r.URL.Query().Get("tz"))
+	localGroups := make([][]logEntryWithTZ, len(groups))
+	for i, group := range groups {
+		localGroups[i] = logEntriesInLocation(group, loc)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"groups": groups,
+		"groups": localGroups,
 		"cursor": cursor,
 	})
 }
@@ -808,8 +814,10 @@ func (s *Server) getLogContext(w http.ResponseWriter, r *http.Request) {
 		allEntries = append(allEntries, entries...)
 	}
 
+	loc := s.resolveRequestLocation(id, r.URL.Query().Get("tz"))
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(allEntries)
+	json.NewEncoder(w).Encode(logEntriesInLocation(allEntries, loc))
 }
 
 func (s *Server) downloadLogs(w http.ResponseWriter, r *http.Request) {
@@ -821,6 +829,7 @@ func (s *Server) downloadLogs(w http.ResponseWriter, r *http.Request) {
 
 	fromStr := r.URL.Query().Get("from")
 	toStr := r.URL.Query().Get("to")
+	loc := s.resolveRequestLocation(id, r.URL.Query().Get("tz"))
 
 	var from, to storage.SQLiteTime
 	if fromStr != "" {
@@ -867,8 +876,43 @@ func (s *Server) downloadLogs(w http.ResponseWriter, r *http.Request) {
 			log.Printf("error scanning row: %v", err)
 			continue
 		}
-		fmt.Fprintf(w, "[%s] %s\n", record.CreatedAt.Format("2006-01-02 15:04:05"), record.PlainText)
+		fmt.Fprintf(w, "[%s] %s\n", record.CreatedAt.Time.In(loc).Format("2006-01-02 15:04:05 -0700"), record.PlainText)
 	}
+}
+
+// resolveRequestLocation picks the timezone used to present historical
+// timestamps: the request's `tz` param when it parses, otherwise the session's
+// stored timezone, otherwise UTC.
+func (s *Server) resolveRequestLocation(sessionID int64, tz string) *time.Location {
+	if tz = strings.TrimSpace(tz); tz != "" {
+		if loc, err := time.LoadLocation(tz); err == nil {
+			return loc
+		}
+	}
+	if record, err := s.store.GetSession(sessionID); err == nil {
+		return storage.LoadLocationOrUTC(record.Timezone)
+	}
+	return time.UTC
+}
+
+// logEntryWithTZ overrides the UTC-only created_at serialization of
+// storage.LogEntry with a string rendered in the requested location (RFC3339,
+// explicit offset) so the calendar day is unambiguous.
+type logEntryWithTZ struct {
+	storage.LogEntry
+	CreatedAt string `json:"created_at"`
+}
+
+func logEntriesInLocation(entries []storage.LogEntry, loc *time.Location) []logEntryWithTZ {
+	out := make([]logEntryWithTZ, len(entries))
+	for i, e := range entries {
+		created := ""
+		if !e.CreatedAt.Time.IsZero() {
+			created = e.CreatedAt.Time.In(loc).Format(time.RFC3339Nano)
+		}
+		out[i] = logEntryWithTZ{LogEntry: e, CreatedAt: created}
+	}
+	return out
 }
 
 // Session Profiles
@@ -1922,6 +1966,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	sessIDStr := r.URL.Query().Get("session_id")
+	clientTZ := r.URL.Query().Get("tz")
 	if sessIDStr != "" {
 		if id, err := strconv.ParseInt(sessIDStr, 10, 64); err == nil {
 			if sess, ok := s.manager.GetSession(id); ok {
@@ -1945,6 +1990,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if currentSess != nil {
+		currentSess.ApplyClientTimezone(clientTZ)
 		if err := s.sendRestoreState(currentSess, writeJSON); err != nil {
 			log.Printf("websocket restore state failed: %v", err)
 			return
@@ -1972,6 +2018,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			if id := message.SessID; id != 0 {
 				if sess, ok := s.manager.GetSession(id); ok {
 					currentSess = sess
+					currentSess.ApplyClientTimezone(clientTZ)
 					if err := writeJSON(session.ServerMsg{Type: "status", Status: "connected"}); err != nil {
 						log.Printf("websocket status send failed: %v", err)
 						return

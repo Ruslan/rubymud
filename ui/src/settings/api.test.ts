@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { fetchSessionHistory, saveAppSettingsRequest, toggleProfileGroup } from './api';
+import { buildLogDownloadURL, fetchSessionHistory, saveAppSettingsRequest, toggleProfileGroup } from './api';
 
 describe('settings api', () => {
   afterEach(() => {
@@ -36,6 +36,20 @@ describe('settings api', () => {
       },
       body: JSON.stringify({ group_name: 'combat', enabled: false }),
     });
+  });
+
+  it('builds a log download URL carrying the browser timezone', () => {
+    vi.spyOn(Intl, 'DateTimeFormat').mockReturnValue({
+      resolvedOptions: () => ({ timeZone: 'Europe/Kyiv' }),
+    } as unknown as Intl.DateTimeFormat);
+
+    const url = buildLogDownloadURL(5, '2026-07-01T00:00:00Z', '2026-07-02T00:00:00Z');
+
+    const params = new URL(url, 'http://localhost').searchParams;
+    expect(url.startsWith('/api/sessions/5/logs/download?')).toBe(true);
+    expect(params.get('tz')).toBe('Europe/Kyiv');
+    expect(params.get('from')).toBe('2026-07-01T00:00:00Z');
+    expect(params.get('to')).toBe('2026-07-02T00:00:00Z');
   });
 
   it('fetches paged filtered searched session history', async () => {

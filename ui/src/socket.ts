@@ -1,3 +1,11 @@
+export function browserTimezone(): string {
+  try {
+    return Intl.DateTimeFormat().resolvedOptions().timeZone || '';
+  } catch {
+    return '';
+  }
+}
+
 export function createSocket(sessionID?: number) {
   const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
   // @ts-ignore - Injected by Go server
@@ -5,6 +13,10 @@ export function createSocket(sessionID?: number) {
   let url = `${protocol}//${window.location.host}/ws?token=${token}`;
   if (sessionID) {
     url += `&session_id=${sessionID}`;
+  }
+  const tz = browserTimezone();
+  if (tz) {
+    url += `&tz=${encodeURIComponent(tz)}`;
   }
   return new WebSocket(url);
 }

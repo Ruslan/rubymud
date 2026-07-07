@@ -72,6 +72,7 @@ func (m *Manager) Connect(id int64) (*Session, error) {
 	}
 
 	v := vm.New(m.store, record.ID)
+	v.SetLocation(storage.LoadLocationOrUTC(record.Timezone))
 	if err := v.Reload(); err != nil {
 		return nil, fmt.Errorf("vm reload: %w", err)
 	}
@@ -116,7 +117,15 @@ func (m *Manager) CreateSession(name, host string, port int) (storage.SessionRec
 }
 
 func (m *Manager) UpdateSession(record storage.SessionRecord) error {
-	return m.store.UpdateSession(record)
+	if err := m.store.UpdateSession(record); err != nil {
+		return err
+	}
+	// Keep a live VM in sync so a manual timezone edit takes effect immediately,
+	// mirroring the follow/pin sync on the WS-connect path.
+	if sess, ok := m.GetSession(record.ID); ok {
+		sess.SetTimezoneLocation(storage.LoadLocationOrUTC(storage.NormalizeTimezone(record.Timezone)))
+	}
+	return nil
 }
 
 func (m *Manager) DeleteSession(id int64) error {

@@ -97,6 +97,7 @@ ORDER BY sp.order_index, sr.position, sr.id;
 - `log_entries.raw_text` is stored incoming text.
 - `log_overlays` stores metadata (substitutions/gag/overlays), not final rendered highlight output.
 - Final client-visible text may differ after highlight/render pipeline.
+- `created_at` is always stored as UTC `RFC3339Nano` and is never rewritten. Only *presentation* is zoned: export (`/logs/download`), `/logs/search`, `/logs/{id}/context`, and the MCP log tools accept a `tz` request param and render `created_at.In(loc)` with an explicit offset. Missing/invalid `tz` falls back to the session's `timezone`, then UTC.
 
 ## Current database snapshot (observed)
 
@@ -126,7 +127,9 @@ The following row counts were observed in the current `data/mudhost.db` at inspe
 
 ## Operational schema quick map (observed)
 
-- `sessions`: connection target and lifecycle (`mud_host`, `mud_port`, `status`, `last_connected_at`, `mccp_enabled`).
+- `sessions`: connection target and lifecycle (`mud_host`, `mud_port`, `status`, `last_connected_at`, `mccp_enabled`, `ansi_theme`, `timezone`, `tz_follow`).
+  - `timezone` is a concrete IANA name (default `UTC`) used for `$TIME`/`$DATE` and to present exported/searched timestamps.
+  - `tz_follow` (default `1`): `1` = adopt the browser's zone on each connect; `0` = pinned to a manually chosen zone (see `docs/agents/vm.md`).
 - `profiles`: named configuration profiles; linked to sessions through `session_profiles(order_index)`.
 - `trigger_rules`: regex/pattern triggers with `command`, `enabled`, optional buffer routing.
 - `alias_rules`: command templates by profile (`template`, `group_name`, `enabled`).
