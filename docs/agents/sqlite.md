@@ -97,7 +97,7 @@ ORDER BY sp.order_index, sr.position, sr.id;
 - `log_entries.raw_text` is stored incoming text.
 - `log_overlays` stores metadata (substitutions/gag/overlays), not final rendered highlight output.
 - Final client-visible text may differ after highlight/render pipeline.
-- `created_at` is always stored as UTC `RFC3339Nano` and is never rewritten. Only *presentation* is zoned: export (`/logs/download`), `/logs/search`, `/logs/{id}/context`, and the MCP log tools accept a `tz` request param and render `created_at.In(loc)` with an explicit offset. Missing/invalid `tz` falls back to the session's `timezone`, then UTC.
+- `created_at` is always stored as UTC `RFC3339Nano` and is never rewritten. Only *presentation* is zoned: export (`/logs/download`), `/logs/search`, `/logs/{id}/context`, and the MCP log tools accept a `tz` request param and render `created_at.In(loc)` with an explicit offset. The web UI (Settings log viewer, search, export) sends the **viewer's browser** zone as `tz`, so results are presented in the reader's local time rather than the session's zone. Missing/invalid `tz` falls back to the session's `timezone`, then UTC.
 
 ## Current database snapshot (observed)
 
