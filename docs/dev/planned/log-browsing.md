@@ -181,6 +181,13 @@ GET /api/sessions/:id/logs?buffer=main&before_id=12345&limit=200
 
 ### 5. HTML/TXT log export
 
+**Status: done** — see `../done/html-log-export-fact.md`. Server-side streaming
+export of a selected date/time range to a self-contained colored HTML file
+(native ANSI mapped through the session `ansi_theme` palette, canonical sent
+commands, scoped to the main buffer) plus an embedded replay viewer; the plain
+`.txt` download is unchanged. The one deviation from §5.6 below: colors use the
+theme palette rather than raw network ANSI.
+
 Add a way to export a selected time range of session logs to self-contained HTML or plain text.
 
 Recommended UI location:

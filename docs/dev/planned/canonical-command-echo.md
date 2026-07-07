@@ -65,7 +65,9 @@ Not fully implemented yet:
 1. no separate accepted/queued event exists; the first slice uses local pending state plus resolved `command_trace`
 2. the VM has not been refactored to emit a first-class `send_to_mud` effect; session code collects commands actually written
 3. Settings History still displays raw `input` rows alongside canonical expanded rows, so admin history/source-vs-outgoing presentation still needs product cleanup
-4. log export/search should be reviewed as part of the broader log-browsing work before claiming the whole storage/export model complete
+4. log export now consumes the canonical `command_hint` stream (done — see
+   `../done/html-log-export-fact.md`); admin search/history presentation is still
+   the remaining review item before the whole storage/export model is complete
 5. no browser/integration test covers multiple connected clients or pending hint placement when the client has no current log line
 6. if a connection write fails before a trace response is sent, the pending optimistic hint can remain until reconnect/restore
 
