@@ -1145,9 +1145,13 @@
     lastFetchKey = `${currentTab}|${selectedSessionID ?? ''}|${selectedProfileID ?? ''}`;
     void fetchData();
 
-    // Small polling refresh for manual testing on the sessions page
+    // Small polling refresh to keep connection status / MCCP stats live on the
+    // sessions page. Suppressed while a row is being edited: reloading `sessions`
+    // mid-edit steals focus and, worse, an in-flight poll response can land after
+    // a save and overwrite the freshly-saved row with stale data — making an edit
+    // (e.g. timezone) look like it didn't persist when it actually did.
     monitoringInterval = window.setInterval(() => {
-      if (currentTab === 'sessions' && !loading) {
+      if (currentTab === 'sessions' && !loading && editingSessionID === null) {
         void fetchData();
       }
     }, 1500);
