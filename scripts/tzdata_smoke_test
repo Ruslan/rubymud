@@ -1,0 +1,123 @@
+#!/bin/sh
+# tzdata_smoke_test — verify per-session timezones survive in the real runtime image.
+#
+# WHY THIS EXISTS
+# ---------------
+# Per-session timezones (e.g. "America/Los_Angeles") depend on the IANA tz
+# database being available to `time.LoadLocation`. Our production image copies a
+# CGO-free static binary into a bare `alpine:latest`, which ships NO tz database.
+# When the DB is missing, LoadLocation fails and storage.NormalizeTimezone folds
+# the requested zone to "UTC" *before persisting it* — so a PUT looks accepted
+# (204) but the GET and the database show UTC, with no error in the logs. That is
+# exactly the bug a user hit in a container deploy while it was invisible locally.
+#
+# `go test ./...` does NOT catch this: tests run where a tz database exists (dev
+# machines, CI runners, and the Go toolchain's own $GOROOT/lib/time/zoneinfo.zip),
+# so the failing condition — a tz-less runtime — is never exercised. The unit
+# binaries also don't import the production `time/tzdata` embed. The only faithful
+# check is to run the actual shipped binary inside the actual alpine image and
+# push a real zone through the real HTTP API, which is what this script does.
+#
+# The production fix is a blank `import _ "time/tzdata"` in cmd/mudhost, which
+# embeds the IANA DB into the binary so zones resolve on any base image. This
+# smoke test is the regression guard: if that embed is ever dropped (or the base
+# image changes in a way that breaks zones), this fails loudly instead of silently
+# losing users' saved timezones in production.
+#
+# USAGE
+#   scripts/tzdata_smoke_test              # build the image, then run the check
+#   SKIP_BUILD=1 scripts/tzdata_smoke_test # reuse an already-built $IMAGE
+#   PORT=19000 ZONE=Asia/Tokyo scripts/tzdata_smoke_test
+#
+# Requires (on the host, not in the container): docker, curl, jq.
+# Exit codes: 0 pass, 1 assertion/runtime failure, 2 missing host dependency.
+
+set -eu
+
+ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
+
+IMAGE=${IMAGE:-rubymud-tzdata-smoke}
+CONTAINER=${CONTAINER:-rubymud-tzdata-smoke}
+PORT=${PORT:-18080}
+ZONE=${ZONE:-America/Los_Angeles}
+BASE="http://127.0.0.1:${PORT}"
+
+for dep in docker curl jq; do
+	command -v "$dep" >/dev/null 2>&1 || {
+		echo "FAIL: host dependency '$dep' is required" >&2
+		exit 2
+	}
+done
+
+cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
+trap cleanup EXIT INT TERM
+
+if [ "${SKIP_BUILD:-0}" != "1" ]; then
+	echo "==> building production image '$IMAGE' (alpine runtime, no system tzdata)"
+	docker build -t "$IMAGE" "$ROOT"
+fi
+
+echo "==> starting container on 127.0.0.1:${PORT}"
+docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+# Empty MUD_HOST: serve HTTP only, no outbound MUD connection needed.
+docker run -d --rm --name "$CONTAINER" -e MUD_HOST="" -p "127.0.0.1:${PORT}:8080" "$IMAGE" >/dev/null
+
+echo "==> waiting for HTTP readiness"
+i=0
+until curl -fsS "$BASE/" >/dev/null 2>&1; do
+	i=$((i + 1))
+	if [ "$i" -ge 60 ]; then
+		echo "FAIL: server did not become ready within 60s" >&2
+		docker logs "$CONTAINER" >&2 || true
+		exit 1
+	fi
+	sleep 1
+done
+
+# The index page injects the API token as window.API_TOKEN and is not token-gated.
+TOKEN=$(curl -fsS "$BASE/" | sed -n 's/.*window\.API_TOKEN="\([^"]*\)".*/\1/p')
+if [ -z "$TOKEN" ]; then
+	echo "FAIL: could not extract API token from index page" >&2
+	exit 1
+fi
+AUTH="X-Session-Token: ${TOKEN}"
+
+echo "==> creating a throwaway session"
+created=$(curl -fsS -X POST "$BASE/api/sessions" -H "$AUTH" -H 'Content-Type: application/json' \
+	-d '{"name":"tz-smoke","mud_host":"localhost","mud_port":4000}')
+sid=$(printf '%s' "$created" | jq -r '.id')
+if [ -z "$sid" ] || [ "$sid" = "null" ]; then
+	echo "FAIL: no session id in create response: $created" >&2
+	exit 1
+fi
+
+echo "==> PUT timezone=${ZONE} (tz_follow=0) on session ${sid}"
+# Echo the created record back with only the zone pinned, to mirror the real
+# Settings save (a full-record PUT) rather than a partial update.
+body=$(printf '%s' "$created" | jq --arg z "$ZONE" '.timezone=$z | .tz_follow=0')
+curl -fsS -X PUT "$BASE/api/sessions/${sid}" -H "$AUTH" -H 'Content-Type: application/json' \
+	-d "$body" >/dev/null
+
+echo "==> reading the zone back from the server"
+got=$(curl -fsS "$BASE/api/sessions" -H "$AUTH" | jq -r --argjson id "$sid" \
+	'.[] | select(.id==$id) | .timezone')
+
+echo "    requested: ${ZONE}"
+echo "    stored:    ${got}"
+
+if [ "$got" != "$ZONE" ]; then
+	cat >&2 <<EOF
+
+FAIL: the runtime image did not persist the requested timezone.
+  Requested "${ZONE}" but the server stored "${got}".
+
+  This is the tzdata-missing signature: time.LoadLocation("${ZONE}") failed inside
+  the alpine runtime, so NormalizeTimezone silently folded the zone to UTC and the
+  user's saved timezone was lost. The production binary must embed the IANA DB via
+  a blank import "time/tzdata" in go/cmd/mudhost/main.go so zones resolve on any
+  base image. If that embed was removed, restore it.
+EOF
+	exit 1
+fi
+
+echo "PASS: '${ZONE}' round-tripped through the alpine runtime image."
