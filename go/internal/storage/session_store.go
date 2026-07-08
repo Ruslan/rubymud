@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"log"
 	"time"
 
 	"gorm.io/gorm"
@@ -20,12 +21,16 @@ func NormalizeAnsiTheme(theme string) string {
 }
 
 // NormalizeTimezone returns a concrete IANA zone name, defaulting to "UTC" when
-// empty or unparseable.
+// empty or unparseable. A non-empty zone that fails to load is logged: that only
+// happens when the tz database is unavailable (e.g. a runtime image with no
+// tzdata) and silently swallowing it makes a user's saved zone vanish to UTC
+// with no trace — see the `time/tzdata` embed in cmd/mudhost.
 func NormalizeTimezone(name string) string {
 	if name == "" {
 		return "UTC"
 	}
 	if _, err := time.LoadLocation(name); err != nil {
+		log.Printf("NormalizeTimezone: cannot load zone %q, falling back to UTC (missing tzdata?): %v", name, err)
 		return "UTC"
 	}
 	return name

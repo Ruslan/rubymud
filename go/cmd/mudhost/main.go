@@ -8,6 +8,13 @@ import (
 	"path/filepath"
 	"strconv"
 
+	// Embed the IANA timezone database into the binary so per-session zones
+	// (e.g. "America/Los_Angeles") resolve even on minimal runtime images that
+	// ship no system tzdata (Alpine, scratch, distroless). The binary is a
+	// CGO_ENABLED=0 static build, so this keeps it fully self-contained instead
+	// of depending on the container having a tzdata package installed.
+	_ "time/tzdata"
+
 	"rubymud/go/internal/session"
 	"rubymud/go/internal/storage"
 	"rubymud/go/internal/web"
