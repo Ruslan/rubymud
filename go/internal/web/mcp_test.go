@@ -45,7 +45,12 @@ func setupMcpTestServer(t *testing.T) (*Server, *session.Session) {
 		t.Fatalf("gorm.Open: %v", err)
 	}
 
-	db.AutoMigrate(&storage.AppSetting{}, &storage.SessionRecord{}, &storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{}, &storage.SubstituteRule{}, &storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{}, &storage.ProfileVariable{}, &storage.LogRecord{}, &storage.LogOverlay{}, &storage.HistoryEntry{})
+	// Build the schema from the real embedded migrations (same DDL as production:
+	// unique indexes, FK cascades, sessions.active_map_set_id) rather than a GORM
+	// AutoMigrate approximation.
+	if err := storage.MigrateForTest(db); err != nil {
+		t.Fatalf("MigrateForTest: %v", err)
+	}
 
 	store := storage.NewTestStore(db)
 	store.CreateProfile("Default", "")

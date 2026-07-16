@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"rubymud/go/internal/storage"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -195,9 +196,113 @@ func (s *Server) mcpListTools() any {
 					"properties": map[string]any{"session_id": sessionIDProp},
 				},
 			},
+			map[string]any{
+				"name":        "mud_map_sets",
+				"description": "List imported map sets (world maps) and which one is active for the session. Each set shows id, name, zone_count and room_count. A NULL/dangling active set is reported as '(no active set)'. An omitted session_id defaults to the first session.",
+				"inputSchema": map[string]any{
+					"type":       "object",
+					"properties": map[string]any{"session_id": sessionIDProp},
+				},
+			},
+			map[string]any{
+				"name":        "mud_map_zone",
+				"description": "List the rooms of one zone of a map set in slim form (z t h x y l e d ch a p i s + dx dy dl + img). Defaults to the session's active map set. A zone can be hundreds of rooms; the result is bounded and notes when truncated. An omitted session_id defaults to the first session.",
+				"inputSchema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"session_id": sessionIDProp,
+						"zone":       map[string]any{"type": "string", "description": "Zone name. Required — there is no current-position signal in phase 1."},
+						"map_set":    map[string]any{"type": "integer", "description": "Map set id. Optional — defaults to the session's active map set."},
+						"limit":      map[string]any{"type": "integer", "description": "Max rooms to return (default 300, max 1000). The response notes if truncated."},
+					},
+					"required": []string{"zone"},
+				},
+			},
+			map[string]any{
+				"name":        "mud_where",
+				"description": "Where the player is, from the backend position tracker. Reports the active map set (or none), a confidence enum (green=anchored, yellow=tracker-only dead-reckoning, red=lost), pending_moves:N (unconfirmed steps still in the FIFO queue — orthogonal to confidence; you can be green with pending>0), and zone/x/y/l/tag/hint plus is_dt/pipe flags. On yellow/red it includes a reason. An omitted session_id defaults to the first session.",
+				"inputSchema": map[string]any{
+					"type":       "object",
+					"properties": map[string]any{"session_id": sessionIDProp},
+				},
+			},
+			map[string]any{
+				"name":        "mud_look_map",
+				"description": "Describe the current room from the map: hint/desc, exits with door markers, and per-exit connectivity from the authoritative ch mask (mapped|unmapped), '→zone' if the exit is a seam, and the target's is_dt when known. Includes the confidence enum inline. This is the structural map view (distinct from mud_get_output's raw scrollback). Alias: mud_room. An omitted session_id defaults to the first session.",
+				"inputSchema": map[string]any{
+					"type":       "object",
+					"properties": map[string]any{"session_id": sessionIDProp},
+				},
+			},
+			map[string]any{
+				"name":        "mud_path",
+				"description": "Route from the current position (or a given 'from') to a target: to_zone (first room of a zone), to:{zone,x,y,l}, or to_hint (first room whose hint contains the text). Output is an ordered list of RU direction/seam commands for mud_send_command, hop count, seam-crossing flags, and any known death traps on the path (refused/warned). Refuses with isError when position is lost (red) — re-anchor with mud_anchor_here first. An omitted session_id defaults to the first session.",
+				"inputSchema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"session_id": sessionIDProp,
+						"to_zone":    map[string]any{"type": "string", "description": "Target zone name (routes to its first room)."},
+						"to_hint":    map[string]any{"type": "string", "description": "Target by room hint substring (routes to the first match)."},
+						"to": map[string]any{
+							"type":        "object",
+							"description": "Exact target cell {zone,x,y,l}.",
+							"properties": map[string]any{
+								"zone": map[string]any{"type": "string"},
+								"x":    map[string]any{"type": "integer"},
+								"y":    map[string]any{"type": "integer"},
+								"l":    map[string]any{"type": "integer"},
+							},
+						},
+						"from": map[string]any{
+							"type":        "object",
+							"description": "Optional start cell {zone,x,y,l}; defaults to the tracker's current position.",
+							"properties": map[string]any{
+								"zone": map[string]any{"type": "string"},
+								"x":    map[string]any{"type": "integer"},
+								"y":    map[string]any{"type": "integer"},
+								"l":    map[string]any{"type": "integer"},
+							},
+						},
+					},
+				},
+			},
+			map[string]any{
+				"name":        "mud_anchor_here",
+				"description": "Manually set the tracker's position (the MCP equivalent of the UI 'I'm here' button) to recover from lost/teleport/following. Input {session_id?, zone,x,y,l}. Returns the new confidence and position. An omitted session_id defaults to the first session.",
+				"inputSchema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"session_id": sessionIDProp,
+						"zone":       map[string]any{"type": "string"},
+						"x":          map[string]any{"type": "integer"},
+						"y":          map[string]any{"type": "integer"},
+						"l":          map[string]any{"type": "integer"},
+					},
+					"required": []string{"zone", "x", "y", "l"},
+				},
+			},
+			map[string]any{
+				"name":        "mud_set_active_map_set",
+				"description": "Set the session's active map set and rebuild the tracker's in-memory index. Input {session_id?, map_set}. Returns confirmation. An omitted session_id defaults to the first session.",
+				"inputSchema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"session_id": sessionIDProp,
+						"map_set":    map[string]any{"type": "integer", "description": "Map set id to activate."},
+					},
+					"required": []string{"map_set"},
+				},
+			},
 		},
 	}
 }
+
+// mcpMapZoneDefaultLimit / Max bound the slim-room result — a zone can be
+// hundreds of rooms, so an unbounded dump would blow the response.
+const (
+	mcpMapZoneDefaultLimit = 300
+	mcpMapZoneMaxLimit     = 1000
+)
 
 func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 	var call struct {
@@ -505,6 +610,189 @@ func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 			content = "No triggers defined."
 		}
 
+	case "mud_map_sets":
+		var args struct {
+			SessionID int64 `json:"session_id"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		sid, err := s.mcpResolveSessionID(args.SessionID)
+		if err != nil {
+			content = err.Error()
+			isError = true
+			break
+		}
+		sets, err := s.store.ListMapSets()
+		if err != nil {
+			return nil, err
+		}
+		activeID, hasActive, err := s.store.GetActiveMapSetID(sid)
+		if err != nil {
+			return nil, err
+		}
+		var sb strings.Builder
+		if len(sets) == 0 {
+			sb.WriteString("No map sets imported.\n")
+		}
+		activeValid := false
+		for _, set := range sets {
+			marker := ""
+			if hasActive && set.ID == activeID {
+				marker = "  * ACTIVE"
+				activeValid = true
+			}
+			sb.WriteString(fmt.Sprintf("[id=%d] %s — %d zones, %d rooms%s\n",
+				set.ID, set.Name, set.ZoneCount, set.RoomCount, marker))
+		}
+		if !activeValid {
+			sb.WriteString("(no active set)\n")
+		}
+		content = sb.String()
+
+	case "mud_map_zone":
+		var args struct {
+			SessionID int64  `json:"session_id"`
+			Zone      string `json:"zone"`
+			MapSet    int64  `json:"map_set"`
+			Limit     int    `json:"limit"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return nil, err
+		}
+		sid, err := s.mcpResolveSessionID(args.SessionID)
+		if err != nil {
+			content = err.Error()
+			isError = true
+			break
+		}
+		mapSetID := args.MapSet
+		if mapSetID == 0 {
+			active, ok, err := s.store.GetActiveMapSetID(sid)
+			if err != nil {
+				return nil, err
+			}
+			if !ok {
+				content = "No active map set for this session, and no map_set given."
+				isError = true
+				break
+			}
+			mapSetID = active
+		}
+		if strings.TrimSpace(args.Zone) == "" {
+			content = "zone is required."
+			isError = true
+			break
+		}
+		limit := args.Limit
+		if limit <= 0 {
+			limit = mcpMapZoneDefaultLimit
+		}
+		if limit > mcpMapZoneMaxLimit {
+			limit = mcpMapZoneMaxLimit
+		}
+		rooms, err := s.store.ListSlimRooms(mapSetID, args.Zone)
+		if err != nil {
+			return nil, err
+		}
+		content = formatMcpMapZone(mapSetID, args.Zone, rooms, limit)
+		if len(rooms) == 0 {
+			isError = false // empty zone is not an error, just report it
+		}
+
+	case "mud_where":
+		var args struct {
+			SessionID int64 `json:"session_id"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		sid, err := s.mcpResolveSessionID(args.SessionID)
+		if err != nil {
+			content = err.Error()
+			isError = true
+			break
+		}
+		content, isError = s.mcpWhere(sid)
+
+	case "mud_look_map", "mud_room":
+		var args struct {
+			SessionID int64 `json:"session_id"`
+		}
+		json.Unmarshal(call.Arguments, &args)
+		sid, err := s.mcpResolveSessionID(args.SessionID)
+		if err != nil {
+			content = err.Error()
+			isError = true
+			break
+		}
+		content, isError = s.mcpLookMap(sid)
+
+	case "mud_path":
+		var args struct {
+			SessionID int64  `json:"session_id"`
+			ToZone    string `json:"to_zone"`
+			ToHint    string `json:"to_hint"`
+			To        *struct {
+				Zone string `json:"zone"`
+				X    int    `json:"x"`
+				Y    int    `json:"y"`
+				L    int    `json:"l"`
+			} `json:"to"`
+			From *struct {
+				Zone string `json:"zone"`
+				X    int    `json:"x"`
+				Y    int    `json:"y"`
+				L    int    `json:"l"`
+			} `json:"from"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return nil, err
+		}
+		sid, err := s.mcpResolveSessionID(args.SessionID)
+		if err != nil {
+			content = err.Error()
+			isError = true
+			break
+		}
+		content, isError = s.mcpPath(sid, mcpPathArgs{
+			ToZone: args.ToZone,
+			ToHint: args.ToHint,
+			To:     (*mcpCoordArg)(args.To),
+			From:   (*mcpCoordArg)(args.From),
+		})
+
+	case "mud_anchor_here":
+		var args struct {
+			SessionID int64  `json:"session_id"`
+			Zone      string `json:"zone"`
+			X         int    `json:"x"`
+			Y         int    `json:"y"`
+			L         int    `json:"l"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return nil, err
+		}
+		sid, err := s.mcpResolveSessionID(args.SessionID)
+		if err != nil {
+			content = err.Error()
+			isError = true
+			break
+		}
+		content, isError = s.mcpAnchorHere(sid, mcpCoordArg{Zone: args.Zone, X: args.X, Y: args.Y, L: args.L})
+
+	case "mud_set_active_map_set":
+		var args struct {
+			SessionID int64 `json:"session_id"`
+			MapSet    int64 `json:"map_set"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return nil, err
+		}
+		sid, err := s.mcpResolveSessionID(args.SessionID)
+		if err != nil {
+			content = err.Error()
+			isError = true
+			break
+		}
+		content, isError = s.mcpSetActiveMapSet(sid, args.MapSet)
+
 	default:
 		return nil, fmt.Errorf("Tool not found: %s", call.Name)
 	}
@@ -515,6 +803,57 @@ func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 		},
 		"isError": isError,
 	}, nil
+}
+
+// formatMcpMapZone renders slim rooms as a compact text table, bounded by limit.
+// Directions are shown as letters; a bounded result appends a truncation note.
+func formatMcpMapZone(mapSetID int64, zone string, rooms []storage.SlimRoom, limit int) string {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Map set %d, zone %q: %d room(s)", mapSetID, zone, len(rooms)))
+	truncated := false
+	shown := rooms
+	if len(rooms) > limit {
+		shown = rooms[:limit]
+		truncated = true
+		sb.WriteString(fmt.Sprintf(" (showing first %d)", limit))
+	}
+	sb.WriteString("\n\n")
+	if len(rooms) == 0 {
+		sb.WriteString("(no rooms — zone not in this set, or empty)\n")
+		return sb.String()
+	}
+	for _, r := range shown {
+		tag := "-"
+		if r.T != nil {
+			tag = strconv.Itoa(*r.T)
+		}
+		flags := ""
+		if r.S {
+			flags += " DT"
+		}
+		if r.P {
+			flags += " pipe"
+		}
+		if r.Img == 1 {
+			flags += " img"
+		}
+		seam := ""
+		if len(r.A) > 0 {
+			seam = "  seams=" + strings.Join(r.A, ",")
+		}
+		exits := strings.Join(r.E, "")
+		doors := ""
+		if len(r.D) > 0 {
+			doors = " doors=" + strings.Join(r.D, "")
+		}
+		sb.WriteString(fmt.Sprintf("(%d,%d,L%d) tag=%s ch=%d exits=[%s]%s %q%s%s\n",
+			r.X, r.Y, r.L, tag, r.Ch, exits, doors, r.H, flags, seam))
+	}
+	if truncated {
+		sb.WriteString(fmt.Sprintf("\n... truncated: %d more room(s) not shown. Increase limit (max %d) to see more.\n",
+			len(rooms)-limit, mcpMapZoneMaxLimit))
+	}
+	return sb.String()
 }
 
 // mcpTimeFormat carries an explicit UTC offset so a record's calendar day is

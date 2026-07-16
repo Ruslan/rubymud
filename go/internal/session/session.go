@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"rubymud/go/internal/mapper"
 	"rubymud/go/internal/storage"
 	"rubymud/go/internal/vm"
 )
@@ -69,6 +70,14 @@ type Session struct {
 
 	lastCommandAt time.Time
 	ansiCarry     map[string]string
+
+	// Mapper position tracker (plan §5). mapAccum detects room blocks in the
+	// incoming line pipeline; mapTracker holds the dead-reckoning state machine
+	// over the active set's in-memory index. Both are guarded by mapMu (never the
+	// hot-path s.mu). Nil until the active set is loaded.
+	mapMu      sync.Mutex
+	mapAccum   *mapper.Accumulator
+	mapTracker *mapper.Tracker
 }
 
 func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM, initCmds string, mccpOn bool) (*Session, error) {

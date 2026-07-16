@@ -88,6 +88,10 @@ func (m *Manager) Connect(id int64) (*Session, error) {
 	m.sessions[id] = sess
 	go sess.RunReadLoop()
 
+	// Build the mapper tracker index from the session's active map set (off the
+	// hot path; degrades to an empty tracker if no/dangling set).
+	sess.LoadActiveMapSet()
+
 	sess.QueueStartupCommands()
 
 	if err := m.store.MarkSessionConnected(id); err != nil {

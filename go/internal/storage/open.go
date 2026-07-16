@@ -46,6 +46,14 @@ func Open(path string) (*Store, error) {
 	return store, nil
 }
 
+// MigrateForTest applies the embedded SQL migrations to db. It exists so tests
+// in other packages can build a schema identical to production (unique indexes,
+// FK cascades, ALTERed columns) instead of a GORM AutoMigrate approximation.
+// Not for production use — production goes through Open.
+func MigrateForTest(db *gorm.DB) error {
+	return runMigrations(db)
+}
+
 func runMigrations(db *gorm.DB) error {
 	// Ensure migration tracking table exists
 	if err := db.Exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version TEXT PRIMARY KEY);`).Error; err != nil {

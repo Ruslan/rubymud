@@ -17,6 +17,22 @@ type ServerMsg struct {
 	ClientCommandID string                      `json:"client_command_id,omitempty"`
 	Commands        []string                    `json:"commands,omitempty"`
 	RestoreCursor   *int64                      `json:"restore_cursor,omitempty"`
+
+	// Mapper current-room signal (Type:"room") and tracker position
+	// (Type:"room_position"). All omitempty so non-mapper messages are unaffected.
+	RoomHint       string `json:"room_hint,omitempty"`
+	RoomDesc       string `json:"room_desc,omitempty"`
+	RoomExits      string `json:"room_exits,omitempty"`
+	Confidence     string `json:"confidence,omitempty"`
+	PendingMoves   int    `json:"pending_moves,omitempty"`
+	PositionValid  bool   `json:"position_valid,omitempty"`
+	PositionReason string `json:"position_reason,omitempty"`
+	Zone           string `json:"zone,omitempty"`
+	RoomX          int    `json:"room_x,omitempty"`
+	RoomY          int    `json:"room_y,omitempty"`
+	RoomL          int    `json:"room_l,omitempty"`
+	IsDT           bool   `json:"is_dt,omitempty"`
+	Pipe           bool   `json:"pipe,omitempty"`
 }
 
 type SettingsChangedJSON struct {

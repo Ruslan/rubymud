@@ -22,6 +22,13 @@ func (s *Session) sendTriggerCommand(cmd string, entryID int64, buffer string) e
 	s.broadcastCommandHint(cmd, entryID, buffer)
 
 	_, err := s.conn.Write([]byte(cmd + "\n"))
+	if err == nil {
+		// Mapper: detect a movement direction only after the command actually
+		// reached the MUD, covering trigger/alias/speedwalk-sent moves (already
+		// alias/VM-expanded). Queuing before a failed write would leave an unsent
+		// direction in the FIFO and mis-reconcile the next room event.
+		s.observeOutgoingMove(cmd)
+	}
 	return err
 }
 
@@ -116,6 +123,10 @@ func (s *Session) SendCommandWithTrace(command string, source string) ([]string,
 		if _, err := s.conn.Write([]byte(cmd + "\n")); err != nil {
 			return canonicalCommands, err
 		}
+		// Mapper: detect a movement direction after a SUCCESSFUL write (after
+		// alias/VM expansion). Pushing before the write would leave an unsent
+		// direction in the FIFO on a mid-speedwalk write error.
+		s.observeOutgoingMove(cmd)
 		canonicalCommands = append(canonicalCommands, cmd)
 		s.mu.Lock()
 		s.lastCommandAt = time.Now()

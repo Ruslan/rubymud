@@ -800,15 +800,13 @@ func setupTestServer(t *testing.T) (*Server, *session.Session) {
 	if err != nil {
 		t.Fatalf("gorm.Open: %v", err)
 	}
-	db.AutoMigrate(
-		&storage.AppSetting{}, &storage.SessionRecord{}, &storage.Variable{},
-		&storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{},
-		&storage.SubstituteRule{},
-		&storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{}, &storage.ProfileVariable{},
-		&storage.LogRecord{}, &storage.LogOverlay{}, &storage.HistoryEntry{},
-		&storage.TimerRecord{}, &storage.TimerSubscriptionRecord{},
-		&storage.ProfileTimer{}, &storage.ProfileTimerSubscription{},
-	)
+	// Build the schema from the real embedded migrations so the web tests run the
+	// same DDL as production — unique indexes, FK cascades, and the ALTERed
+	// sessions.active_map_set_id column — rather than a GORM AutoMigrate
+	// approximation.
+	if err := storage.MigrateForTest(db); err != nil {
+		t.Fatalf("MigrateForTest: %v", err)
+	}
 
 	store := storage.NewTestStore(db)
 	store.CreateProfile("Default", "")

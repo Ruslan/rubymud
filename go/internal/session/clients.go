@@ -191,6 +191,13 @@ func (s *Session) BroadcastStatus(status string) {
 	s.broadcastMsg(ServerMsg{Type: "status", Status: status})
 }
 
+// BroadcastServerMsg sends an arbitrary ServerMsg to this session's clients.
+// Used for lightweight change notifications (e.g. map_sets_changed) that do not
+// fit the typed helpers above. Off the MUD output hot path.
+func (s *Session) BroadcastServerMsg(msg ServerMsg) {
+	s.broadcastMsg(msg)
+}
+
 func (s *Session) broadcastCommandHint(cmd string, entryID int64, buffer string) {
 	msg := ServerMsg{
 		Type:    "command_hint",

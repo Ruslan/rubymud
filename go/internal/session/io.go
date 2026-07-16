@@ -139,6 +139,13 @@ func (s *Session) processLine(line string) {
 
 	plainText := stripANSI(processed)
 	parseDuration = time.Since(phaseStartedAt)
+
+	// Mapper room-block detector (plan §5). Off the DB/critical path: it consumes
+	// the already-stripped plainText (no second ANSI strip), a cheap prefix guard
+	// runs before any regex, and reconciliation/broadcast only fire on a completed
+	// room block.
+	s.observeIncomingLine(plainText)
+
 	var effects []vm.Effect
 	var routing vm.RoutingInfo
 

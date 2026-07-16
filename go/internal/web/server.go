@@ -277,6 +277,13 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 
 		r.Get("/colors", s.listColors)
 
+		r.Route("/map-sets", func(r chi.Router) {
+			r.Get("/", s.listMapSets)
+			r.Post("/import", s.importMapSet)
+			r.Get("/{id}/zones", s.listMapSetZones)
+		})
+		r.Get("/rooms", s.listRooms)
+
 		r.Route("/app", func(r chi.Router) {
 			r.Get("/settings", s.getAppSettings)
 			r.Put("/settings", s.updateAppSettings)
