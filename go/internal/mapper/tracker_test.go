@@ -424,10 +424,13 @@ func TestTrackerSupersetMismatchDegradesToYellow(t *testing.T) {
 	}
 }
 
-// TestTrackerHardMismatchWithPendingDegradesToYellow: even a HARD mismatch (name/
-// desc differ, not just exits) degrades to 🟡 at the assumed cell when we still
-// know the travel direction — red is reserved for no-directional-context loss.
-func TestTrackerHardMismatchWithPendingDegradesToYellow(t *testing.T) {
+// TestTrackerHardHintMismatchVetoesToRed: a HARD mismatch where the event's HINT
+// (name) contradicts the assumed cell is a TEXT VETO — the server likely
+// teleported us, so we must NOT hold a false 🟡 assumed position. Full-flush to
+// 🔴, position NOT advanced to the assumed cell; wait for auto-resync or manual
+// re-anchor. (Contrast: exits diverging with a MATCHING hint stays 🟡 — see
+// TestTrackerSupersetMismatchDegradesToYellow.)
+func TestTrackerHardHintMismatchVetoesToRed(t *testing.T) {
 	rooms := []storage.Room{
 		mkRoom("Z", 0, 0, 0, 1, "Старт", "start", "S", chMask("S")),
 		mkRoom("Z", 1, 0, 0, 2, "Ожидаемая", "expected", "N S", chMask("N", "S")),
@@ -435,18 +438,23 @@ func TestTrackerHardMismatchWithPendingDegradesToYellow(t *testing.T) {
 	tr := NewTracker(BuildIndex(1, rooms))
 	tr.Anchor(Coord{"Z", 0, 0, 0})
 	tr.PushMove("S")
-	// Event whose name/desc do not match the assumed cell (2) and has no unique
-	// fingerprint elsewhere -> still 🟡 at the assumed cell, not red.
+	// Event whose name/desc contradict the assumed cell (2) and has no unique
+	// fingerprint elsewhere -> text veto -> 🔴, NOT an assumed-yellow.
 	pos, _ := tr.Reconcile(ev("Другое", "different room", "N E S W"))
-	if pos.Confidence != Yellow {
-		t.Fatalf("hard mismatch with pending must degrade to YELLOW, got %+v", pos)
+	if pos.Confidence != Red {
+		t.Fatalf("hint-contradicting mismatch with pending must VETO to RED, got %+v", pos)
 	}
-	if pos.Coord != (Coord{"Z", 1, 0, 0}) {
-		t.Errorf("should assume predicted cell (1,0,0), got %+v", pos.Coord)
+	// Position must NOT be advanced to the assumed cell — stays on last-known.
+	if pos.Coord != (Coord{"Z", 0, 0, 0}) {
+		t.Errorf("red veto should keep last-known cell (0,0,0), got %+v", pos.Coord)
 	}
-	// Diff is against the assumed map cell (edirs N,S) vs event (N,E,S,W): +E +W.
-	if len(pos.ExitsAddedLive) != 2 {
-		t.Errorf("expected +E +W added-live, got %v", pos.ExitsAddedLive)
+	// No assumed exit diff on a veto (we did not accept the cell).
+	if len(pos.ExitsAddedLive) != 0 || len(pos.ExitsRemovedMap) != 0 {
+		t.Errorf("veto-red should carry no exit diff, got +%v -%v", pos.ExitsAddedLive, pos.ExitsRemovedMap)
+	}
+	// Pending flushed on loss.
+	if tr.PendingCount() != 0 {
+		t.Errorf("queue should be flushed on veto-red, pending=%d", tr.PendingCount())
 	}
 }
 

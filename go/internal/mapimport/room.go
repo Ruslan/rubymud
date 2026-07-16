@@ -305,3 +305,8 @@ func normText(s string) string {
 	s = wsRE.ReplaceAllString(s, " ")
 	return strings.TrimSpace(s)
 }
+
+// NormText exposes the exact hint/desc normalization the fingerprint uses (NFC,
+// lowercase, whitespace-collapsed, trimmed) so callers comparing hints match the
+// fingerprint's notion of equality instead of forking a second variant.
+func NormText(s string) string { return normText(s) }

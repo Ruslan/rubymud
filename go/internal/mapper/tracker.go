@@ -266,14 +266,21 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 	}
 
 	// 5) We had a position AND a pending directional move, but the room-event did
-	//    not exactly match and no auto-resync fired. We still KNOW the direction we
-	//    walked, so degrade GRACEFULLY to 🟡 by ASSUMING the predicted (dead-
-	//    reckoning) cell — do NOT flush to 🔴. This covers the "map is outdated"
-	//    case (e.g. a room grew a U exit over years: name+desc match, live exits are
-	//    a superset of the map). We deliberately do NOT auto-upgrade to 🟢 on a
-	//    soft/superset mismatch — accepting the outdated map must be a conscious
-	//    manual re-anchor (mud_anchor_here). We surface the exit diff (+live/-map)
-	//    so the UI/agent can see exactly what disagrees.
+	//    not exactly match and no auto-resync fired. Split the mismatch by whether
+	//    the HINT (name) agrees with the assumed cell — "text as veto":
+	//
+	//    (a) hint MATCHES, only the EXITS differ (e.g. a superset SW ⊂ SWU — the
+	//        room grew a U over years): the map is merely outdated. Degrade to 🟡
+	//        by ASSUMING the predicted cell and surface the exit diff (+live/-map).
+	//        We do NOT auto-upgrade to 🟢 — accepting the outdated map must be a
+	//        conscious manual re-anchor (mud_anchor_here).
+	//
+	//    (b) hint CONTRADICTS the assumed cell (the name differs): the server most
+	//        likely teleported us / broke the edge. Holding a 🟡 "assumed" position
+	//        would be a FALSE position an agent could path from. Full-flush to 🔴
+	//        (text veto). Text is a veto, NOT a selector — we never re-anchor to a
+	//        cell by name here; 🔴 waits for the exact-fingerprint auto-resync
+	//        (§5, still requires resolution to exactly one cell) or a manual anchor.
 	if t.pos.Valid && len(t.pending) > 0 {
 		dir := t.pending[0]
 		assumed := t.pos.Coord
@@ -283,23 +290,35 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 				assumed = skipped
 			}
 		}
-		var added, removed []string
-		if room := t.idx.Room(assumed); room != nil {
-			added, removed = exitDiff(room.EDirs, evExits)
+		assumedRoom := t.idx.Room(assumed)
+		hintAgrees := assumedRoom != nil && ev.Hint != "" &&
+			mapimport.NormText(assumedRoom.Hint) == mapimport.NormText(ev.Hint)
+
+		if hintAgrees {
+			// (a) exits diverged, hint matches -> 🟡 assumed cell + diff.
+			added, removed := exitDiff(assumedRoom.EDirs, evExits)
+			reason := "assumed " + coordStr(assumed) + " by " + DirRU(dir) + " (exits diverged — map may be outdated)"
+			if d := formatExitDiff(added, removed); d != "" {
+				reason += "; exits " + d
+			}
+			t.pos = Position{
+				Valid:           true,
+				Coord:           assumed,
+				Confidence:      Yellow,
+				Reason:          reason,
+				ExitsAddedLive:  added,
+				ExitsRemovedMap: removed,
+			}
+			t.pending = t.pending[1:]
+			return
 		}
-		reason := "assumed " + coordStr(assumed) + " by " + DirRU(dir) + " (room-event mismatch — map may be outdated)"
-		if d := formatExitDiff(added, removed); d != "" {
-			reason += "; exits " + d
-		}
-		t.pos = Position{
-			Valid:           true,
-			Coord:           assumed,
-			Confidence:      Yellow,
-			Reason:          reason,
-			ExitsAddedLive:  added,
-			ExitsRemovedMap: removed,
-		}
-		t.pending = t.pending[1:]
+
+		// (b) hint contradicts -> text veto -> 🔴 full-flush; do NOT hold a false
+		//     assumed position. Indicator stays on the last-known room.
+		lost := t.pos.Coord
+		t.pos = Position{Valid: true, Coord: lost, Confidence: Red,
+			Reason: "lost — hint contradicts assumed cell (likely teleport); re-anchor with mud_anchor_here"}
+		t.pending = t.pending[:0]
 		return
 	}
 
