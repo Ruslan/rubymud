@@ -85,6 +85,19 @@ func (s *Server) mcpWhere(sid int64) (string, bool) {
 		if pos.Confidence != mapper.Green && pos.Reason != "" {
 			sb.WriteString("Reason: " + pos.Reason + "\n")
 		}
+		// Structured exit diff (populated when we assumed a cell on a mismatch):
+		// +live = in the game but not the map; -map = in the map but not the game.
+		// This feeds a UI hover-diff and a future map-patch tool.
+		if len(pos.ExitsAddedLive) > 0 || len(pos.ExitsRemovedMap) > 0 {
+			var d []string
+			for _, x := range pos.ExitsAddedLive {
+				d = append(d, "+"+x)
+			}
+			for _, x := range pos.ExitsRemovedMap {
+				d = append(d, "-"+x)
+			}
+			sb.WriteString("Exit diff (live vs map): " + strings.Join(d, " ") + "\n")
+		}
 	})
 	if !found {
 		return "No tracker for this session yet (no active map set loaded).", false

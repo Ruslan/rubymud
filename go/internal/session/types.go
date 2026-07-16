@@ -33,6 +33,11 @@ type ServerMsg struct {
 	RoomL          int    `json:"room_l,omitempty"`
 	IsDT           bool   `json:"is_dt,omitempty"`
 	Pipe           bool   `json:"pipe,omitempty"`
+	// Exit diff surfaced when the tracker assumed a cell on a room-event mismatch
+	// (yellow): exits_added_live = in the game but not the map; exits_removed_map =
+	// in the map but not the game. Feeds the UI hover-diff / map-patch tool.
+	ExitsAddedLive  []string `json:"exits_added_live,omitempty"`
+	ExitsRemovedMap []string `json:"exits_removed_map,omitempty"`
 }
 
 type SettingsChangedJSON struct {

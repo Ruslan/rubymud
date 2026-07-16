@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"rubymud/go/internal/mapper"
 	"rubymud/go/internal/storage"
 )
 
@@ -71,6 +72,35 @@ func TestMCPAnchorThenWhere(t *testing.T) {
 	}
 	if !strings.Contains(text, "pending_moves: 0") {
 		t.Errorf("expected pending_moves inline: %q", text)
+	}
+}
+
+// TestMCPWhereSurfacesExitDiff drives a superset mismatch (the graceful-
+// degradation case) and confirms mud_where reports yellow + the +live exit diff.
+func TestMCPWhereSurfacesExitDiff(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	seedTrackerSet(t, s, sess.SessionID())
+	sess.LoadActiveMapSet()
+
+	// Anchor at (0,0) "Первая", walk S; the live event for "Вторая" reports a
+	// superset of exits (N S E) — the map has N S, so +E is live-only.
+	sess.WithMapTracker(func(tr *mapper.Tracker) {
+		tr.Anchor(mapper.Coord{Zone: "Z", X: 0, Y: 0, L: 0})
+		tr.PushMove("S")
+		tr.Reconcile(mapper.RoomEvent{Hint: "Вторая", Desc: "two", Exits: "N S E"})
+	})
+
+	res := callTool(t, s, "mud_where", fmt.Sprintf(`{"session_id":%d}`, sess.SessionID()))
+	text := toolText(t, res)
+	if !strings.Contains(text, "yellow") {
+		t.Errorf("superset mismatch should be yellow in mud_where: %q", text)
+	}
+	if !strings.Contains(text, "Exit diff") || !strings.Contains(text, "+E") {
+		t.Errorf("mud_where should surface the +E exit diff: %q", text)
+	}
+	// It must NOT be red (graceful degradation, not loss).
+	if strings.Contains(text, "Confidence: red") {
+		t.Errorf("must not be red on a superset mismatch: %q", text)
 	}
 }
 

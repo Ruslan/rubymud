@@ -2,6 +2,7 @@ package mapper
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"rubymud/go/internal/mapimport"
@@ -144,12 +145,12 @@ func TestTrackerFollowingEmptyQueue(t *testing.T) {
 func TestTrackerTeleportLostThenReanchor(t *testing.T) {
 	tr := NewTracker(linearIndex())
 	tr.Anchor(Coord{"Z", 0, 0, 0})
-	tr.PushMove("S")
-	// A room-event that matches nothing adjacent and no unique fingerprint (a
-	// teleport to an unknown place) => lost (red) on the last-known room.
+	// True teleport: NO pending move (empty queue), an unknown room that matches
+	// no neighbor and no unique fingerprint => genuine loss (🔴). Red is now
+	// reserved for the no-directional-context case.
 	pos, _ := tr.Reconcile(ev("Незнакомое место", "somewhere strange", "N E S W"))
 	if pos.Confidence != Red {
-		t.Fatalf("expected red after teleport mismatch, got %+v", pos)
+		t.Fatalf("expected red after teleport with no pending move, got %+v", pos)
 	}
 	if pos.Coord.X != 0 {
 		t.Errorf("lost indicator should stay on last-known room, got x=%d", pos.Coord.X)
@@ -377,6 +378,88 @@ func TestTrackerLongPipeRunNoRedFlap(t *testing.T) {
 	pos, _ := tr.Reconcile(ev("Конец", "end", "N"))
 	if pos.Confidence != Green || pos.Coord != (Coord{"Z", 3, 0, 0}) {
 		t.Errorf("long pipe run should land green on (3,0), got %+v", pos)
+	}
+}
+
+// TestTrackerSupersetMismatchDegradesToYellow is the graceful-degradation golden
+// (the live Хилло repro): name+desc MATCH but the live game reports a SUPERSET of
+// the map's exits (a room grew a U exit over years of new content). With a pending
+// directional move, the tracker must degrade to 🟡 at the assumed cell — NOT 🔴 —
+// and expose the exit diff (+U). No auto-green: accepting the outdated map is a
+// conscious manual re-anchor.
+func TestTrackerSupersetMismatchDegradesToYellow(t *testing.T) {
+	// (-4,-4) tag=95 "Вдоль живой изгороди" [NSW]; N -> (-5,-4) pipe; -> (-6,-4)
+	// tag=103 "Северо-восточный угол города" ch=[SW]. Live event exits = S W U.
+	rooms := []storage.Room{
+		mkRoom("Хилло", -4, -4, 0, 95, "Вдоль живой изгороди", "hedge", "N S W", chMask("N", "S", "W")),
+		mkRoom("Хилло", -5, -4, 0, 0, "", "", "N S", chMask("N", "S"), withPipe()),
+		mkRoom("Хилло", -6, -4, 0, 103, "Северо-восточный угол города", "ne corner", "S W", chMask("S", "W")),
+	}
+	tr := NewTracker(BuildIndex(1, rooms))
+	tr.Anchor(Coord{"Хилло", -4, -4, 0})
+	tr.PushMove("N") // север
+	// Live event: name+desc match the assumed cell, but exits are a superset (S W U).
+	pos, changed := tr.Reconcile(ev("Северо-восточный угол города", "ne corner", "S W U"))
+	if !changed {
+		t.Fatal("expected a change on the superset-mismatch step")
+	}
+	if pos.Confidence != Yellow {
+		t.Fatalf("superset mismatch with pending must degrade to YELLOW, got %+v", pos)
+	}
+	if pos.Coord != (Coord{"Хилло", -6, -4, 0}) {
+		t.Errorf("should assume the predicted cell (-6,-4), got %+v", pos.Coord)
+	}
+	// Exit diff: +U live (game has U, map lacks it), nothing removed.
+	if len(pos.ExitsAddedLive) != 1 || pos.ExitsAddedLive[0] != "U" {
+		t.Errorf("expected ExitsAddedLive=[U], got %v", pos.ExitsAddedLive)
+	}
+	if len(pos.ExitsRemovedMap) != 0 {
+		t.Errorf("expected no removed map exits, got %v", pos.ExitsRemovedMap)
+	}
+	if !strings.Contains(pos.Reason, "+U") {
+		t.Errorf("reason should surface the +U diff, got %q", pos.Reason)
+	}
+	if tr.PendingCount() != 0 {
+		t.Errorf("pending should be consumed, got %d", tr.PendingCount())
+	}
+}
+
+// TestTrackerHardMismatchWithPendingDegradesToYellow: even a HARD mismatch (name/
+// desc differ, not just exits) degrades to 🟡 at the assumed cell when we still
+// know the travel direction — red is reserved for no-directional-context loss.
+func TestTrackerHardMismatchWithPendingDegradesToYellow(t *testing.T) {
+	rooms := []storage.Room{
+		mkRoom("Z", 0, 0, 0, 1, "Старт", "start", "S", chMask("S")),
+		mkRoom("Z", 1, 0, 0, 2, "Ожидаемая", "expected", "N S", chMask("N", "S")),
+	}
+	tr := NewTracker(BuildIndex(1, rooms))
+	tr.Anchor(Coord{"Z", 0, 0, 0})
+	tr.PushMove("S")
+	// Event whose name/desc do not match the assumed cell (2) and has no unique
+	// fingerprint elsewhere -> still 🟡 at the assumed cell, not red.
+	pos, _ := tr.Reconcile(ev("Другое", "different room", "N E S W"))
+	if pos.Confidence != Yellow {
+		t.Fatalf("hard mismatch with pending must degrade to YELLOW, got %+v", pos)
+	}
+	if pos.Coord != (Coord{"Z", 1, 0, 0}) {
+		t.Errorf("should assume predicted cell (1,0,0), got %+v", pos.Coord)
+	}
+	// Diff is against the assumed map cell (edirs N,S) vs event (N,E,S,W): +E +W.
+	if len(pos.ExitsAddedLive) != 2 {
+		t.Errorf("expected +E +W added-live, got %v", pos.ExitsAddedLive)
+	}
+}
+
+// TestTrackerNoPendingMismatchStaysRed: without a pending move (teleport/
+// following) and no neighbor/fingerprint match, the tracker is genuinely lost —
+// this remains 🔴.
+func TestTrackerNoPendingMismatchStaysRed(t *testing.T) {
+	tr := NewTracker(linearIndex())
+	tr.Anchor(Coord{"Z", 0, 0, 0})
+	// No PushMove: empty queue. Unknown room, no neighbor match, no fingerprint.
+	pos, _ := tr.Reconcile(ev("Совершенно чужое", "alien place", "N E S W U D"))
+	if pos.Confidence != Red {
+		t.Errorf("no-pending mismatch (true loss) must stay RED, got %+v", pos)
 	}
 }
 

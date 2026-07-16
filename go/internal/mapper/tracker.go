@@ -2,6 +2,7 @@ package mapper
 
 import (
 	"sort"
+	"strconv"
 	"strings"
 
 	"rubymud/go/internal/mapimport"
@@ -31,6 +32,19 @@ type Position struct {
 	Coord      Coord
 	Confidence Confidence
 	Reason     string // populated on yellow/red
+
+	// Exit diff, populated when we degrade to yellow by ASSUMING a predicted cell
+	// on a soft/hard mismatch (the room-event did not exactly match the map cell,
+	// but we still know the travel direction). These describe how the live event's
+	// exits differ from the assumed map cell's exits:
+	//   ExitsAddedLive   = +live : dirs the game reports that the map lacks (e.g. a
+	//                      room that grew a U exit over years of new content).
+	//   ExitsRemovedMap  = -map  : dirs the map has that the game no longer reports.
+	// Empty on green/red and when there is no mismatch to describe. Consumers
+	// (mud_where, room_position broadcast, a future map-patch tool) surface these
+	// so accepting "the map is outdated" stays a conscious manual re-anchor.
+	ExitsAddedLive  []string
+	ExitsRemovedMap []string
 }
 
 // Tracker is the per-session backend position state machine. It is NOT safe for
@@ -251,19 +265,60 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 		return
 	}
 
-	// 5) We had a position and a pending head but the room did not match the
-	//    prediction, and no resync: lost. Indicator stays on last-known room but
-	//    confidence is red; flush the queue.
-	if t.pos.Valid {
-		lost := t.pos.Coord
-		t.pos = Position{Valid: true, Coord: lost, Confidence: Red, Reason: "mismatch on step (position lost)"}
-		t.pending = t.pending[:0]
+	// 5) We had a position AND a pending directional move, but the room-event did
+	//    not exactly match and no auto-resync fired. We still KNOW the direction we
+	//    walked, so degrade GRACEFULLY to 🟡 by ASSUMING the predicted (dead-
+	//    reckoning) cell — do NOT flush to 🔴. This covers the "map is outdated"
+	//    case (e.g. a room grew a U exit over years: name+desc match, live exits are
+	//    a superset of the map). We deliberately do NOT auto-upgrade to 🟢 on a
+	//    soft/superset mismatch — accepting the outdated map must be a conscious
+	//    manual re-anchor (mud_anchor_here). We surface the exit diff (+live/-map)
+	//    so the UI/agent can see exactly what disagrees.
+	if t.pos.Valid && len(t.pending) > 0 {
+		dir := t.pending[0]
+		assumed := t.pos.Coord
+		if pred, ok := t.predict(t.pos.Coord, dir); ok {
+			assumed = pred
+			if skipped, ok2 := t.skipPipeRun(pred, dir); ok2 {
+				assumed = skipped
+			}
+		}
+		var added, removed []string
+		if room := t.idx.Room(assumed); room != nil {
+			added, removed = exitDiff(room.EDirs, evExits)
+		}
+		reason := "assumed " + coordStr(assumed) + " by " + DirRU(dir) + " (room-event mismatch — map may be outdated)"
+		if d := formatExitDiff(added, removed); d != "" {
+			reason += "; exits " + d
+		}
+		t.pos = Position{
+			Valid:           true,
+			Coord:           assumed,
+			Confidence:      Yellow,
+			Reason:          reason,
+			ExitsAddedLive:  added,
+			ExitsRemovedMap: removed,
+		}
+		t.pending = t.pending[1:]
 		return
 	}
 
-	// 6) No position at all and no resolve: remain lost/unknown.
+	// 6) True loss: we have no directional context (no pending move — teleport/
+	//    following whose neighbor search failed) or no position at all. This is the
+	//    only path that yields 🔴.
+	if t.pos.Valid {
+		lost := t.pos.Coord
+		t.pos = Position{Valid: true, Coord: lost, Confidence: Red, Reason: "lost — no directional context (teleport/following, no match)"}
+		t.pending = t.pending[:0]
+		return
+	}
 	t.pos = Position{Valid: false, Confidence: Red, Reason: "no resolve — unknown position"}
 	t.pending = t.pending[:0]
+}
+
+// coordStr formats a coord for human-readable reasons: "(x,y,l)".
+func coordStr(c Coord) string {
+	return "(" + strconv.Itoa(c.X) + "," + strconv.Itoa(c.Y) + "," + strconv.Itoa(c.L) + ")"
 }
 
 // predict returns the predicted neighbor coord for a step from c in dir,
@@ -433,4 +488,46 @@ func containsDir(list []string, dir string) bool {
 		}
 	}
 	return false
+}
+
+// exitDiff computes the exit-set difference between a live room-event and an
+// assumed map cell, in canonical direction order:
+//
+//	addedLive   = +live : dirs in the event's exits but not the map cell's edirs.
+//	removedMap  = -map  : dirs in the map cell's edirs but not the event's exits.
+//
+// Both are nil when the sets are equal. mapEDirs is the map cell's canonical exit
+// letters; evExits is the event's canonical exit letters (door markers already
+// stripped by NormExits).
+func exitDiff(mapEDirs, evExits []string) (addedLive, removedMap []string) {
+	mapSet := map[string]bool{}
+	for _, d := range mapEDirs {
+		mapSet[d] = true
+	}
+	evSet := map[string]bool{}
+	for _, d := range evExits {
+		evSet[d] = true
+	}
+	for _, d := range dirOrder {
+		if evSet[d] && !mapSet[d] {
+			addedLive = append(addedLive, d)
+		}
+		if mapSet[d] && !evSet[d] {
+			removedMap = append(removedMap, d)
+		}
+	}
+	return addedLive, removedMap
+}
+
+// formatExitDiff renders the exit diff as "+U -D" style tokens for the Reason
+// string; returns "" when there is no diff.
+func formatExitDiff(addedLive, removedMap []string) string {
+	parts := make([]string, 0, len(addedLive)+len(removedMap))
+	for _, d := range addedLive {
+		parts = append(parts, "+"+d)
+	}
+	for _, d := range removedMap {
+		parts = append(parts, "-"+d)
+	}
+	return strings.Join(parts, " ")
 }

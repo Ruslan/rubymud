@@ -134,11 +134,13 @@ func (s *Session) roomPositionMsgLocked() ServerMsg {
 	}
 	pos := s.mapTracker.Position()
 	msg := ServerMsg{
-		Type:           "room_position",
-		Confidence:     string(pos.Confidence),
-		PendingMoves:   s.mapTracker.PendingCount(),
-		PositionValid:  pos.Valid,
-		PositionReason: pos.Reason,
+		Type:            "room_position",
+		Confidence:      string(pos.Confidence),
+		PendingMoves:    s.mapTracker.PendingCount(),
+		PositionValid:   pos.Valid,
+		PositionReason:  pos.Reason,
+		ExitsAddedLive:  pos.ExitsAddedLive,
+		ExitsRemovedMap: pos.ExitsRemovedMap,
 	}
 	if pos.Valid {
 		msg.Zone = pos.Coord.Zone
