@@ -60,8 +60,8 @@ var moveWords = map[string]string{
 	"s": "S", "ю": "S", "юг": "S", "south": "S",
 	"e": "E", "в": "E", "восток": "E", "east": "E",
 	"w": "W", "з": "W", "запад": "W", "west": "W",
-	"u": "U", "вв": "U", "вверх": "U", "up": "U",
-	"d": "D", "вн": "D", "вниз": "D", "down": "D",
+	"u": "U", "вв": "U", "вверх": "U", "подняться": "U", "up": "U",
+	"d": "D", "вн": "D", "вниз": "D", "опуститься": "D", "down": "D",
 }
 
 // MoveDir returns the canonical direction letter for a single command token, or
