@@ -180,6 +180,19 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 	if t.pos.Valid && len(t.pending) > 0 {
 		dir := t.pending[0]
 		if pred, ok := t.predict(t.pos.Coord, dir); ok {
+			// A single physical step may jump a whole pipe run: the server emits ONE
+			// room-event for the far (real) cell, while the map stores the pipe cells
+			// in between. When the immediate predicted cell is a pipe (untagged /
+			// empty hint) and the EVENT carries a real hint, keep stepping in the same
+			// direction through the pipe run to the first non-pipe cell and reconcile
+			// THAT cell — otherwise the empty-hint pipe cell mismatches the real event
+			// and flaps a false 🔴 for one step. (Hint-less events — walking INTO a
+			// pipe the server does report — are handled separately below at 🟡.)
+			if ev.Hint != "" {
+				if skipped, ok2 := t.skipPipeRun(pred, dir); ok2 {
+					pred = skipped
+				}
+			}
 			if room := t.idx.Room(pred); room != nil && matches(room, ev, evExits) {
 				// confirmed step
 				t.pos = Position{Valid: true, Coord: pred, Confidence: Green}
@@ -275,6 +288,44 @@ func (t *Tracker) predict(c Coord, dir string) (Coord, bool) {
 		return Coord{}, false
 	}
 	return Coord{Zone: c.Zone, X: c.X + d.DX, Y: c.Y + d.DY, L: c.L + d.DL}, true
+}
+
+// maxPipeSkip caps how many consecutive pipe cells the dead-reckoning skip will
+// step over, to guard against an unbounded loop on malformed pipe data.
+const maxPipeSkip = 32
+
+// skipPipeRun, given a predicted cell `c` and the travel direction `dir`, walks
+// forward in the same direction through any run of pipe corridors (untagged /
+// empty-hint cells with Pipe=true) and returns the first NON-pipe (real/tagged)
+// cell — the cell the server actually reports after a single physical step that
+// jumps the pipe run. It returns (c,false) when the immediate cell is not a pipe
+// (nothing to skip), and stops at a missing cell or the skip cap. It never
+// crosses a seam (seams are handled by predict; a pipe run is intra-zone by
+// construction — a coord walk in one direction).
+func (t *Tracker) skipPipeRun(c Coord, dir string) (Coord, bool) {
+	room := t.idx.Room(c)
+	if room == nil || !room.Pipe {
+		return c, false
+	}
+	d, ok := dirDelta[dir]
+	if !ok {
+		return c, false
+	}
+	cur := c
+	for i := 0; i < maxPipeSkip; i++ {
+		next := Coord{Zone: cur.Zone, X: cur.X + d.DX, Y: cur.Y + d.DY, L: cur.L + d.DL}
+		nr := t.idx.Room(next)
+		if nr == nil {
+			// Pipe run runs off the map — best we can do is the last pipe cell.
+			return cur, true
+		}
+		cur = next
+		if !nr.Pipe {
+			// Reached the first real cell past the pipe run.
+			return cur, true
+		}
+	}
+	return cur, true
 }
 
 // seamDir maps a seam command ("на восток", "восток", "в") to a canonical dir.

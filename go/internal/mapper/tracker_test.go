@@ -292,6 +292,94 @@ func TestTrackerUniqueNeighborStillGreen(t *testing.T) {
 	}
 }
 
+// hubPipeIndex builds the exact live repro (Хилло north corridor from Портовые
+// ворота): a hub with a pipe run to its north.
+//
+//	(0,-4)  tag=2   ch=ENSW  "Портовые ворота"      HUB
+//	(-1,-4) pipe    ch=NS    ""                      untagged narrow corridor
+//	(-2,-4) tag=93  ch=NS    "Невдалеке от портовых ворот"
+//	(-3,-4) tag=94  ch=NS    "Вдоль живой изгороди"
+//
+// Axis: N = x-1. One physical `север` from the hub jumps the length-1 pipe and
+// lands directly at "Невдалеке" (-2,-4); the MUD emits ONE event for that cell.
+func hubPipeIndex() *Index {
+	rooms := []storage.Room{
+		mkRoom("Хилло", 0, -4, 0, 2, "Портовые ворота", "hub", "N E S W", chMask("N", "E", "S", "W")),
+		mkRoom("Хилло", -1, -4, 0, 0, "", "", "N S", chMask("N", "S"), withPipe()),
+		mkRoom("Хилло", -2, -4, 0, 93, "Невдалеке от портовых ворот", "near gates", "N S", chMask("N", "S")),
+		mkRoom("Хилло", -3, -4, 0, 94, "Вдоль живой изгороди", "along the hedge", "N S", chMask("N", "S")),
+		// Fingerprint-colliding decoys elsewhere in the zone, so these targets do
+		// NOT auto-resync (step 3) — this forces the step through the dead-reckoning
+		// PREDICTION path (step 1) alone, exactly as live. Without the pipe-skip fix,
+		// prediction lands on the pipe cell and flaps 🔴; auto-resync can no longer
+		// mask it.
+		mkRoom("Хилло", 20, 20, 0, 200, "Невдалеке от портовых ворот", "near gates", "N S", chMask("N", "S")),
+		mkRoom("Хилло", 21, 21, 0, 201, "Портовые ворота", "hub", "N E S W", chMask("N", "E", "S", "W")),
+	}
+	return BuildIndex(1, rooms)
+}
+
+// TestTrackerHubIntoPipeNoRedFlap is the golden for the confirmed live bug: a
+// `север` step from the hub (0,-4) that jumps a length-1 pipe must land 🟢 at the
+// first tagged cell past the pipe (-2,-4) on the FIRST step — no red flap.
+// Before the fix: dead-reckoning predicted the pipe cell (-1,-4), whose empty
+// hint mismatched the "Невдалеке" event -> false 🔴 frozen at (0,-4).
+func TestTrackerHubIntoPipeNoRedFlap(t *testing.T) {
+	tr := NewTracker(hubPipeIndex())
+	tr.Anchor(Coord{"Хилло", 0, -4, 0})
+	if tr.Position().Confidence != Green {
+		t.Fatalf("anchor not green: %+v", tr.Position())
+	}
+	tr.PushMove("N") // север
+	pos, changed := tr.Reconcile(ev("Невдалеке от портовых ворот", "near gates", "N S"))
+	if !changed {
+		t.Fatal("expected change on the hub->pipe step")
+	}
+	if pos.Confidence != Green {
+		t.Errorf("hub->pipe step should be GREEN (no red flap), got %+v", pos)
+	}
+	if pos.Coord != (Coord{"Хилло", -2, -4, 0}) {
+		t.Errorf("should land on the first tagged cell past the pipe (-2,-4), got %+v", pos.Coord)
+	}
+	if tr.PendingCount() != 0 {
+		t.Errorf("pending should be popped, got %d", tr.PendingCount())
+	}
+}
+
+// TestTrackerCorridorThroughPipeToHub is the reverse direction (corridor -> pipe
+// -> hub): a `юг` from (-2,-4) jumps the pipe and lands 🟢 at the hub (0,-4).
+func TestTrackerCorridorThroughPipeToHub(t *testing.T) {
+	tr := NewTracker(hubPipeIndex())
+	tr.Anchor(Coord{"Хилло", -2, -4, 0})
+	tr.PushMove("S") // юг: S = x+1, jumps pipe (-1,-4) to hub (0,-4)
+	pos, _ := tr.Reconcile(ev("Портовые ворота", "hub", "N E S W"))
+	if pos.Confidence != Green || pos.Coord != (Coord{"Хилло", 0, -4, 0}) {
+		t.Errorf("corridor->pipe->hub should be green at hub (0,-4), got %+v", pos)
+	}
+}
+
+// TestTrackerLongPipeRunNoRedFlap covers a pipe run of >=2 cells: hub jumps two
+// pipe cells and lands 🟢 on the first tagged cell past them.
+func TestTrackerLongPipeRunNoRedFlap(t *testing.T) {
+	// (0,0) hub -> (1,0) pipe -> (2,0) pipe -> (3,0) tagged "Конец". Axis S = x+1.
+	// A fingerprint decoy for "Конец" blocks auto-resync so only the prediction
+	// (with the pipe-skip) can green the step.
+	rooms := []storage.Room{
+		mkRoom("Z", 0, 0, 0, 1, "Хаб", "hub", "S", chMask("S")),
+		mkRoom("Z", 1, 0, 0, 0, "", "", "N S", chMask("N", "S"), withPipe()),
+		mkRoom("Z", 2, 0, 0, 0, "", "", "N S", chMask("N", "S"), withPipe()),
+		mkRoom("Z", 3, 0, 0, 5, "Конец", "end", "N", chMask("N")),
+		mkRoom("Z", 30, 30, 0, 99, "Конец", "end", "N", chMask("N")),
+	}
+	tr := NewTracker(BuildIndex(1, rooms))
+	tr.Anchor(Coord{"Z", 0, 0, 0})
+	tr.PushMove("S")
+	pos, _ := tr.Reconcile(ev("Конец", "end", "N"))
+	if pos.Confidence != Green || pos.Coord != (Coord{"Z", 3, 0, 0}) {
+		t.Errorf("long pipe run should land green on (3,0), got %+v", pos)
+	}
+}
+
 func TestTrackerDoorMarkerTolerance(t *testing.T) {
 	// A live event reports doors "(N) S" while the map stores plain "N S"; the
 	// reconciler must match (door markers stripped in the fingerprint/dir set).
