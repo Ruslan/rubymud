@@ -2,6 +2,7 @@
   import './settings-section.css';
   import { inlineEditKeys } from './inline-edit-keys';
   import type { Profile, Session, SessionProfile } from './types';
+  import { fetchMapSets, fetchActiveMapSet, saveActiveMapSet } from './api';
 
   export let formError = '';
   export let sessions: Session[] = [];
@@ -72,6 +73,47 @@
       // Re-enabling follow adopts the current browser zone immediately.
       timezone: follow && browserTimezone ? browserTimezone : editingSessionDraft.timezone,
     };
+  }
+
+  // --- Map set selector (§6a) ------------------------------------------------
+  // The active map set is a session column managed outside the session record
+  // (see /api/sessions/{id}/active-map-set), so it has its own small state here.
+  let mapSets: Array<{ id: number; name: string; zone_count: number; room_count: number }> = [];
+  let activeMapSetID: number | null = null;
+  let mapSetLoadedFor: number | null = null;
+  let mapSetSaving = false;
+  let mapSetError = '';
+
+  async function loadMapSetState(sessionID: number) {
+    mapSetError = '';
+    try {
+      const [sets, active] = await Promise.all([fetchMapSets(), fetchActiveMapSet(sessionID)]);
+      mapSets = sets || [];
+      activeMapSetID = active?.active_map_set_id ?? null;
+      mapSetLoadedFor = sessionID;
+    } catch (err) {
+      mapSetError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  // Load whenever the viewed session changes.
+  $: if (currentSession && currentSession.id !== mapSetLoadedFor) {
+    void loadMapSetState(currentSession.id);
+  }
+
+  async function onMapSetChange(sessionID: number, value: string) {
+    const next = value === '' ? null : Number(value);
+    mapSetSaving = true;
+    mapSetError = '';
+    try {
+      const resp = await saveActiveMapSet(sessionID, next);
+      if (!resp.ok) throw new Error(await resp.text());
+      activeMapSetID = next;
+    } catch (err) {
+      mapSetError = err instanceof Error ? err.message : String(err);
+    } finally {
+      mapSetSaving = false;
+    }
   }
 </script>
 
@@ -213,6 +255,28 @@
       </select>
       <button class="btn-primary" disabled={!sessionProfileToAddID} on:click={() => { if (sessionProfileToAddID) addProfileToSession(sessionProfileToAddID); sessionProfileToAddID = undefined; }}>Add</button>
   </div>
+
+  <h3 style="margin-top: 40px; border-bottom: 1px solid #2d333b; padding-bottom: 8px;">Map Set for {currentSession.name}</h3>
+  <p class="description">Choose the world map this session follows. The <code>~map</code> buffer renders it and tracks the player's position.</p>
+  <div class="form-row" style="max-width: 400px">
+    <select
+      style="flex: 1; background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px; border-radius: 6px;"
+      disabled={mapSetSaving}
+      value={activeMapSetID === null ? '' : String(activeMapSetID)}
+      on:change={(e) => currentSession && onMapSetChange(currentSession.id, (e.currentTarget as HTMLSelectElement).value)}
+    >
+      <option value="">(none)</option>
+      {#each mapSets as ms}
+        <option value={String(ms.id)}>{ms.name} — {ms.zone_count} zones, {ms.room_count} rooms</option>
+      {/each}
+    </select>
+  </div>
+  {#if mapSets.length === 0}
+    <p class="description">No map sets imported yet.</p>
+  {/if}
+  {#if mapSetError}
+    <p class="description" style="color: #e74c3c;">Map set error: {mapSetError}</p>
+  {/if}
 {/if}
 </section>
 

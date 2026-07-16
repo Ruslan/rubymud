@@ -18,6 +18,7 @@ import { ReverseSearchController } from './reverseSearchController';
 import { createRenderer } from './render';
 import { createSocket, sendSocketCommand } from './socket';
 import type { Hotkey, LogEntry, ServerMessage } from './types';
+import { parseRoomPosition, type RoomPositionMessage } from './map/wsPosition';
 
 type WakeLockSentinelLike = {
   release(): Promise<void>;
@@ -419,6 +420,10 @@ function sendCommand(value: string, source = 'input'): boolean {
   return true;
 }
 
+// The session's active map set, seeded from REST and updated on settings change.
+// Map panes read this via getActiveMapSetID to fetch the right zones/rooms.
+let activeMapSetID: number | null = null;
+
 const renderer = createRenderer({
   elements,
   ansiUp,
@@ -429,8 +434,29 @@ const renderer = createRenderer({
   sendCommand,
   onButtonRendered,
   state,
+  sessionID,
+  getActiveMapSetID: () => activeMapSetID,
 });
 renderer.loadLayout();
+
+// Fetch the active map set so any mounted `~map` pane can load its data, then
+// tell map panes to (re)load.
+async function refreshActiveMapSet(): Promise<void> {
+  if (!sessionID) return;
+  try {
+    const res = await fetchWithToken(`/api/sessions/${sessionID}/active-map-set`);
+    if (!res.ok) return;
+    const data: { active_map_set_id: number | null } = await res.json();
+    const next = data.active_map_set_id ?? null;
+    if (next !== activeMapSetID) {
+      activeMapSetID = next;
+      renderer.reloadMapPanes();
+    }
+  } catch (err) {
+    console.warn('Failed to fetch active map set', err);
+  }
+}
+void refreshActiveMapSet();
 logBoot('renderer initialized');
 
 function latestEntryID(entries: LogEntry[], fallback: number): number {
@@ -651,6 +677,20 @@ function attachSocketHandlers(target: WebSocket) {
     if (message.type === 'command_trace' && message.client_command_id) {
       logBoot('command trace received', { id: message.client_command_id, commands: message.commands });
       renderer.resolveCommandTrace(message.client_command_id, message.commands || []);
+    }
+
+    // Mapper: live tracker position → map panes update the "you are here"
+    // marker, confidence badge, and (if following) re-center. `room` (current-
+    // room signal) is not needed by the read-only map buffer, so it is ignored
+    // here; the position broadcast carries everything the map needs.
+    if (message.type === 'room_position') {
+      renderer.handleRoomPosition(parseRoomPosition(message as unknown as RoomPositionMessage));
+    }
+
+    // Map corpus changed (import / active-set change): map panes reload.
+    if (message.type === 'map_sets_changed' || message.type === 'rooms_changed') {
+      void refreshActiveMapSet();
+      renderer.reloadMapPanes();
     }
   };
 

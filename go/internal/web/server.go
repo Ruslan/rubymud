@@ -197,6 +197,11 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 				})
 
 				r.Get("/hotkeys", s.listSessionHotkeys)
+
+				// Mapper: which map set this session uses, and manual re-anchor.
+				r.Get("/active-map-set", s.getActiveMapSet)
+				r.Post("/active-map-set", s.setActiveMapSet)
+				r.Post("/map-anchor", s.anchorMapPosition)
 			})
 		})
 

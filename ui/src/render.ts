@@ -4,6 +4,8 @@ import { currentAnsiTheme, renderAnsiHtml } from './ansi';
 import type { AppElements } from './dom';
 import type { Hotkey, LogEntry, ResolvedVariable, Variable, ButtonOverlay } from './types';
 import { fetchWithToken } from './dom';
+import { MapPaneController, MAP_BUFFER } from './map/pane';
+import type { PlayerPosition } from './map/types';
 
 interface RendererState {
   activePanel: 'keyboard' | 'variables' | 'groups' | null;
@@ -20,6 +22,10 @@ interface RendererDeps {
   toggleGroup: (name: string, enabled: boolean) => void;
   onButtonRendered?: (btn: ButtonOverlay, el: HTMLButtonElement) => void;
   state: RendererState;
+  // Map-pane wiring (mapper §4/§6). sessionID identifies the session for the
+  // anchor POST; getActiveMapSetID lets the map pane fetch the right set.
+  sessionID?: number | undefined;
+  getActiveMapSetID?: () => number | null;
 }
 
 const maxRenderedLines = 5000;
@@ -70,9 +76,12 @@ interface RenderedPane {
   scrollbackOutputEl?: HTMLElement | undefined;
   scrollbackDividerEl?: HTMLElement | undefined;
   scrollbackAnsiUp?: AnsiUp | undefined;
+  // Present only for map panes (buffer === '~map'); the controller owns the
+  // canvas + map state. Mutually exclusive with the text output paths.
+  mapController?: MapPaneController | undefined;
 }
 
-export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand, requestVariables, requestGroups, toggleGroup, onButtonRendered, state }: RendererDeps) {
+export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand, requestVariables, requestGroups, toggleGroup, onButtonRendered, state, sessionID, getActiveMapSetID }: RendererDeps) {
   let nextId = 0;
   const generateId = (prefix: string) => `${prefix}-${++nextId}`;
 
@@ -81,11 +90,27 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     colSizes: [100]
   };
 
-  const knownBuffers = new Set<string>(['main']);
+  // The reserved `~map` buffer is always selectable so a user can mount the map
+  // pane into any split. It carries no text entries.
+  const knownBuffers = new Set<string>(['main', MAP_BUFFER]);
   const bufferData = new Map<string, LogEntry[]>();
   const pendingCommandHints = new Map<string, { buffer: string; entry: LogEntry; source: string; commandIndex: number }>();
   const renderedPanes = new Map<string, RenderedPane>();
   const searchStates = new Map<string, SearchState>();
+  // Live map-pane controllers, keyed by pane id. A pane is a "map pane" iff its
+  // buffer is MAP_BUFFER; the controller owns the canvas + its own state and is
+  // excluded from every text path below.
+  const mapControllers = new Map<string, MapPaneController>();
+  // The most recent live tracker position, replayed into map panes mounted or
+  // switched to `~map` after the broadcast arrived.
+  let lastMapPosition: PlayerPosition | null = null;
+
+  function isMapBuffer(buffer: string): boolean {
+    return buffer === MAP_BUFFER;
+  }
+  function isMapPane(pane: RenderedPane): boolean {
+    return isMapBuffer(pane.node.buffer);
+  }
   // The pane most recently interacted with; target for app-level scrollback
   // shortcuts (PageUp/PageDown/End). Falls back to the first pane in the layout.
   let activePaneId: string | null = null;
@@ -117,6 +142,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   function setAvailableBuffers(names: string[]) {
     knownBuffers.clear();
     knownBuffers.add('main');
+    knownBuffers.add(MAP_BUFFER); // keep the map buffer always mountable
     for (const name of names) {
       if (name) {
         knownBuffers.add(name);
@@ -143,6 +169,10 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function rebuildDOM() {
+    // Dispose any live map controllers before wiping the DOM; createPaneDOM
+    // makes fresh ones for surviving map panes.
+    mapControllers.forEach((c) => c.dispose());
+    mapControllers.clear();
     elements.panesContainer.innerHTML = '';
     renderedPanes.clear();
 
@@ -187,7 +217,18 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     selectEl = document.createElement('select');
     selectEl.className = 'pane-select';
     selectEl.addEventListener('change', () => {
+      const prev = node.buffer;
       node.buffer = selectEl!.value;
+      // Switching into or out of the map pane restructures the pane body
+      // (canvas vs text output), so do a full rebuild in that case. Text↔text
+      // switches keep the fast in-place path.
+      if (isMapBuffer(prev) || isMapBuffer(node.buffer)) {
+        closeScrollbackRegion(node.id);
+        resetPaneSearch(node.id);
+        saveLayout();
+        rebuildDOM();
+        return;
+      }
       closeScrollbackRegion(node.id);
       resetPaneSearch(node.id);
       saveLayout();
@@ -196,6 +237,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       setTimeout(() => scrollPaneToBottom(node.id), 0);
     });
     headerEl.appendChild(selectEl);
+    const paneIsMap = isMapBuffer(node.buffer);
 
     const liveSplitBtn = document.createElement('button');
     liveSplitBtn.className = 'pane-btn pane-live-split-btn';
@@ -208,7 +250,8 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       liveSplitBtn.classList.add('active');
     }
     liveSplitBtn.addEventListener('click', () => toggleScrollbackRegion(node.id));
-    headerEl.appendChild(liveSplitBtn);
+    // Map panes have no scrollback/search — they render a canvas, not text.
+    if (!paneIsMap) headerEl.appendChild(liveSplitBtn);
 
     const searchButton = document.createElement('button');
     searchButton.className = 'pane-btn pane-search-toggle';
@@ -216,7 +259,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     searchButton.textContent = '⌕';
     searchButton.title = 'Search this buffer';
     searchButton.setAttribute('aria-label', 'Search this buffer');
-    headerEl.appendChild(searchButton);
+    if (!paneIsMap) headerEl.appendChild(searchButton);
 
     const searchControls = document.createElement('div');
     searchControls.className = 'pane-search-controls';
@@ -366,14 +409,57 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       updateScrollButtonVisibility(renderedPanes.get(node.id));
     });
 
-    bodyEl.appendChild(outputEl);
-    bodyEl.appendChild(scrollButtonEl);
-    el.appendChild(bodyEl);
-
     const paneAnsiUp = new AnsiUp();
     paneAnsiUp.use_classes = true;
 
     const pane: RenderedPane = { node, el, outputEl, scrollButtonEl, selectEl, searchInputEl, searchCountEl, ansiUp: paneAnsiUp };
+
+    if (paneIsMap) {
+      // Map pane: mount a MapPaneController (canvas + its own state) into the
+      // body. outputEl/scrollButtonEl stay detached — every text path is gated
+      // on isMapPane() so they are never rendered into.
+      //
+      // CRITICAL (protects the live TEXT UI): the controller constructor can
+      // throw (e.g. canvas.getContext('2d') returns null). rebuildDOM() has
+      // already wiped panesContainer + renderedPanes before this call, so an
+      // unhandled throw would leave the layout half-built and the user's text
+      // panes gone. Wrap it: on failure, degrade to a "Map unavailable" notice
+      // and CONTINUE so every other (text) pane still renders.
+      bodyEl.classList.add('pane-body_map');
+      try {
+        const controller = new MapPaneController({
+          sessionID,
+          getActiveMapSetID: getActiveMapSetID ?? (() => null),
+        });
+        pane.mapController = controller;
+        mapControllers.set(node.id, controller);
+        bodyEl.appendChild(controller.root);
+        el.appendChild(bodyEl);
+        renderedPanes.set(node.id, pane);
+        controller.onMounted();
+        // Replay the latest known position so a freshly mounted map follows too.
+        if (lastMapPosition) {
+          void controller.onRoomPosition(lastMapPosition);
+        }
+      } catch (err) {
+        console.warn('Map pane unavailable', err);
+        bodyEl.innerHTML = '';
+        const notice = document.createElement('div');
+        notice.className = 'map-pane__unavailable';
+        notice.textContent = 'Map unavailable';
+        bodyEl.appendChild(notice);
+        el.appendChild(bodyEl);
+        // Register the pane WITHOUT a controller so it is inert but valid; text
+        // paths still skip it (isMapPane === buffer is '~map').
+        renderedPanes.set(node.id, pane);
+      }
+      return el;
+    }
+
+    bodyEl.appendChild(outputEl);
+    bodyEl.appendChild(scrollButtonEl);
+    el.appendChild(bodyEl);
+
     renderedPanes.set(node.id, pane);
 
     // Restore an open scrollback region across layout rebuilds.
@@ -484,7 +570,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
   function openScrollbackRegion(paneId: string, openedBySearch: boolean) {
     const pane = renderedPanes.get(paneId);
-    if (!pane || pane.scrollbackEl) return;
+    if (!pane || isMapPane(pane) || pane.scrollbackEl) return;
     const search = ensureSearchState(paneId);
     search.regionOpen = true;
     search.regionOpenedBySearch = openedBySearch;
@@ -550,6 +636,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     if (!paneId) return false;
     const pane = renderedPanes.get(paneId);
     if (!pane) return false;
+    if (isMapPane(pane)) return false; // no scrollback on a canvas pane
     const regionOpen = !!pane.scrollbackEl;
 
     switch (event.key) {
@@ -760,7 +847,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
   function openOrExecutePaneSearch(paneId: string) {
     const pane = renderedPanes.get(paneId);
-    if (!pane) return;
+    if (!pane || isMapPane(pane)) return;
     const search = ensureSearchState(paneId);
     if (!search.open) {
       search.open = true;
@@ -805,7 +892,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   // opens the scrollback region when there are matches, and renders highlights.
   function executePaneSearch(paneId: string) {
     const pane = renderedPanes.get(paneId);
-    if (!pane) return;
+    if (!pane || isMapPane(pane)) return;
     const search = ensureSearchState(paneId);
     const query = search.query.trim();
     search.executedQuery = query;
@@ -975,6 +1062,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   function renderPaneBuffer(paneId: string) {
     const pane = renderedPanes.get(paneId);
     if (!pane) return;
+    if (isMapPane(pane)) return; // map panes render a canvas, not text entries
     pane.outputEl.innerHTML = '';
     pane.ansiUp = new AnsiUp();
     pane.ansiUp.use_classes = true;
@@ -996,7 +1084,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   // Full scrollback render: only on open, query execution, buffer prune, or theme change.
   function renderScrollbackRegion(paneId: string) {
     const pane = renderedPanes.get(paneId);
-    if (!pane || !pane.scrollbackOutputEl) return;
+    if (!pane || isMapPane(pane) || !pane.scrollbackOutputEl) return;
     pane.scrollbackAnsiUp = new AnsiUp();
     pane.scrollbackAnsiUp.use_classes = true;
     const data = getBufferData(pane.node.buffer);
@@ -1189,6 +1277,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
       renderedPanes.forEach(pane => {
         if (pane.node.buffer !== bufferName) return;
+        if (isMapPane(pane)) return; // never append text into a map pane
 
         if (outOfOrder) {
           // Out-of-order backfill (reconnect/wake catch-up): re-render so both
@@ -1400,6 +1489,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   function clearOutput() {
     bufferData.clear();
     renderedPanes.forEach(pane => {
+      if (isMapPane(pane)) return; // map panes hold a canvas, not text output
       pane.outputEl.innerHTML = '';
       if (pane.scrollbackOutputEl) {
         pane.scrollbackOutputEl.innerHTML = '';
@@ -1411,6 +1501,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
   function scrollOutputToBottom() {
     renderedPanes.forEach(pane => {
+      if (isMapPane(pane)) return; // no scrollable text output on a map pane
       pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
       updateScrollButtonVisibility(pane);
     });
@@ -1426,6 +1517,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     if (!pane) {
       return;
     }
+    if (isMapPane(pane)) return; // map panes have no scroll-to-bottom button
 
     const hasOverflow = pane.outputEl.scrollHeight > pane.outputEl.clientHeight + 8;
     pane.scrollButtonEl.hidden = !hasOverflow || shouldStickToBottom(pane);
@@ -1808,9 +1900,26 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
   function refreshAnsiTheme() {
     renderedPanes.forEach((pane) => {
+      if (isMapPane(pane)) {
+        pane.mapController?.render();
+        return;
+      }
       renderPaneBuffer(pane.node.id);
       renderScrollbackRegion(pane.node.id);
     });
+  }
+
+  // Deliver a live tracker position (room_position WS broadcast) to every map
+  // pane. Cached so a map pane mounted after the broadcast still follows.
+  function handleRoomPosition(pos: PlayerPosition) {
+    lastMapPosition = pos;
+    mapControllers.forEach((c) => void c.onRoomPosition(pos));
+  }
+
+  // Tell every map pane the active map set changed (or maps were re-imported)
+  // so it reloads zones/rooms (AGENTS #2 — UI reflects backend state).
+  function reloadMapPanes() {
+    mapControllers.forEach((c) => void c.reload());
   }
 
   // Expose API
@@ -1834,6 +1943,8 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     loadLayout,
     addColumnRight,
     refreshAnsiTheme,
+    handleRoomPosition,
+    reloadMapPanes,
   };
 }
 function renderANSI(entryAnsiUp: AnsiUp, text: string): string {

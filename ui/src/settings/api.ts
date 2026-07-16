@@ -107,6 +107,13 @@ export const saveProfileRule = (profileID: number, domain: string, id: number, d
 export const saveProfile = (profileID: number, draft: any) => putJSON(`/api/profiles/${profileID}`, draft);
 export const saveSession = (sessionID: number, draft: any) => putJSON(`/api/sessions/${sessionID}`, draft);
 
+// Mapper: the global map sets, and this session's active set (§6a).
+export const fetchMapSets = () => getJSON<Array<{ id: number; name: string; zone_count: number; room_count: number }>>('/api/map-sets');
+export const fetchActiveMapSet = (sessionID: number) =>
+  getJSON<{ active_map_set_id: number | null }>(`/api/sessions/${sessionID}/active-map-set`);
+export const saveActiveMapSet = (sessionID: number, mapSetID: number | null) =>
+  postJSON(`/api/sessions/${sessionID}/active-map-set`, { map_set_id: mapSetID });
+
 export function toggleProfileRule(profileID: number, domain: 'aliases' | 'triggers' | 'subs' | 'highlights', item: any, enabled: boolean) {
   return putJSON(`/api/profiles/${profileID}/${domain}/${item.id}`, { ...item, enabled });
 }

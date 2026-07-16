@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"rubymud/go/internal/mapimport"
+	"rubymud/go/internal/mapper"
 	"rubymud/go/internal/session"
 	"rubymud/go/internal/storage"
 )
@@ -205,6 +206,113 @@ func (s *Server) listRooms(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, rooms)
+}
+
+// getActiveMapSet handles GET /api/sessions/{sessionID}/active-map-set.
+// Returns {"active_map_set_id": <id>|null} for the session so the UI map pane
+// knows which set to fetch. The column lives outside SessionRecord (managed via
+// SetActiveMapSetID) so it is surfaced through this dedicated endpoint.
+func (s *Server) getActiveMapSet(w http.ResponseWriter, r *http.Request) {
+	_, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, "invalid session id", http.StatusBadRequest)
+		return
+	}
+	setID, ok, err := s.store.GetActiveMapSetID(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		writeJSON(w, map[string]any{"active_map_set_id": nil})
+		return
+	}
+	writeJSON(w, map[string]any{"active_map_set_id": setID})
+}
+
+// setActiveMapSet handles POST /api/sessions/{sessionID}/active-map-set with
+// body {"map_set_id": <id>} (id<=0 or null clears it). It mirrors the MCP
+// mud_set_active_map_set write: persist the column, then reload the live
+// session's tracker index via ReloadActiveMapSet (AGENTS #2).
+func (s *Server) setActiveMapSet(w http.ResponseWriter, r *http.Request) {
+	_, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, "invalid session id", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		MapSetID *int64 `json:"map_set_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	var setID int64
+	if body.MapSetID != nil {
+		setID = *body.MapSetID
+	}
+	if setID > 0 {
+		if _, err := s.store.GetMapSet(setID); err != nil {
+			http.Error(w, fmt.Sprintf("map set %d not found", setID), http.StatusBadRequest)
+			return
+		}
+	}
+	if err := s.store.SetActiveMapSetID(id, setID); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	// Rebuild the tracker index for the live session, if any, and broadcast.
+	if sess, ok := s.manager.GetSession(id); ok {
+		sess.ReloadActiveMapSet()
+	}
+	if setID > 0 {
+		writeJSON(w, map[string]any{"active_map_set_id": setID})
+	} else {
+		writeJSON(w, map[string]any{"active_map_set_id": nil})
+	}
+}
+
+// anchorMapPosition handles POST /api/sessions/{sessionID}/map-anchor with body
+// {zone,x,y,l} — the REST equivalent of the "I'm here" picker / MCP
+// mud_anchor_here. It reuses the same tracker Anchor path and broadcasts the new
+// position to UI clients. No-op (200) semantics: if the session is not connected
+// or has no tracker, it reports that in the JSON without failing hard.
+func (s *Server) anchorMapPosition(w http.ResponseWriter, r *http.Request) {
+	_, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, "invalid session id", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Zone string `json:"zone"`
+		X    int    `json:"x"`
+		Y    int    `json:"y"`
+		L    int    `json:"l"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	sess, ok := s.manager.GetSession(id)
+	if !ok {
+		writeJSON(w, map[string]any{"ok": false, "reason": "session not connected — no live tracker"})
+		return
+	}
+	var anchored, exact bool
+	found := sess.WithMapTracker(func(t *mapper.Tracker) {
+		if t.Index() == nil {
+			return
+		}
+		_, exact = t.Anchor(mapper.Coord{Zone: body.Zone, X: body.X, Y: body.Y, L: body.L})
+		anchored = true
+	})
+	if !found || !anchored {
+		writeJSON(w, map[string]any{"ok": false, "reason": "no active map set for this session"})
+		return
+	}
+	// Broadcast the new tracker position to UI clients (map panes follow it).
+	sess.BroadcastMapPosition()
+	writeJSON(w, map[string]any{"ok": true, "exact": exact})
 }
 
 // optionalSessionID reads a session id from ?session_id= for best-effort
