@@ -242,10 +242,22 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 		}
 	}
 
-	// 3) Legit auto-resync by unique fingerprint anywhere in the set. Skipped for
-	//    hint-less events (pipe corridors): an empty hint is not a reliable
-	//    fingerprint to resolve on.
-	if ev.Hint != "" {
+	// 3) Legit auto-resync by unique fingerprint anywhere in the set — the intended
+	//    RE-LOCALIZATION path when we have NO reliable pending directional context
+	//    (recovering from 🔴/lost, or an empty queue whose neighbor search failed).
+	//    A unique-hint match legitimately green-anchors THERE.
+	//
+	//    CRITICAL GATE (text is a veto, not a SELECTOR during dead-reckoning):
+	//    when we are mid dead-reckoning step (valid position AND a pending
+	//    directional move), we do NOT run whole-zone auto-resync. "Unique in the
+	//    MAP" ≠ "unique in the WORLD" — a stale map can have one of two real twin
+	//    rooms (e.g. NE/SE towers both "Смотровая площадка"), so a unique-hint match
+	//    to a cell that is NOT the predicted neighbor would text-select a false jump
+	//    to a far, non-adjacent cell and green-anchor there (worst outcome). During
+	//    a dead-reckoning step, only the graph-predicted neighbor (step 1) may
+	//    green-anchor; a non-neighbor unique-hint match is a twin/teleport
+	//    suspicion, handled at 🟡/🔴 below — never 🟢.
+	if ev.Hint != "" && !(t.pos.Valid && len(t.pending) > 0) {
 		if r := t.idx.resolveFingerprint(fp); r != nil {
 			t.pos = Position{Valid: true, Coord: r.Coord, Confidence: Green}
 			t.pending = t.pending[:0]
@@ -300,7 +312,26 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 			}
 		}
 		assumedRoom := t.idx.Room(assumed)
-		hintAgrees := assumedRoom != nil && ev.Hint != "" &&
+
+		// (c) The predicted neighbor / edge is NOT in the map (unmapped edge or
+		//     off-map cell): we walked a direction the map doesn't record (e.g.
+		//     ascent through a U exit the stale map lacks). Do NOT fall through to
+		//     whole-zone auto-resync (that would text-select a far unique-hint twin
+		//     and false-🟢). Hold 🟡 at the dead-reckoning coord with an
+		//     "edge not in map" reason; wait for a legit resync from a cleared
+		//     state or a manual re-anchor.
+		if assumedRoom == nil {
+			t.pos = Position{
+				Valid:      true,
+				Coord:      assumed,
+				Confidence: Yellow,
+				Reason:     "assumed " + coordStr(assumed) + " by " + DirRU(dir) + " — edge/cell not in map (map may be outdated)",
+			}
+			t.pending = t.pending[1:]
+			return
+		}
+
+		hintAgrees := ev.Hint != "" &&
 			mapimport.NormText(assumedRoom.Hint) == mapimport.NormText(ev.Hint)
 
 		if hintAgrees {

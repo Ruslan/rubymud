@@ -265,6 +265,69 @@ func TestTrackerFingerprintResolveNonUniqueHintUniqueDesc(t *testing.T) {
 	}
 }
 
+// TestTrackerUnmappedEdgeStepStaysYellowNotFarGreen is the worst-outcome twin-
+// tower repro: a dead-reckoning step over an edge the MAP does not record must
+// NOT text-select-jump-green to a far unique-hint cell. Position 🟢 at (-6,-4,0)
+// "Северо-восточный угол города" (map ch=SW, NO U); command вв (U) predicts the
+// EMPTY cell (-6,-4,1). The arriving "Смотровая площадка" is unique in the STALE
+// map at a far (9,-3,1) — but the world has TWO towers. Must be 🟡 at the dead-
+// reckoning coord (-6,-4,1), NOT 🟢 at (9,-3,1).
+func TestTrackerUnmappedEdgeStepStaysYellowNotFarGreen(t *testing.T) {
+	rooms := []storage.Room{
+		mkRoom("Хилло", -6, -4, 0, 103, "Северо-восточный угол города", "ne corner", "S W", chMask("S", "W")),
+		// The stale map records only ONE "Смотровая площадка", far away at (9,-3,1).
+		mkRoom("Хилло", 9, -3, 1, 50, "Смотровая площадка", "watchtower", "D", chMask("D")),
+	}
+	tr := NewTracker(BuildIndex(1, rooms))
+	tr.Anchor(Coord{"Хилло", -6, -4, 0})
+	if tr.Position().Confidence != Green {
+		t.Fatalf("anchor not green: %+v", tr.Position())
+	}
+	tr.PushMove("U") // вв — the map has no U edge here; predicted (-6,-4,1) is empty
+	pos, _ := tr.Reconcile(ev("Смотровая площадка", "watchtower", "D"))
+
+	if pos.Confidence == Green {
+		t.Fatalf("must NOT green-anchor on an unmapped-edge step (text-selector jump), got %+v", pos)
+	}
+	if pos.Confidence != Yellow {
+		t.Errorf("unmapped-edge dead-reckoning step should be YELLOW, got %+v", pos)
+	}
+	if pos.Coord == (Coord{"Хилло", 9, -3, 1}) {
+		t.Errorf("must NOT jump to the far unique-hint twin cell (9,-3,1): %+v", pos)
+	}
+	if pos.Coord != (Coord{"Хилло", -6, -4, 1}) {
+		t.Errorf("should hold the dead-reckoning coord (-6,-4,1), got %+v", pos.Coord)
+	}
+	if !strings.Contains(pos.Reason, "not in map") {
+		t.Errorf("reason should note the unmapped edge: %q", pos.Reason)
+	}
+}
+
+// TestTrackerUniqueHintNonNeighborDuringStepNoGreen is the invariant: during a
+// pending dead-reckoning step, a unique-hint cell that is NOT the predicted
+// neighbor must not green-anchor — even when the predicted neighbor DOES exist
+// but its content mismatches. (Here the predicted neighbor exists with a
+// different name; the event's hint is unique elsewhere. Old code would auto-
+// resync to the far cell; now it must stay non-green.)
+func TestTrackerUniqueHintNonNeighborDuringStepNoGreen(t *testing.T) {
+	rooms := []storage.Room{
+		mkRoom("Z", 0, 0, 0, 1, "Старт", "start", "S", chMask("S")),
+		mkRoom("Z", 1, 0, 0, 2, "Сосед", "neighbor", "N S", chMask("N", "S")),
+		// A far cell whose hint is unique in the map.
+		mkRoom("Z", 20, 20, 0, 3, "Далёкая", "faraway", "N", chMask("N")),
+	}
+	tr := NewTracker(BuildIndex(1, rooms))
+	tr.Anchor(Coord{"Z", 0, 0, 0})
+	tr.PushMove("S") // predicted neighbor (1,0,0) "Сосед" exists but won't match
+	pos, _ := tr.Reconcile(ev("Далёкая", "faraway", "N"))
+	if pos.Confidence == Green {
+		t.Fatalf("unique-hint non-neighbor during a step must NOT green-anchor, got %+v", pos)
+	}
+	if pos.Coord == (Coord{"Z", 20, 20, 0}) {
+		t.Errorf("must not text-select the far unique-hint cell: %+v", pos)
+	}
+}
+
 func TestTrackerFingerprintFullyAmbiguousNoResync(t *testing.T) {
 	// Two identical rooms (same hint+desc+exits) => fingerprint collides => no
 	// auto-resync; with no position we stay red/unknown (never green).
