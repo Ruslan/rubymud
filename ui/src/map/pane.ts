@@ -1,19 +1,42 @@
-import { fetchWithToken } from '../dom';
-import { findZoneName, parseZoneList, resolveSeamTarget } from './geometry';
-import { MapRenderer } from './renderer';
-import type { Confidence, MapSet, PlayerPosition, SlimRoom } from './types';
+import { fetchWithToken } from "../dom";
+import { findZoneName, parseZoneList, resolveSeamTarget } from "./geometry";
+import { MapRenderer } from "./renderer";
+import type { Confidence, MapSet, PlayerPosition, SlimRoom } from "./types";
 
 // Confidence glyphs and marker ring colors.
-const CONF_GLYPH: Record<Confidence, string> = { green: '🟢', yellow: '🟡', red: '🔴' };
-const CONF_COLOR: Record<Confidence, string> = { green: '#54e888', yellow: '#f0b64e', red: '#ff5d5d' };
+const CONF_GLYPH: Record<Confidence, string> = {
+  green: "🟢",
+  yellow: "🟡",
+  red: "🔴",
+};
+const CONF_COLOR: Record<Confidence, string> = {
+  green: "#54e888",
+  yellow: "#f0b64e",
+  red: "#ff5d5d",
+};
 
 // Reserved system buffer name for the map pane (mapper.md §4). Reject as a
 // trigger TargetBuffer server-side; here it is the content-type trigger.
-export const MAP_BUFFER = '~map';
+export const MAP_BUFFER = "~map";
 
 interface MapPaneConfig {
   sessionID: number | undefined;
   getActiveMapSetID: () => number | null;
+  // Populate (replace + focus, do NOT send) the main command input. Optional so
+  // the map module stays decoupled from the input DOM — when absent, room-click
+  // routing degrades to a status hint instead of touching the input.
+  setInputText?: (text: string) => void;
+}
+
+// Endpoint response for POST /api/sessions/{id}/map-path.
+interface MapPathResponse {
+  reachable: boolean;
+  directions?: string[];
+  summary?: string;
+  reason?: string;
+  dt?: boolean;
+  seams?: number;
+  here?: boolean;
 }
 
 // MapPaneController owns one map pane: its canvas renderer plus the surrounding
@@ -36,84 +59,85 @@ export class MapPaneController {
   private mapSetID: number | null = null;
   private zoneNames: string[] = [];
   private zoneCache = new Map<string, SlimRoom[]>();
-  private currentZone = '';
+  private currentZone = "";
   private lastPosition: PlayerPosition | null = null;
   private disposed = false;
 
   constructor(private config: MapPaneConfig) {
-    this.root = document.createElement('div');
-    this.root.className = 'map-pane';
+    this.root = document.createElement("div");
+    this.root.className = "map-pane";
 
     // --- control bar -------------------------------------------------------
-    const bar = document.createElement('div');
-    bar.className = 'map-pane__bar';
+    const bar = document.createElement("div");
+    bar.className = "map-pane__bar";
 
-    this.zoneSelect = document.createElement('select');
-    this.zoneSelect.className = 'map-pane__zone';
-    this.zoneSelect.title = 'Zone';
-    this.zoneSelect.addEventListener('change', () => {
+    this.zoneSelect = document.createElement("select");
+    this.zoneSelect.className = "map-pane__zone";
+    this.zoneSelect.title = "Zone";
+    this.zoneSelect.addEventListener("change", () => {
       void this.showZone(this.zoneSelect.value, { resetView: true });
     });
     bar.appendChild(this.zoneSelect);
 
-    this.searchInput = document.createElement('input');
-    this.searchInput.type = 'search';
-    this.searchInput.className = 'map-pane__search';
-    this.searchInput.placeholder = 'Find room…';
-    this.searchInput.addEventListener('input', () => void this.onSearch());
+    this.searchInput = document.createElement("input");
+    this.searchInput.type = "search";
+    this.searchInput.className = "map-pane__search";
+    this.searchInput.placeholder = "Find room…";
+    this.searchInput.addEventListener("input", () => void this.onSearch());
     bar.appendChild(this.searchInput);
 
-    const followLabel = document.createElement('label');
-    followLabel.className = 'map-pane__follow';
-    followLabel.title = 'Follow the live player position';
-    this.followToggle = document.createElement('input');
-    this.followToggle.type = 'checkbox';
+    const followLabel = document.createElement("label");
+    followLabel.className = "map-pane__follow";
+    followLabel.title = "Follow the live player position";
+    this.followToggle = document.createElement("input");
+    this.followToggle.type = "checkbox";
     this.followToggle.checked = true;
-    this.followToggle.addEventListener('change', () => {
+    this.followToggle.addEventListener("change", () => {
       if (this.followToggle.checked && this.lastPosition?.valid) {
         void this.applyPosition(this.lastPosition, true);
       }
     });
     followLabel.appendChild(this.followToggle);
-    const followText = document.createElement('span');
-    followText.textContent = 'Follow';
+    const followText = document.createElement("span");
+    followText.textContent = "Follow";
     followLabel.appendChild(followText);
     bar.appendChild(followLabel);
 
-    this.anchorBtn = document.createElement('button');
-    this.anchorBtn.type = 'button';
-    this.anchorBtn.className = 'map-pane__anchor';
+    this.anchorBtn = document.createElement("button");
+    this.anchorBtn.type = "button";
+    this.anchorBtn.className = "map-pane__anchor";
     this.anchorBtn.textContent = "I'm here";
-    this.anchorBtn.title = 'Re-anchor the tracker to a room you click on the map';
-    this.anchorBtn.addEventListener('click', () => this.toggleAnchorMode());
+    this.anchorBtn.title =
+      "Re-anchor the tracker to a room you click on the map";
+    this.anchorBtn.addEventListener("click", () => this.toggleAnchorMode());
     bar.appendChild(this.anchorBtn);
 
-    this.confidenceBadge = document.createElement('span');
-    this.confidenceBadge.className = 'map-pane__confidence';
-    this.confidenceBadge.title = 'Tracker confidence';
-    this.confidenceBadge.textContent = '⚪';
+    this.confidenceBadge = document.createElement("span");
+    this.confidenceBadge.className = "map-pane__confidence";
+    this.confidenceBadge.title = "Tracker confidence";
+    this.confidenceBadge.textContent = "⚪";
     bar.appendChild(this.confidenceBadge);
 
     this.root.appendChild(bar);
 
     // --- canvas + overlays -------------------------------------------------
-    const stage = document.createElement('div');
-    stage.className = 'map-pane__stage';
-    const canvas = document.createElement('canvas');
-    canvas.className = 'map-pane__canvas';
+    const stage = document.createElement("div");
+    stage.className = "map-pane__stage";
+    const canvas = document.createElement("canvas");
+    canvas.className = "map-pane__canvas";
     stage.appendChild(canvas);
 
-    this.floorStack = document.createElement('div');
-    this.floorStack.className = 'map-pane__floors';
+    this.floorStack = document.createElement("div");
+    this.floorStack.className = "map-pane__floors";
     stage.appendChild(this.floorStack);
 
-    this.tip = document.createElement('div');
-    this.tip.className = 'map-pane__tip';
-    this.tip.style.opacity = '0';
+    this.tip = document.createElement("div");
+    this.tip.className = "map-pane__tip";
+    this.tip.style.opacity = "0";
     stage.appendChild(this.tip);
 
-    this.statusLine = document.createElement('div');
-    this.statusLine.className = 'map-pane__status';
+    this.statusLine = document.createElement("div");
+    this.statusLine.className = "map-pane__status";
     stage.appendChild(this.statusLine);
 
     this.root.appendChild(stage);
@@ -122,6 +146,7 @@ export class MapPaneController {
     this.renderer.onSeamClick = (seam, room) => {
       if (seam) void this.jumpSeam(seam, room);
     };
+    this.renderer.onRoomClick = (room) => void this.pathToInput(room);
     this.renderer.onRoomHover = (room, cx, cy) => this.showTip(room, cx, cy);
 
     void this.loadMapSet();
@@ -156,8 +181,8 @@ export class MapPaneController {
     const id = this.config.getActiveMapSetID();
     this.mapSetID = id;
     if (id == null) {
-      this.setStatus('No active map set. Select one in session settings.');
-      this.zoneSelect.innerHTML = '';
+      this.setStatus("No active map set. Select one in session settings.");
+      this.zoneSelect.innerHTML = "";
       return;
     }
     try {
@@ -166,40 +191,53 @@ export class MapPaneController {
       // /api/map-sets/{id}/zones returns [{zone, room_count}], NOT string[].
       const infos = parseZoneList(await res.json());
       this.zoneNames = infos.map((z) => z.zone);
-      this.zoneSelect.innerHTML = '';
+      this.zoneSelect.innerHTML = "";
       for (const info of infos) {
-        const opt = document.createElement('option');
+        const opt = document.createElement("option");
         opt.value = info.zone;
-        opt.textContent = info.room_count > 0 ? `${info.zone} (${info.room_count})` : info.zone;
+        opt.textContent =
+          info.room_count > 0 ? `${info.zone} (${info.room_count})` : info.zone;
         this.zoneSelect.appendChild(opt);
       }
-      this.setStatus('');
+      this.setStatus("");
       const start =
-        this.lastPosition?.valid && this.zoneNames.includes(this.lastPosition.zone)
+        this.lastPosition?.valid &&
+        this.zoneNames.includes(this.lastPosition.zone)
           ? this.lastPosition.zone
           : this.zoneNames[0];
       if (start) {
         this.zoneSelect.value = start;
         await this.showZone(start, { resetView: true });
         // Re-apply a pending position now that a zone is loaded.
-        if (this.lastPosition?.valid) await this.applyPosition(this.lastPosition, this.followToggle.checked);
+        if (this.lastPosition?.valid)
+          await this.applyPosition(
+            this.lastPosition,
+            this.followToggle.checked,
+          );
       }
     } catch (err) {
-      this.setStatus(`Failed to load zones: ${err instanceof Error ? err.message : String(err)}`);
+      this.setStatus(
+        `Failed to load zones: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
   private async fetchZone(zone: string): Promise<SlimRoom[]> {
     if (this.zoneCache.has(zone)) return this.zoneCache.get(zone)!;
     if (this.mapSetID == null) return [];
-    const res = await fetchWithToken(`/api/rooms?map_set=${this.mapSetID}&zone=${encodeURIComponent(zone)}`);
+    const res = await fetchWithToken(
+      `/api/rooms?map_set=${this.mapSetID}&zone=${encodeURIComponent(zone)}`,
+    );
     if (!res.ok) throw new Error(await res.text());
     const rooms: SlimRoom[] = await res.json();
     this.zoneCache.set(zone, rooms);
     return rooms;
   }
 
-  private async showZone(zone: string, opts: { resetView: boolean }): Promise<void> {
+  private async showZone(
+    zone: string,
+    opts: { resetView: boolean },
+  ): Promise<void> {
     try {
       const rooms = await this.fetchZone(zone);
       this.currentZone = zone;
@@ -219,27 +257,32 @@ export class MapPaneController {
         this.renderer.setMarker(null);
       }
     } catch (err) {
-      this.setStatus(`Failed to load zone: ${err instanceof Error ? err.message : String(err)}`);
+      this.setStatus(
+        `Failed to load zone: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
   private buildFloorStack(): void {
-    this.floorStack.innerHTML = '';
+    this.floorStack.innerHTML = "";
     const levels = this.renderer.levelList();
     if (levels.length <= 1) {
-      this.floorStack.style.display = 'none';
+      this.floorStack.style.display = "none";
       return;
     }
-    this.floorStack.style.display = '';
+    this.floorStack.style.display = "";
     for (const L of [...levels].sort((a, b) => b - a)) {
-      const btn = document.createElement('button');
-      btn.type = 'button';
+      const btn = document.createElement("button");
+      btn.type = "button";
       btn.textContent = String(L);
-      btn.className = L === this.renderer.level ? 'on' : '';
-      btn.addEventListener('click', () => {
+      btn.className = L === this.renderer.level ? "on" : "";
+      btn.addEventListener("click", () => {
         this.renderer.setLevel(L);
         [...this.floorStack.children].forEach((b) =>
-          (b as HTMLElement).classList.toggle('on', (b as HTMLElement).textContent === String(L)),
+          (b as HTMLElement).classList.toggle(
+            "on",
+            (b as HTMLElement).textContent === String(L),
+          ),
         );
       });
       this.floorStack.appendChild(btn);
@@ -261,22 +304,30 @@ export class MapPaneController {
   }
 
   private updateConfidence(pos: PlayerPosition): void {
-    const glyph = CONF_GLYPH[pos.confidence] ?? '⚪';
-    const pending = pos.pendingMoves > 0 ? ` +${pos.pendingMoves}` : '';
+    const glyph = CONF_GLYPH[pos.confidence] ?? "⚪";
+    const pending = pos.pendingMoves > 0 ? ` +${pos.pendingMoves}` : "";
     this.confidenceBadge.textContent = glyph + pending;
     let title = `Confidence: ${pos.confidence}`;
-    if (pos.pendingMoves > 0) title += ` · ${pos.pendingMoves} unconfirmed move(s)`;
+    if (pos.pendingMoves > 0)
+      title += ` · ${pos.pendingMoves} unconfirmed move(s)`;
     if (pos.reason) title += ` · ${pos.reason}`;
-    if (pos.isDT) title += ' · ⚠ death trap';
-    if (pos.pipe) title += ' · corridor';
+    if (pos.isDT) title += " · ⚠ death trap";
+    if (pos.pipe) title += " · corridor";
     this.confidenceBadge.title = title;
   }
 
-  private async applyPosition(pos: PlayerPosition, follow: boolean): Promise<void> {
+  private async applyPosition(
+    pos: PlayerPosition,
+    follow: boolean,
+  ): Promise<void> {
     if (!pos.valid) return;
     // Switch zone if the player left the currently displayed one and we're
     // following (or no zone is shown yet).
-    if (pos.zone && pos.zone !== this.currentZone && (follow || !this.currentZone)) {
+    if (
+      pos.zone &&
+      pos.zone !== this.currentZone &&
+      (follow || !this.currentZone)
+    ) {
       if (this.zoneNames.includes(pos.zone)) {
         await this.showZone(pos.zone, { resetView: false });
       }
@@ -292,13 +343,19 @@ export class MapPaneController {
     this.renderer.setMarker({ x: pos.x, y: pos.y, l: pos.l, color });
     // Reflect the floor in the stack highlight if the marker floor is active.
     [...this.floorStack.children].forEach((b) =>
-      (b as HTMLElement).classList.toggle('on', (b as HTMLElement).textContent === String(this.renderer.level)),
+      (b as HTMLElement).classList.toggle(
+        "on",
+        (b as HTMLElement).textContent === String(this.renderer.level),
+      ),
     );
   }
 
   // --- seam jumps --------------------------------------------------------
 
-  private async jumpSeam(seam: { zone: string; command: string; tag: number }, _room: SlimRoom): Promise<void> {
+  private async jumpSeam(
+    seam: { zone: string; command: string; tag: number },
+    _room: SlimRoom,
+  ): Promise<void> {
     const target = findZoneName(seam.zone, this.zoneNames);
     if (!target) {
       this.setStatus(`Seam target zone "${seam.zone}" not found`);
@@ -311,6 +368,61 @@ export class MapPaneController {
       this.renderer.centerOn(hit.x, hit.y, hit.l);
     }
     this.setStatus(`Jumped via seam to "${target}"`);
+  }
+
+  // --- click a room → route into the command input -----------------------
+
+  // Compute a route from the live tracked position to the clicked room and drop
+  // the ';'-joined canonical directions (w;e;s;n;u;d) into the main command input
+  // WITHOUT sending, so the user can review/edit/send. Soft edge cases: clicking
+  // the current room is a no-op; a lost position shows a hint instead of inserting
+  // garbage; a DT target still inserts the walk but surfaces the warning.
+  private async pathToInput(room: SlimRoom): Promise<void> {
+    if (this.config.sessionID == null) {
+      this.setStatus("No session — cannot compute a route");
+      return;
+    }
+    try {
+      const res = await fetchWithToken(
+        `/api/sessions/${this.config.sessionID}/map-path`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            to: { zone: room.z, x: room.x, y: room.y, l: room.l },
+          }),
+        },
+      );
+      if (!res.ok) throw new Error(await res.text());
+      const data: MapPathResponse = await res.json();
+      if (!data.reachable) {
+        // Lost position / DT target / unreachable: hint, don't insert garbage.
+        const reason = data.dt
+          ? "target is a death trap"
+          : data.reason || "no route";
+        this.setStatus(`No route to "${room.h}" — ${reason}`);
+        return;
+      }
+      const dirs = data.directions ?? [];
+      if (data.here || dirs.length === 0) {
+        this.setStatus(`Already at "${room.h}"`);
+        return;
+      }
+      const walk = dirs.join(";");
+      if (this.config.setInputText) {
+        this.config.setInputText(walk);
+        let status = `Route to "${room.h}": ${data.summary ?? `${dirs.length} step(s)`} → input`;
+        if (data.dt) status += " ⚠ death trap on path";
+        this.setStatus(status);
+      } else {
+        // No input hook wired — surface the walk so it is still usable.
+        this.setStatus(`Route to "${room.h}": ${walk}`);
+      }
+    } catch (err) {
+      this.setStatus(
+        `Route failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   // --- search ------------------------------------------------------------
@@ -337,69 +449,93 @@ export class MapPaneController {
   private anchorMode = false;
   private toggleAnchorMode(): void {
     this.anchorMode = !this.anchorMode;
-    this.anchorBtn.classList.toggle('active', this.anchorMode);
+    this.anchorBtn.classList.toggle("active", this.anchorMode);
     if (this.anchorMode) {
-      this.setStatus('Click a room to anchor the tracker there…');
+      this.setStatus("Click a room to anchor the tracker there…");
       const handler = (e: MouseEvent) => {
         const rect = this.renderer.canvas.getBoundingClientRect();
         const px = e.clientX - rect.left;
         const py = e.clientY - rect.top;
         const room = this.renderer.pick(px, py);
         this.anchorMode = false;
-        this.anchorBtn.classList.remove('active');
-        this.renderer.canvas.removeEventListener('click', handler, true);
+        this.anchorBtn.classList.remove("active");
+        this.renderer.canvas.removeEventListener("click", handler, true);
         if (room) void this.anchorHere(room);
-        else this.setStatus('No room under cursor — anchor cancelled');
+        else this.setStatus("No room under cursor — anchor cancelled");
       };
       // Capture so it fires before the renderer's own click (which would seam-jump).
-      this.renderer.canvas.addEventListener('click', handler, true);
+      this.renderer.canvas.addEventListener("click", handler, true);
     }
   }
 
   private async anchorHere(room: SlimRoom): Promise<void> {
     if (this.config.sessionID == null) {
-      this.setStatus('No session — cannot anchor');
+      this.setStatus("No session — cannot anchor");
       return;
     }
     try {
-      const res = await fetchWithToken(`/api/sessions/${this.config.sessionID}/map-anchor`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ zone: room.z, x: room.x, y: room.y, l: room.l }),
-      });
+      const res = await fetchWithToken(
+        `/api/sessions/${this.config.sessionID}/map-anchor`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            zone: room.z,
+            x: room.x,
+            y: room.y,
+            l: room.l,
+          }),
+        },
+      );
       if (!res.ok) throw new Error(await res.text());
       this.setStatus(`Anchored at "${room.h}" — awaiting confirmation`);
     } catch (err) {
-      this.setStatus(`Anchor failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.setStatus(
+        `Anchor failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
     }
   }
 
   // --- tooltip -----------------------------------------------------------
 
-  private showTip(room: SlimRoom | null, clientX: number, clientY: number): void {
+  private showTip(
+    room: SlimRoom | null,
+    clientX: number,
+    clientY: number,
+  ): void {
     if (!room) {
-      this.tip.style.opacity = '0';
+      this.tip.style.opacity = "0";
       return;
     }
     const rect = this.root.getBoundingClientRect();
     this.tip.style.left = `${clientX - rect.left}px`;
     this.tip.style.top = `${clientY - rect.top}px`;
-    this.tip.style.opacity = '1';
-    const dirs = room.e.join(' ') || '—';
-    const name = room.p ? room.h || 'corridor' : room.h;
+    this.tip.style.opacity = "1";
+    const dirs = room.e.join(" ") || "—";
+    const name = room.p ? room.h || "corridor" : room.h;
     const parts = [`<div class="map-tip__name">${esc(name)}</div>`];
-    parts.push(`<div class="map-tip__row">tag ${room.t ?? '—'} · L${room.l} · exits ${esc(dirs)}</div>`);
-    if (room.s) parts.push(`<div class="map-tip__row map-tip__dt">⚠ death trap</div>`);
-    if (room.a.length > 0) parts.push(`<div class="map-tip__row map-tip__seam">◈ seam (click to cross)</div>`);
-    this.tip.innerHTML = parts.join('');
+    parts.push(
+      `<div class="map-tip__row">tag ${room.t ?? "—"} · L${room.l} · exits ${esc(dirs)}</div>`,
+    );
+    if (room.s)
+      parts.push(`<div class="map-tip__row map-tip__dt">⚠ death trap</div>`);
+    if (room.a.length > 0)
+      parts.push(
+        `<div class="map-tip__row map-tip__seam">◈ seam (click to cross)</div>`,
+      );
+    this.tip.innerHTML = parts.join("");
   }
 
   private setStatus(text: string): void {
     this.statusLine.textContent = text;
-    this.statusLine.style.display = text ? '' : 'none';
+    this.statusLine.style.display = text ? "" : "none";
   }
 }
 
 function esc(s: string): string {
-  return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c] as string);
+  return String(s).replace(
+    /[&<>"]/g,
+    (c) =>
+      ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c] as string,
+  );
 }

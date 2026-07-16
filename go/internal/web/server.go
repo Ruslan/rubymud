@@ -202,6 +202,7 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 				r.Get("/active-map-set", s.getActiveMapSet)
 				r.Post("/active-map-set", s.setActiveMapSet)
 				r.Post("/map-anchor", s.anchorMapPosition)
+				r.Post("/map-path", s.mapPath)
 			})
 		})
 

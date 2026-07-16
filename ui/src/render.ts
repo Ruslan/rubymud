@@ -1,14 +1,20 @@
-import { AnsiUp } from 'ansi_up';
+import { AnsiUp } from "ansi_up";
 
-import { currentAnsiTheme, renderAnsiHtml } from './ansi';
-import type { AppElements } from './dom';
-import type { Hotkey, LogEntry, ResolvedVariable, Variable, ButtonOverlay } from './types';
-import { fetchWithToken } from './dom';
-import { MapPaneController, MAP_BUFFER } from './map/pane';
-import type { PlayerPosition } from './map/types';
+import { currentAnsiTheme, renderAnsiHtml } from "./ansi";
+import type { AppElements } from "./dom";
+import type {
+  Hotkey,
+  LogEntry,
+  ResolvedVariable,
+  Variable,
+  ButtonOverlay,
+} from "./types";
+import { fetchWithToken } from "./dom";
+import { MapPaneController, MAP_BUFFER } from "./map/pane";
+import type { PlayerPosition } from "./map/types";
 
 interface RendererState {
-  activePanel: 'keyboard' | 'variables' | 'groups' | null;
+  activePanel: "keyboard" | "variables" | "groups" | null;
   restoreInProgress: boolean;
 }
 
@@ -26,6 +32,10 @@ interface RendererDeps {
   // anchor POST; getActiveMapSetID lets the map pane fetch the right set.
   sessionID?: number | undefined;
   getActiveMapSetID?: () => number | null;
+  // Populate (replace + focus, do NOT send) the main command input — used by the
+  // map pane's "click a room → route into the input" feature. Threaded through
+  // so the map module never touches the input DOM directly.
+  setInputText?: (text: string) => void;
 }
 
 const maxRenderedLines = 5000;
@@ -81,20 +91,42 @@ interface RenderedPane {
   mapController?: MapPaneController | undefined;
 }
 
-export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand, requestVariables, requestGroups, toggleGroup, onButtonRendered, state, sessionID, getActiveMapSetID }: RendererDeps) {
+export function createRenderer({
+  elements,
+  ansiUp,
+  fontSizeControls,
+  sendCommand,
+  requestVariables,
+  requestGroups,
+  toggleGroup,
+  onButtonRendered,
+  state,
+  sessionID,
+  getActiveMapSetID,
+  setInputText,
+}: RendererDeps) {
   let nextId = 0;
   const generateId = (prefix: string) => `${prefix}-${++nextId}`;
 
   let layout: Layout = {
-    columns: [{ id: generateId('col'), panes: [{ id: generateId('pane'), buffer: 'main' }], rowSizes: [100] }],
-    colSizes: [100]
+    columns: [
+      {
+        id: generateId("col"),
+        panes: [{ id: generateId("pane"), buffer: "main" }],
+        rowSizes: [100],
+      },
+    ],
+    colSizes: [100],
   };
 
   // The reserved `~map` buffer is always selectable so a user can mount the map
   // pane into any split. It carries no text entries.
-  const knownBuffers = new Set<string>(['main', MAP_BUFFER]);
+  const knownBuffers = new Set<string>(["main", MAP_BUFFER]);
   const bufferData = new Map<string, LogEntry[]>();
-  const pendingCommandHints = new Map<string, { buffer: string; entry: LogEntry; source: string; commandIndex: number }>();
+  const pendingCommandHints = new Map<
+    string,
+    { buffer: string; entry: LogEntry; source: string; commandIndex: number }
+  >();
   const renderedPanes = new Map<string, RenderedPane>();
   const searchStates = new Map<string, SearchState>();
   // Live map-pane controllers, keyed by pane id. A pane is a "map pane" iff its
@@ -141,7 +173,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
   function setAvailableBuffers(names: string[]) {
     knownBuffers.clear();
-    knownBuffers.add('main');
+    knownBuffers.add("main");
     knownBuffers.add(MAP_BUFFER); // keep the map buffer always mountable
     for (const name of names) {
       if (name) {
@@ -153,17 +185,17 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function saveLayout() {
-    localStorage.setItem('pane-layout', JSON.stringify(layout));
+    localStorage.setItem("pane-layout", JSON.stringify(layout));
   }
 
   function loadLayout() {
     try {
-      const stored = localStorage.getItem('pane-layout');
+      const stored = localStorage.getItem("pane-layout");
       if (stored) {
         layout = JSON.parse(stored);
       }
     } catch (err) {
-      console.warn('Failed to load layout', err);
+      console.warn("Failed to load layout", err);
     }
     rebuildDOM();
   }
@@ -173,12 +205,12 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     // makes fresh ones for surviving map panes.
     mapControllers.forEach((c) => c.dispose());
     mapControllers.clear();
-    elements.panesContainer.innerHTML = '';
+    elements.panesContainer.innerHTML = "";
     renderedPanes.clear();
 
     layout.columns.forEach((col, colIdx) => {
-      const colEl = document.createElement('div');
-      colEl.className = 'column';
+      const colEl = document.createElement("div");
+      colEl.className = "column";
       colEl.style.flexBasis = `${layout.colSizes[colIdx]}%`;
 
       col.panes.forEach((pane, rowIdx) => {
@@ -187,14 +219,16 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
         colEl.appendChild(paneEl);
 
         if (rowIdx < col.panes.length - 1) {
-          colEl.appendChild(makeDragHandle('row', col, rowIdx));
+          colEl.appendChild(makeDragHandle("row", col, rowIdx));
         }
       });
 
       elements.panesContainer.appendChild(colEl);
 
       if (colIdx < layout.columns.length - 1) {
-        elements.panesContainer.appendChild(makeDragHandle('col', layout, colIdx));
+        elements.panesContainer.appendChild(
+          makeDragHandle("col", layout, colIdx),
+        );
       }
     });
 
@@ -202,21 +236,27 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function createPaneDOM(node: PaneNode): HTMLElement {
-    const el = document.createElement('div');
-    el.className = 'pane';
+    const el = document.createElement("div");
+    el.className = "pane";
     // Track the most recently touched pane so keyboard scrollback shortcuts act
     // on the pane the user is actually looking at.
-    el.addEventListener('pointerdown', () => { activePaneId = node.id; }, true);
+    el.addEventListener(
+      "pointerdown",
+      () => {
+        activePaneId = node.id;
+      },
+      true,
+    );
     let selectEl: HTMLSelectElement | undefined;
     let searchInputEl: HTMLInputElement | undefined;
     let searchCountEl: HTMLElement | undefined;
 
-    const headerEl = document.createElement('div');
-    headerEl.className = 'pane-header';
+    const headerEl = document.createElement("div");
+    headerEl.className = "pane-header";
 
-    selectEl = document.createElement('select');
-    selectEl.className = 'pane-select';
-    selectEl.addEventListener('change', () => {
+    selectEl = document.createElement("select");
+    selectEl.className = "pane-select";
+    selectEl.addEventListener("change", () => {
       const prev = node.buffer;
       node.buffer = selectEl!.value;
       // Switching into or out of the map pane restructures the pane body
@@ -239,51 +279,53 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     headerEl.appendChild(selectEl);
     const paneIsMap = isMapBuffer(node.buffer);
 
-    const liveSplitBtn = document.createElement('button');
-    liveSplitBtn.className = 'pane-btn pane-live-split-btn';
-    liveSplitBtn.type = 'button';
-    liveSplitBtn.textContent = '⇵';
-    liveSplitBtn.title = 'Toggle scrollback split';
-    liveSplitBtn.setAttribute('aria-label', 'Toggle scrollback split');
-    liveSplitBtn.dataset['paneId'] = node.id;
+    const liveSplitBtn = document.createElement("button");
+    liveSplitBtn.className = "pane-btn pane-live-split-btn";
+    liveSplitBtn.type = "button";
+    liveSplitBtn.textContent = "⇵";
+    liveSplitBtn.title = "Toggle scrollback split";
+    liveSplitBtn.setAttribute("aria-label", "Toggle scrollback split");
+    liveSplitBtn.dataset["paneId"] = node.id;
     if (searchStates.get(node.id)?.regionOpen) {
-      liveSplitBtn.classList.add('active');
+      liveSplitBtn.classList.add("active");
     }
-    liveSplitBtn.addEventListener('click', () => toggleScrollbackRegion(node.id));
+    liveSplitBtn.addEventListener("click", () =>
+      toggleScrollbackRegion(node.id),
+    );
     // Map panes have no scrollback/search — they render a canvas, not text.
     if (!paneIsMap) headerEl.appendChild(liveSplitBtn);
 
-    const searchButton = document.createElement('button');
-    searchButton.className = 'pane-btn pane-search-toggle';
-    searchButton.type = 'button';
-    searchButton.textContent = '⌕';
-    searchButton.title = 'Search this buffer';
-    searchButton.setAttribute('aria-label', 'Search this buffer');
+    const searchButton = document.createElement("button");
+    searchButton.className = "pane-btn pane-search-toggle";
+    searchButton.type = "button";
+    searchButton.textContent = "⌕";
+    searchButton.title = "Search this buffer";
+    searchButton.setAttribute("aria-label", "Search this buffer");
     if (!paneIsMap) headerEl.appendChild(searchButton);
 
-    const searchControls = document.createElement('div');
-    searchControls.className = 'pane-search-controls';
-    searchInputEl = document.createElement('input');
-    searchInputEl.className = 'pane-search-input';
-    searchInputEl.type = 'search';
-    searchInputEl.placeholder = 'Search buffer';
-    const olderBtn = document.createElement('button');
-    olderBtn.className = 'pane-btn pane-search-prev';
-    olderBtn.type = 'button';
-    olderBtn.textContent = '↑';
-    olderBtn.title = 'Older match';
-    const newerBtn = document.createElement('button');
-    newerBtn.className = 'pane-btn pane-search-next';
-    newerBtn.type = 'button';
-    newerBtn.textContent = '↓';
-    newerBtn.title = 'Newer match';
-    searchCountEl = document.createElement('span');
-    searchCountEl.className = 'pane-search-count';
-    const closeSearchBtn = document.createElement('button');
-    closeSearchBtn.className = 'pane-btn pane-search-close';
-    closeSearchBtn.type = 'button';
-    closeSearchBtn.textContent = '×';
-    closeSearchBtn.title = 'Close search';
+    const searchControls = document.createElement("div");
+    searchControls.className = "pane-search-controls";
+    searchInputEl = document.createElement("input");
+    searchInputEl.className = "pane-search-input";
+    searchInputEl.type = "search";
+    searchInputEl.placeholder = "Search buffer";
+    const olderBtn = document.createElement("button");
+    olderBtn.className = "pane-btn pane-search-prev";
+    olderBtn.type = "button";
+    olderBtn.textContent = "↑";
+    olderBtn.title = "Older match";
+    const newerBtn = document.createElement("button");
+    newerBtn.className = "pane-btn pane-search-next";
+    newerBtn.type = "button";
+    newerBtn.textContent = "↓";
+    newerBtn.title = "Newer match";
+    searchCountEl = document.createElement("span");
+    searchCountEl.className = "pane-search-count";
+    const closeSearchBtn = document.createElement("button");
+    closeSearchBtn.className = "pane-btn pane-search-close";
+    closeSearchBtn.type = "button";
+    closeSearchBtn.textContent = "×";
+    closeSearchBtn.title = "Close search";
     searchControls.appendChild(searchInputEl);
     searchControls.appendChild(olderBtn);
     searchControls.appendChild(newerBtn);
@@ -292,32 +334,34 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     headerEl.appendChild(searchControls);
 
     const searchState = searchStates.get(node.id);
-    searchInputEl.value = searchState?.query || '';
+    searchInputEl.value = searchState?.query || "";
     searchControls.hidden = !searchState?.open;
-    searchButton.classList.toggle('active', !!searchState?.open);
-    searchButton.addEventListener('click', () => openOrExecutePaneSearch(node.id));
-    searchInputEl.addEventListener('input', () => {
+    searchButton.classList.toggle("active", !!searchState?.open);
+    searchButton.addEventListener("click", () =>
+      openOrExecutePaneSearch(node.id),
+    );
+    searchInputEl.addEventListener("input", () => {
       const search = ensureSearchState(node.id);
       search.query = searchInputEl!.value;
       search.stale = search.query.trim() !== search.executedQuery;
       const pane = renderedPanes.get(node.id);
       if (pane) updateSearchControls(pane);
     });
-    searchInputEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') {
+    searchInputEl.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
         e.preventDefault();
         navigatePaneSearch(node.id, e.shiftKey ? 1 : -1);
-      } else if (e.key === 'Escape') {
+      } else if (e.key === "Escape") {
         e.preventDefault();
         closePaneSearch(node.id);
       }
     });
-    olderBtn.addEventListener('click', () => navigatePaneSearch(node.id, -1));
-    newerBtn.addEventListener('click', () => navigatePaneSearch(node.id, 1));
-    closeSearchBtn.addEventListener('click', () => closePaneSearch(node.id));
+    olderBtn.addEventListener("click", () => navigatePaneSearch(node.id, -1));
+    newerBtn.addEventListener("click", () => navigatePaneSearch(node.id, 1));
+    closeSearchBtn.addEventListener("click", () => closePaneSearch(node.id));
 
-    const actionsEl = document.createElement('div');
-    actionsEl.className = 'pane-actions';
+    const actionsEl = document.createElement("div");
+    actionsEl.className = "pane-actions";
 
     const isTopLeftPane = layout.columns[0]?.panes[0]?.id === node.id;
     if (fontSizeControls && isTopLeftPane) {
@@ -325,35 +369,35 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     }
 
     // Dropdown for split/close
-    const menuBtn = document.createElement('button');
-    menuBtn.className = 'pane-btn';
-    menuBtn.innerHTML = '⋮';
+    const menuBtn = document.createElement("button");
+    menuBtn.className = "pane-btn";
+    menuBtn.innerHTML = "⋮";
 
-    const menuEl = document.createElement('div');
-    menuEl.className = 'dropdown-menu';
-    menuEl.style.display = 'none';
+    const menuEl = document.createElement("div");
+    menuEl.className = "dropdown-menu";
+    menuEl.style.display = "none";
 
-    const splitDownBtn = document.createElement('button');
-    splitDownBtn.className = 'dropdown-item';
-    splitDownBtn.textContent = 'Split Down';
-    splitDownBtn.addEventListener('click', () => {
-      menuEl.style.display = 'none';
+    const splitDownBtn = document.createElement("button");
+    splitDownBtn.className = "dropdown-item";
+    splitDownBtn.textContent = "Split Down";
+    splitDownBtn.addEventListener("click", () => {
+      menuEl.style.display = "none";
       addPaneBelow(node.id);
     });
 
-    const splitRightBtn = document.createElement('button');
-    splitRightBtn.className = 'dropdown-item';
-    splitRightBtn.textContent = 'Split Right';
-    splitRightBtn.addEventListener('click', () => {
-      menuEl.style.display = 'none';
+    const splitRightBtn = document.createElement("button");
+    splitRightBtn.className = "dropdown-item";
+    splitRightBtn.textContent = "Split Right";
+    splitRightBtn.addEventListener("click", () => {
+      menuEl.style.display = "none";
       addColumnRight(node.id);
     });
 
-    const closeBtn = document.createElement('button');
-    closeBtn.className = 'dropdown-item danger';
-    closeBtn.textContent = 'Close';
-    closeBtn.addEventListener('click', () => {
-      menuEl.style.display = 'none';
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "dropdown-item danger";
+    closeBtn.textContent = "Close";
+    closeBtn.addEventListener("click", () => {
+      menuEl.style.display = "none";
       removePane(node.id);
     });
 
@@ -361,58 +405,72 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     menuEl.appendChild(splitRightBtn);
     menuEl.appendChild(closeBtn);
 
-    menuBtn.addEventListener('click', (e) => {
+    menuBtn.addEventListener("click", (e) => {
       e.stopPropagation();
-      const isVisible = menuEl.style.display === 'block';
-      document.querySelectorAll('.dropdown-menu').forEach((el: any) => el.style.display = 'none');
-      menuEl.style.display = isVisible ? 'none' : 'block';
+      const isVisible = menuEl.style.display === "block";
+      document
+        .querySelectorAll(".dropdown-menu")
+        .forEach((el: any) => (el.style.display = "none"));
+      menuEl.style.display = isVisible ? "none" : "block";
     });
 
     // Close menu on outside click
-    document.addEventListener('click', () => {
-      menuEl.style.display = 'none';
+    document.addEventListener("click", () => {
+      menuEl.style.display = "none";
     });
 
     // We only show Close if it's not the absolutely last pane
-    const totalPanes = layout.columns.reduce((sum, col) => sum + col.panes.length, 0);
+    const totalPanes = layout.columns.reduce(
+      (sum, col) => sum + col.panes.length,
+      0,
+    );
     if (totalPanes <= 1) {
-      closeBtn.style.display = 'none';
+      closeBtn.style.display = "none";
     }
 
-    const menuWrapper = document.createElement('div');
-    menuWrapper.style.position = 'relative';
+    const menuWrapper = document.createElement("div");
+    menuWrapper.style.position = "relative";
     menuWrapper.appendChild(menuBtn);
     menuWrapper.appendChild(menuEl);
     actionsEl.appendChild(menuWrapper);
     headerEl.appendChild(actionsEl);
     el.appendChild(headerEl);
 
-    const bodyEl = document.createElement('div');
-    bodyEl.className = 'pane-body';
+    const bodyEl = document.createElement("div");
+    bodyEl.className = "pane-body";
 
-    const outputEl = document.createElement('div');
-    outputEl.className = 'pane-output';
+    const outputEl = document.createElement("div");
+    outputEl.className = "pane-output";
     outputEl.id = `output-${node.id}`;
 
-    const scrollButtonEl = document.createElement('button');
-    scrollButtonEl.className = 'pane-scroll-bottom';
-    scrollButtonEl.type = 'button';
-    scrollButtonEl.textContent = '↓';
-    scrollButtonEl.title = 'Scroll to bottom';
+    const scrollButtonEl = document.createElement("button");
+    scrollButtonEl.className = "pane-scroll-bottom";
+    scrollButtonEl.type = "button";
+    scrollButtonEl.textContent = "↓";
+    scrollButtonEl.title = "Scroll to bottom";
     scrollButtonEl.hidden = true;
-    scrollButtonEl.addEventListener('click', () => {
+    scrollButtonEl.addEventListener("click", () => {
       outputEl.scrollTop = outputEl.scrollHeight;
       updateScrollButtonVisibility(renderedPanes.get(node.id));
       elements.input.focus();
     });
-    outputEl.addEventListener('scroll', () => {
+    outputEl.addEventListener("scroll", () => {
       updateScrollButtonVisibility(renderedPanes.get(node.id));
     });
 
     const paneAnsiUp = new AnsiUp();
     paneAnsiUp.use_classes = true;
 
-    const pane: RenderedPane = { node, el, outputEl, scrollButtonEl, selectEl, searchInputEl, searchCountEl, ansiUp: paneAnsiUp };
+    const pane: RenderedPane = {
+      node,
+      el,
+      outputEl,
+      scrollButtonEl,
+      selectEl,
+      searchInputEl,
+      searchCountEl,
+      ansiUp: paneAnsiUp,
+    };
 
     if (paneIsMap) {
       // Map pane: mount a MapPaneController (canvas + its own state) into the
@@ -425,11 +483,12 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       // unhandled throw would leave the layout half-built and the user's text
       // panes gone. Wrap it: on failure, degrade to a "Map unavailable" notice
       // and CONTINUE so every other (text) pane still renders.
-      bodyEl.classList.add('pane-body_map');
+      bodyEl.classList.add("pane-body_map");
       try {
         const controller = new MapPaneController({
           sessionID,
           getActiveMapSetID: getActiveMapSetID ?? (() => null),
+          setInputText,
         });
         pane.mapController = controller;
         mapControllers.set(node.id, controller);
@@ -442,11 +501,11 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
           void controller.onRoomPosition(lastMapPosition);
         }
       } catch (err) {
-        console.warn('Map pane unavailable', err);
-        bodyEl.innerHTML = '';
-        const notice = document.createElement('div');
-        notice.className = 'map-pane__unavailable';
-        notice.textContent = 'Map unavailable';
+        console.warn("Map pane unavailable", err);
+        bodyEl.innerHTML = "";
+        const notice = document.createElement("div");
+        notice.className = "map-pane__unavailable";
+        notice.textContent = "Map unavailable";
         bodyEl.appendChild(notice);
         el.appendChild(bodyEl);
         // Register the pane WITHOUT a controller so it is inert but valid; text
@@ -480,7 +539,9 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   function addColumnRight(sourcePaneId?: string) {
     let colIdx = layout.columns.length - 1;
     if (sourcePaneId) {
-      colIdx = layout.columns.findIndex(c => c.panes.some(p => p.id === sourcePaneId));
+      colIdx = layout.columns.findIndex((c) =>
+        c.panes.some((p) => p.id === sourcePaneId),
+      );
       if (colIdx === -1) colIdx = layout.columns.length - 1;
     }
 
@@ -488,9 +549,9 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     layout.colSizes[colIdx] = oldColSize / 2;
 
     const newCol: ColumnNode = {
-      id: generateId('col'),
-      panes: [{ id: generateId('pane'), buffer: 'main' }],
-      rowSizes: [100]
+      id: generateId("col"),
+      panes: [{ id: generateId("pane"), buffer: "main" }],
+      rowSizes: [100],
     };
 
     layout.columns.splice(colIdx + 1, 0, newCol);
@@ -501,7 +562,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function liveSplitRatioKey(buffer: string): string {
-    return `liveSplitRatio:v1:${buffer || 'main'}`;
+    return `liveSplitRatio:v1:${buffer || "main"}`;
   }
 
   function readLiveSplitRatio(buffer: string): number {
@@ -519,43 +580,47 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   function createScrollbackRegionDOM(pane: RenderedPane) {
     if (pane.scrollbackEl) return;
 
-    const regionEl = document.createElement('div');
-    regionEl.className = 'pane-scrollback';
+    const regionEl = document.createElement("div");
+    regionEl.className = "pane-scrollback";
     const liveRatio = readLiveSplitRatio(pane.node.buffer);
     regionEl.style.flexBasis = `${100 - liveRatio}%`;
 
-    const outputEl = document.createElement('div');
-    outputEl.className = 'pane-output pane-output_scrollback';
+    const outputEl = document.createElement("div");
+    outputEl.className = "pane-output pane-output_scrollback";
     regionEl.appendChild(outputEl);
 
-    const dividerEl = document.createElement('div');
-    dividerEl.className = 'pane-scrollback-divider';
-    dividerEl.addEventListener('pointerdown', (e) => {
+    const dividerEl = document.createElement("div");
+    dividerEl.className = "pane-scrollback-divider";
+    dividerEl.addEventListener("pointerdown", (e) => {
       dividerEl.setPointerCapture(e.pointerId);
       const totalPixels = pane.el.clientHeight || 1;
       const startBasis = parseFloat(regionEl.style.flexBasis) || 50;
       const startPos = e.clientY;
 
       const onMove = (moveEvent: PointerEvent) => {
-        const deltaPercent = ((moveEvent.clientY - startPos) / totalPixels) * 100;
-        const scrollbackPercent = Math.min(90, Math.max(10, startBasis + deltaPercent));
+        const deltaPercent =
+          ((moveEvent.clientY - startPos) / totalPixels) * 100;
+        const scrollbackPercent = Math.min(
+          90,
+          Math.max(10, startBasis + deltaPercent),
+        );
         regionEl.style.flexBasis = `${scrollbackPercent}%`;
       };
 
       const onUp = () => {
         dividerEl.releasePointerCapture(e.pointerId);
-        dividerEl.removeEventListener('pointermove', onMove);
-        dividerEl.removeEventListener('pointerup', onUp);
+        dividerEl.removeEventListener("pointermove", onMove);
+        dividerEl.removeEventListener("pointerup", onUp);
         const scrollbackPercent = parseFloat(regionEl.style.flexBasis) || 50;
         saveLiveSplitRatio(pane.node.buffer, 100 - scrollbackPercent);
         pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
       };
 
-      dividerEl.addEventListener('pointermove', onMove);
-      dividerEl.addEventListener('pointerup', onUp);
+      dividerEl.addEventListener("pointermove", onMove);
+      dividerEl.addEventListener("pointerup", onUp);
     });
 
-    const bodyEl = pane.el.querySelector('.pane-body');
+    const bodyEl = pane.el.querySelector(".pane-body");
     pane.el.insertBefore(regionEl, bodyEl);
     pane.el.insertBefore(dividerEl, bodyEl);
 
@@ -579,7 +644,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     // The live output is untouched DOM: just re-stick it to the bottom after it shrank.
     pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
     updateScrollButtonVisibility(pane);
-    pane.el.querySelector('.pane-live-split-btn')?.classList.add('active');
+    pane.el.querySelector(".pane-live-split-btn")?.classList.add("active");
   }
 
   function closeScrollbackRegion(paneId: string) {
@@ -598,7 +663,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     pane.scrollbackAnsiUp = undefined;
     pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
     updateScrollButtonVisibility(pane);
-    pane.el.querySelector('.pane-live-split-btn')?.classList.remove('active');
+    pane.el.querySelector(".pane-live-split-btn")?.classList.remove("active");
   }
 
   function toggleScrollbackRegion(paneId: string) {
@@ -630,7 +695,8 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   // binding on PageUp/PageDown/End/Esc always wins.
   function handleScrollbackKey(event: KeyboardEvent): boolean {
     // The pane search input owns its own Enter/Escape navigation.
-    if ((event.target as HTMLElement | null)?.closest('.pane-search-controls')) return false;
+    if ((event.target as HTMLElement | null)?.closest(".pane-search-controls"))
+      return false;
 
     const paneId = getActivePaneId();
     if (!paneId) return false;
@@ -640,16 +706,16 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     const regionOpen = !!pane.scrollbackEl;
 
     switch (event.key) {
-      case 'PageUp':
+      case "PageUp":
         if (!regionOpen) openScrollbackRegion(paneId, false);
         scrollScrollbackByPage(renderedPanes.get(paneId)!, -1);
         return true;
-      case 'PageDown':
+      case "PageDown":
         if (!regionOpen) return false;
         scrollScrollbackByPage(pane, 1);
         return true;
-      case 'End':
-      case 'Escape':
+      case "End":
+      case "Escape":
         if (!regionOpen) return false;
         closeScrollbackRegion(paneId);
         return true;
@@ -659,14 +725,16 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function addPaneBelow(sourcePaneId: string) {
-    const col = layout.columns.find(c => c.panes.some(p => p.id === sourcePaneId));
+    const col = layout.columns.find((c) =>
+      c.panes.some((p) => p.id === sourcePaneId),
+    );
     if (!col) return;
 
-    const paneIdx = col.panes.findIndex(p => p.id === sourcePaneId);
+    const paneIdx = col.panes.findIndex((p) => p.id === sourcePaneId);
     const oldSize = col.rowSizes[paneIdx]!;
     col.rowSizes[paneIdx] = oldSize / 2;
 
-    const newPane: PaneNode = { id: generateId('pane'), buffer: 'main' };
+    const newPane: PaneNode = { id: generateId("pane"), buffer: "main" };
     col.panes.splice(paneIdx + 1, 0, newPane);
     col.rowSizes.splice(paneIdx + 1, 0, oldSize / 2);
 
@@ -675,11 +743,13 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function removePane(paneId: string) {
-    const colIdx = layout.columns.findIndex(c => c.panes.some(p => p.id === paneId));
+    const colIdx = layout.columns.findIndex((c) =>
+      c.panes.some((p) => p.id === paneId),
+    );
     if (colIdx === -1) return;
     const col = layout.columns[colIdx]!;
 
-    const paneIdx = col.panes.findIndex(p => p.id === paneId);
+    const paneIdx = col.panes.findIndex((p) => p.id === paneId);
 
     // Distribute size to the previous pane (or next if first)
     const sizeToDistribute = col.rowSizes[paneIdx]!;
@@ -701,8 +771,14 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       } else {
         // Fallback if we accidentally removed the last column
         layout = {
-          columns: [{ id: generateId('col'), panes: [{ id: generateId('pane'), buffer: 'main' }], rowSizes: [100] }],
-          colSizes: [100]
+          columns: [
+            {
+              id: generateId("col"),
+              panes: [{ id: generateId("pane"), buffer: "main" }],
+              rowSizes: [100],
+            },
+          ],
+          colSizes: [100],
         };
       }
     }
@@ -711,21 +787,33 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     rebuildDOM();
   }
 
-  function makeDragHandle(kind: 'col' | 'row', parent: Layout | ColumnNode, index: number): HTMLElement {
-    const handle = document.createElement('div');
-    handle.className = kind === 'col' ? 'col-resize-handle' : 'row-resize-handle';
+  function makeDragHandle(
+    kind: "col" | "row",
+    parent: Layout | ColumnNode,
+    index: number,
+  ): HTMLElement {
+    const handle = document.createElement("div");
+    handle.className =
+      kind === "col" ? "col-resize-handle" : "row-resize-handle";
 
-    handle.addEventListener('pointerdown', (e) => {
+    handle.addEventListener("pointerdown", (e) => {
       handle.setPointerCapture(e.pointerId);
-      const sizes = kind === 'col' ? (parent as Layout).colSizes : (parent as ColumnNode).rowSizes;
+      const sizes =
+        kind === "col"
+          ? (parent as Layout).colSizes
+          : (parent as ColumnNode).rowSizes;
 
       const startSizeA = sizes[index]!;
       const startSizeB = sizes[index + 1]!;
-      const totalPixels = kind === 'col' ? elements.panesContainer.clientWidth : (handle.parentElement!.clientHeight);
-      const startPos = kind === 'col' ? e.clientX : e.clientY;
+      const totalPixels =
+        kind === "col"
+          ? elements.panesContainer.clientWidth
+          : handle.parentElement!.clientHeight;
+      const startPos = kind === "col" ? e.clientX : e.clientY;
 
       const onMove = (moveEvent: PointerEvent) => {
-        const currentPos = kind === 'col' ? moveEvent.clientX : moveEvent.clientY;
+        const currentPos =
+          kind === "col" ? moveEvent.clientX : moveEvent.clientY;
         const deltaPixels = currentPos - startPos;
         const deltaPercent = (deltaPixels / totalPixels) * 100;
 
@@ -746,40 +834,51 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
         sizes[index + 1] = newB;
 
         // Apply immediately
-        if (kind === 'col') {
+        if (kind === "col") {
           const l = parent as Layout;
-          (elements.panesContainer.children[index * 2] as HTMLElement).style.flexBasis = `${newA}%`;
-          (elements.panesContainer.children[(index + 1) * 2] as HTMLElement).style.flexBasis = `${newB}%`;
+          (
+            elements.panesContainer.children[index * 2] as HTMLElement
+          ).style.flexBasis = `${newA}%`;
+          (
+            elements.panesContainer.children[(index + 1) * 2] as HTMLElement
+          ).style.flexBasis = `${newB}%`;
         } else {
           const c = parent as ColumnNode;
-          (handle.parentElement!.children[index * 2] as HTMLElement).style.flexBasis = `${newA}%`;
-          (handle.parentElement!.children[(index + 1) * 2] as HTMLElement).style.flexBasis = `${newB}%`;
+          (
+            handle.parentElement!.children[index * 2] as HTMLElement
+          ).style.flexBasis = `${newA}%`;
+          (
+            handle.parentElement!.children[(index + 1) * 2] as HTMLElement
+          ).style.flexBasis = `${newB}%`;
         }
       };
 
       const onUp = () => {
         handle.releasePointerCapture(e.pointerId);
-        handle.removeEventListener('pointermove', onMove);
-        handle.removeEventListener('pointerup', onUp);
+        handle.removeEventListener("pointermove", onMove);
+        handle.removeEventListener("pointerup", onUp);
         saveLayout();
       };
 
-      handle.addEventListener('pointermove', onMove);
-      handle.addEventListener('pointerup', onUp);
+      handle.addEventListener("pointermove", onMove);
+      handle.addEventListener("pointerup", onUp);
     });
 
     return handle;
   }
 
-  function updateSelectOptions(select: HTMLSelectElement, selectedValue: string) {
-    select.innerHTML = '';
+  function updateSelectOptions(
+    select: HTMLSelectElement,
+    selectedValue: string,
+  ) {
+    select.innerHTML = "";
     const options = new Set(knownBuffers);
     if (selectedValue) {
       options.add(selectedValue);
     }
     const sortedBuffers = Array.from(options).sort();
     for (const buf of sortedBuffers) {
-      const opt = document.createElement('option');
+      const opt = document.createElement("option");
       opt.value = buf;
       opt.textContent = buf;
       if (buf === selectedValue) {
@@ -790,7 +889,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function updateAllSelects() {
-    renderedPanes.forEach(pane => {
+    renderedPanes.forEach((pane) => {
       if (pane.selectEl) {
         updateSelectOptions(pane.selectEl, pane.node.buffer);
       }
@@ -798,7 +897,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function plainOutputText(text: string): string {
-    return text.replace(ansiEscapePattern, '');
+    return text.replace(ansiEscapePattern, "");
   }
 
   function normalizedSearchText(text: string): string {
@@ -820,13 +919,24 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function entryMatchCounts(data: LogEntry[], query: string): number[] {
-    return data.map(entry => countQueryMatches(plainOutputText(entry.text || ''), query));
+    return data.map((entry) =>
+      countQueryMatches(plainOutputText(entry.text || ""), query),
+    );
   }
 
   function ensureSearchState(paneId: string): SearchState {
     const existing = searchStates.get(paneId);
     if (existing) return existing;
-    const state: SearchState = { open: false, query: '', executedQuery: '', stale: false, current: 0, total: 0, regionOpen: false, regionOpenedBySearch: false };
+    const state: SearchState = {
+      open: false,
+      query: "",
+      executedQuery: "",
+      stale: false,
+      current: 0,
+      total: 0,
+      regionOpen: false,
+      regionOpenedBySearch: false,
+    };
     searchStates.set(paneId, state);
     return state;
   }
@@ -837,12 +947,14 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     if (pane.searchInputEl.value !== search.query) {
       pane.searchInputEl.value = search.query;
     }
-    const controls = pane.searchInputEl.closest<HTMLElement>('.pane-search-controls');
-    const toggle = pane.el.querySelector<HTMLElement>('.pane-search-toggle');
+    const controls = pane.searchInputEl.closest<HTMLElement>(
+      ".pane-search-controls",
+    );
+    const toggle = pane.el.querySelector<HTMLElement>(".pane-search-toggle");
     if (controls) controls.hidden = !search.open;
-    toggle?.classList.toggle('active', search.open);
+    toggle?.classList.toggle("active", search.open);
     pane.searchCountEl.textContent = `${search.current}/${search.total}`;
-    pane.searchCountEl.classList.toggle('stale', search.stale);
+    pane.searchCountEl.classList.toggle("stale", search.stale);
   }
 
   function openOrExecutePaneSearch(paneId: string) {
@@ -865,7 +977,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     const regionWasSearchOpened = search.regionOpenedBySearch;
     search.open = false;
     search.stale = false;
-    search.executedQuery = '';
+    search.executedQuery = "";
     search.current = 0;
     search.total = 0;
     if (regionWasSearchOpened) {
@@ -880,8 +992,8 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     const pane = renderedPanes.get(paneId);
     const search = ensureSearchState(paneId);
     search.open = false;
-    search.query = '';
-    search.executedQuery = '';
+    search.query = "";
+    search.executedQuery = "";
     search.stale = false;
     search.current = 0;
     search.total = 0;
@@ -897,7 +1009,9 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     const query = search.query.trim();
     search.executedQuery = query;
     search.stale = false;
-    const counts = query ? entryMatchCounts(getBufferData(pane.node.buffer), query) : [];
+    const counts = query
+      ? entryMatchCounts(getBufferData(pane.node.buffer), query)
+      : [];
     search.total = counts.reduce((sum, count) => sum + count, 0);
     search.current = search.total;
     if (query && search.total > 0 && !pane.scrollbackEl) {
@@ -917,7 +1031,8 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       return;
     }
     if (search.total === 0) return;
-    search.current = ((search.current - 1 + delta + search.total) % search.total) + 1;
+    search.current =
+      ((search.current - 1 + delta + search.total) % search.total) + 1;
     setCurrentSearchMatch(pane, search.current);
     updateSearchControls(pane);
   }
@@ -926,25 +1041,34 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   function setCurrentSearchMatch(pane: RenderedPane, ordinal: number) {
     const container = pane.scrollbackOutputEl;
     if (!container) return;
-    container.querySelectorAll('.buffer-search-current').forEach(el => el.classList.remove('buffer-search-current'));
-    const marks = container.querySelectorAll<HTMLElement>(`.buffer-search-match[data-search-ordinal="${ordinal}"]`);
-    marks.forEach(el => el.classList.add('buffer-search-current'));
+    container
+      .querySelectorAll(".buffer-search-current")
+      .forEach((el) => el.classList.remove("buffer-search-current"));
+    const marks = container.querySelectorAll<HTMLElement>(
+      `.buffer-search-match[data-search-ordinal="${ordinal}"]`,
+    );
+    marks.forEach((el) => el.classList.add("buffer-search-current"));
     const first = marks[0];
-    if (first && typeof first.scrollIntoView === 'function') {
-      first.scrollIntoView({ block: 'center' });
+    if (first && typeof first.scrollIntoView === "function") {
+      first.scrollIntoView({ block: "center" });
     }
   }
 
-  function highlightSearchMatches(root: HTMLElement, query: string, currentOrdinal: number, ordinalStart: number): number {
+  function highlightSearchMatches(
+    root: HTMLElement,
+    query: string,
+    currentOrdinal: number,
+    ordinalStart: number,
+  ): number {
     const needle = normalizedSearchText(query);
     if (!needle) return 0;
 
     const textNodes: Array<{ node: Text; start: number; end: number }> = [];
-    let fullText = '';
+    let fullText = "";
     const collect = (node: Node) => {
       node.childNodes.forEach((child) => {
         if (child.nodeType === Node.TEXT_NODE) {
-          const text = child.textContent || '';
+          const text = child.textContent || "";
           const start = fullText.length;
           fullText += text;
           textNodes.push({ node: child as Text, start, end: fullText.length });
@@ -967,21 +1091,28 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     if (ranges.length === 0) return 0;
 
     textNodes.forEach(({ node, start, end }) => {
-      const overlapping = ranges.filter(range => range.start < end && range.end > start);
+      const overlapping = ranges.filter(
+        (range) => range.start < end && range.end > start,
+      );
       if (overlapping.length === 0) return;
 
-      const text = node.textContent || '';
+      const text = node.textContent || "";
       const fragment = document.createDocumentFragment();
       let cursor = 0;
       overlapping.forEach((range) => {
         const localStart = Math.max(0, range.start - start);
         const localEnd = Math.min(text.length, range.end - start);
         if (localStart > cursor) {
-          fragment.appendChild(document.createTextNode(text.slice(cursor, localStart)));
+          fragment.appendChild(
+            document.createTextNode(text.slice(cursor, localStart)),
+          );
         }
-        const mark = document.createElement('mark');
-        mark.className = range.ordinal === currentOrdinal ? 'buffer-search-match buffer-search-current' : 'buffer-search-match';
-        mark.dataset['searchOrdinal'] = String(range.ordinal);
+        const mark = document.createElement("mark");
+        mark.className =
+          range.ordinal === currentOrdinal
+            ? "buffer-search-match buffer-search-current"
+            : "buffer-search-match";
+        mark.dataset["searchOrdinal"] = String(range.ordinal);
         mark.textContent = text.slice(localStart, localEnd);
         fragment.appendChild(mark);
         cursor = localEnd;
@@ -996,44 +1127,62 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function scrollCurrentSearchMatchIntoView(pane: RenderedPane) {
-    const current = pane.scrollbackOutputEl?.querySelector<HTMLElement>('.buffer-search-current');
-    if (current && typeof current.scrollIntoView === 'function') {
-      current.scrollIntoView({ block: 'center' });
+    const current = pane.scrollbackOutputEl?.querySelector<HTMLElement>(
+      ".buffer-search-current",
+    );
+    if (current && typeof current.scrollIntoView === "function") {
+      current.scrollIntoView({ block: "center" });
     }
   }
 
-  function createEntryDOM(entry: LogEntry, entryAnsiUp: AnsiUp, searchContext?: { query: string; current: number; ordinalStart: number }): HTMLElement {
-    const line = document.createElement('div');
-    line.className = 'output-line';
+  function createEntryDOM(
+    entry: LogEntry,
+    entryAnsiUp: AnsiUp,
+    searchContext?: { query: string; current: number; ordinalStart: number },
+  ): HTMLElement {
+    const line = document.createElement("div");
+    line.className = "output-line";
     if (entry.id) {
-      line.dataset['entryId'] = String(entry.id);
+      line.dataset["entryId"] = String(entry.id);
     }
 
-    const span = document.createElement('span');
-    span.className = 'output-text';
-    span.innerHTML = entry.text ? renderANSI(entryAnsiUp, entry.text) : '&nbsp;';
+    const span = document.createElement("span");
+    span.className = "output-text";
+    span.innerHTML = entry.text
+      ? renderANSI(entryAnsiUp, entry.text)
+      : "&nbsp;";
     linkifyHttpsUrls(span);
     if (searchContext?.query) {
-      highlightSearchMatches(span, searchContext.query, searchContext.current, searchContext.ordinalStart);
+      highlightSearchMatches(
+        span,
+        searchContext.query,
+        searchContext.current,
+        searchContext.ordinalStart,
+      );
     }
     line.appendChild(span);
 
     const assignedPendingCommandIDs = new Set<string>();
     (entry.commands || []).forEach((command) => {
-      line.appendChild(createCommandHintElement(command, pendingCommandIDFor(entry, command, assignedPendingCommandIDs)));
+      line.appendChild(
+        createCommandHintElement(
+          command,
+          pendingCommandIDFor(entry, command, assignedPendingCommandIDs),
+        ),
+      );
     });
 
     if (entry.buttons && entry.buttons.length > 0) {
-      const wrapper = document.createElement('span');
-      wrapper.className = 'trigger-buttons';
+      const wrapper = document.createElement("span");
+      wrapper.className = "trigger-buttons";
 
       entry.buttons.forEach((btn) => {
-        const button = document.createElement('button');
-        button.className = 'trigger-button';
-        button.type = 'button';
+        const button = document.createElement("button");
+        button.className = "trigger-button";
+        button.type = "button";
         button.textContent = btn.label;
-        button.addEventListener('click', () => {
-          sendCommand(btn.command, 'button');
+        button.addEventListener("click", () => {
+          sendCommand(btn.command, "button");
           scrollOutputToBottom();
         });
 
@@ -1063,7 +1212,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     const pane = renderedPanes.get(paneId);
     if (!pane) return;
     if (isMapPane(pane)) return; // map panes render a canvas, not text entries
-    pane.outputEl.innerHTML = '';
+    pane.outputEl.innerHTML = "";
     pane.ansiUp = new AnsiUp();
     pane.ansiUp.use_classes = true;
     const data = getBufferData(pane.node.buffer);
@@ -1089,23 +1238,33 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     pane.scrollbackAnsiUp.use_classes = true;
     const data = getBufferData(pane.node.buffer);
     const search = searchStates.get(paneId);
-    const query = search?.executedQuery || '';
+    const query = search?.executedQuery || "";
     const counts = query ? entryMatchCounts(data, query) : [];
 
     // Windowed render; the window extends backward only to reach older matches.
     let startIdx = Math.max(0, data.length - maxRenderedLines);
     if (query) {
-      const firstMatchIdx = counts.findIndex(count => count > 0);
+      const firstMatchIdx = counts.findIndex((count) => count > 0);
       if (firstMatchIdx !== -1 && firstMatchIdx < startIdx) {
         startIdx = firstMatchIdx;
       }
     }
 
-    pane.scrollbackOutputEl.innerHTML = '';
+    pane.scrollbackOutputEl.innerHTML = "";
     const fragment = document.createDocumentFragment();
-    let ordinal = counts.slice(0, startIdx).reduce((sum, count) => sum + count, 0);
+    let ordinal = counts
+      .slice(0, startIdx)
+      .reduce((sum, count) => sum + count, 0);
     for (let i = startIdx; i < data.length; i++) {
-      fragment.appendChild(createEntryDOM(data[i]!, pane.scrollbackAnsiUp, query ? { query, current: search?.current || 0, ordinalStart: ordinal } : undefined));
+      fragment.appendChild(
+        createEntryDOM(
+          data[i]!,
+          pane.scrollbackAnsiUp,
+          query
+            ? { query, current: search?.current || 0, ordinalStart: ordinal }
+            : undefined,
+        ),
+      );
       ordinal += counts[i] || 0;
     }
     pane.scrollbackOutputEl.appendChild(fragment);
@@ -1130,7 +1289,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     const el = pane.scrollbackOutputEl;
     if (!el) return;
     const search = searchStates.get(pane.node.id);
-    const query = search?.executedQuery || '';
+    const query = search?.executedQuery || "";
     if (search && query) {
       const counts = entryMatchCounts(getBufferData(pane.node.buffer), query);
       search.total = counts.reduce((sum, count) => sum + count, 0);
@@ -1152,10 +1311,14 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   // Incremental append into the scrollback region: no full re-render per message.
-  function appendToScrollbackRegion(pane: RenderedPane, newEntries: LogEntry[], dataPruned: boolean) {
+  function appendToScrollbackRegion(
+    pane: RenderedPane,
+    newEntries: LogEntry[],
+    dataPruned: boolean,
+  ) {
     if (!pane.scrollbackOutputEl || !pane.scrollbackAnsiUp) return;
     const search = searchStates.get(pane.node.id);
-    const query = search?.executedQuery || '';
+    const query = search?.executedQuery || "";
 
     if (dataPruned && query) {
       // In-memory data shifted under the ordinals: recount and re-render the
@@ -1169,9 +1332,20 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     let ordinal = search?.total ?? 0;
     let addedMatches = 0;
     for (const entry of newEntries) {
-      fragment.appendChild(createEntryDOM(entry, pane.scrollbackAnsiUp, query ? { query, current: search?.current || 0, ordinalStart: ordinal } : undefined));
+      fragment.appendChild(
+        createEntryDOM(
+          entry,
+          pane.scrollbackAnsiUp,
+          query
+            ? { query, current: search?.current || 0, ordinalStart: ordinal }
+            : undefined,
+        ),
+      );
       if (query) {
-        const count = countQueryMatches(plainOutputText(entry.text || ''), query);
+        const count = countQueryMatches(
+          plainOutputText(entry.text || ""),
+          query,
+        );
         ordinal += count;
         addedMatches += count;
       }
@@ -1197,10 +1371,10 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function triggerVisualBell(element: HTMLElement) {
-    element.classList.remove('visual-bell');
+    element.classList.remove("visual-bell");
     // Force animation restart for repeated BEL entries in the same pane.
     void element.offsetWidth;
-    element.classList.add('visual-bell');
+    element.classList.add("visual-bell");
   }
 
   function lastEntryIDIn(data: LogEntry[]): number {
@@ -1213,13 +1387,21 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
   // Merge incoming entries into id-sorted buffer data. Entries without an id
   // (local client messages) keep their original position relative to neighbors.
-  function mergeEntriesByID(data: LogEntry[], incoming: LogEntry[]): LogEntry[] {
-    const sortedIncoming = [...incoming].sort((a, b) => (a.id || 0) - (b.id || 0));
+  function mergeEntriesByID(
+    data: LogEntry[],
+    incoming: LogEntry[],
+  ): LogEntry[] {
+    const sortedIncoming = [...incoming].sort(
+      (a, b) => (a.id || 0) - (b.id || 0),
+    );
     const merged: LogEntry[] = [];
     let idx = 0;
     for (const existing of data) {
       if (existing.id) {
-        while (idx < sortedIncoming.length && (sortedIncoming[idx]!.id || 0) < existing.id) {
+        while (
+          idx < sortedIncoming.length &&
+          (sortedIncoming[idx]!.id || 0) < existing.id
+        ) {
           merged.push(sortedIncoming[idx]!);
           idx++;
         }
@@ -1239,7 +1421,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     // Group entries by buffer for efficient processing
     const byBuffer = new Map<string, LogEntry[]>();
     for (const entry of entries) {
-      const buf = entry.buffer || 'main';
+      const buf = entry.buffer || "main";
       registerBuffer(buf);
       if (!byBuffer.has(buf)) byBuffer.set(buf, []);
       byBuffer.get(buf)!.push(entry);
@@ -1247,7 +1429,9 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
     byBuffer.forEach((bufferEntries, bufferName) => {
       let data = getBufferData(bufferName);
-      const seenIDs = new Set(data.map(entry => entry.id).filter((id): id is number => !!id));
+      const seenIDs = new Set(
+        data.map((entry) => entry.id).filter((id): id is number => !!id),
+      );
       const newEntries = bufferEntries.filter((entry) => {
         if (!entry.id) return true;
         if (seenIDs.has(entry.id)) return false;
@@ -1259,9 +1443,21 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       // The HTTP catch-up can race the live WS stream: a page of older entries
       // may arrive after newer live output already rendered. Keep the buffer
       // ordered by id; the ordered append is the hot path.
-      const minIncomingID = newEntries.reduce((min, entry) => (entry.id && (min === 0 || entry.id < min)) ? entry.id : min, 0);
-      const batchSorted = newEntries.every((entry, i) => i === 0 || !entry.id || !newEntries[i - 1]!.id || newEntries[i - 1]!.id! <= entry.id);
-      const outOfOrder = (minIncomingID > 0 && minIncomingID <= lastEntryIDIn(data)) || !batchSorted;
+      const minIncomingID = newEntries.reduce(
+        (min, entry) =>
+          entry.id && (min === 0 || entry.id < min) ? entry.id : min,
+        0,
+      );
+      const batchSorted = newEntries.every(
+        (entry, i) =>
+          i === 0 ||
+          !entry.id ||
+          !newEntries[i - 1]!.id ||
+          newEntries[i - 1]!.id! <= entry.id,
+      );
+      const outOfOrder =
+        (minIncomingID > 0 && minIncomingID <= lastEntryIDIn(data)) ||
+        !batchSorted;
 
       if (outOfOrder) {
         data = mergeEntriesByID(data, newEntries);
@@ -1275,7 +1471,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
         data.splice(0, pruneRenderedLines);
       }
 
-      renderedPanes.forEach(pane => {
+      renderedPanes.forEach((pane) => {
         if (pane.node.buffer !== bufferName) return;
         if (isMapPane(pane)) return; // never append text into a map pane
 
@@ -1288,10 +1484,14 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
           renderPaneBuffer(pane.node.id);
           if (!stick) {
             // Backfilled rows land above the viewport: compensate to keep it stable.
-            pane.outputEl.scrollTop = prevScrollTop + (pane.outputEl.scrollHeight - prevScrollHeight);
+            pane.outputEl.scrollTop =
+              prevScrollTop + (pane.outputEl.scrollHeight - prevScrollHeight);
             updateScrollButtonVisibility(pane);
           }
-          if (!state.restoreInProgress && newEntries.some(entry => (entry.bell_positions || []).length > 0)) {
+          if (
+            !state.restoreInProgress &&
+            newEntries.some((entry) => (entry.bell_positions || []).length > 0)
+          ) {
             triggerVisualBell(pane.outputEl);
           }
           refreshScrollbackForDataChange(pane);
@@ -1307,7 +1507,10 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
           fragment.appendChild(createEntryDOM(entry, pane.ansiUp));
         }
         pane.outputEl.appendChild(fragment);
-        if (!state.restoreInProgress && newEntries.some(entry => (entry.bell_positions || []).length > 0)) {
+        if (
+          !state.restoreInProgress &&
+          newEntries.some((entry) => (entry.bell_positions || []).length > 0)
+        ) {
           triggerVisualBell(pane.outputEl);
         }
 
@@ -1349,13 +1552,15 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function paneOutputContainers(pane: RenderedPane): HTMLElement[] {
-    return pane.scrollbackOutputEl ? [pane.outputEl, pane.scrollbackOutputEl] : [pane.outputEl];
+    return pane.scrollbackOutputEl
+      ? [pane.outputEl, pane.scrollbackOutputEl]
+      : [pane.outputEl];
   }
 
   function addCommandHint(entryId: number, buffer: string, command: string) {
     // 1. Persist in memory so it survives pane re-renders
     const data = getBufferData(buffer);
-    const entry = data.find(e => e.id === entryId);
+    const entry = data.find((e) => e.id === entryId);
     if (entry) {
       entry.commands = entry.commands || [];
       entry.commands.push(command);
@@ -1365,7 +1570,9 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     for (const pane of renderedPanes.values()) {
       if (pane.node.buffer === buffer) {
         for (const container of paneOutputContainers(pane)) {
-          const line = container.querySelector<HTMLElement>(`[data-entry-id="${entryId}"]`);
+          const line = container.querySelector<HTMLElement>(
+            `[data-entry-id="${entryId}"]`,
+          );
           if (line) {
             line.appendChild(createCommandHintElement(command));
           }
@@ -1375,7 +1582,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function appendCommandHint(command: string, clientCommandID?: string) {
-    const buffer = 'main';
+    const buffer = "main";
     const data = getBufferData(buffer);
     let pendingEntry: LogEntry | null = null;
     let commandIndex = -1;
@@ -1387,32 +1594,46 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       pendingEntry = lastEntry;
     }
     if (clientCommandID && pendingEntry) {
-      pendingCommandHints.set(clientCommandID, { buffer, entry: pendingEntry, source: command, commandIndex });
+      pendingCommandHints.set(clientCommandID, {
+        buffer,
+        entry: pendingEntry,
+        source: command,
+        commandIndex,
+      });
     }
 
-    renderedPanes.forEach(pane => {
+    renderedPanes.forEach((pane) => {
       if (pane.node.buffer === buffer) {
         for (const container of paneOutputContainers(pane)) {
           const line = container.lastElementChild;
           if (line) {
-            line.appendChild(createCommandHintElement(command, clientCommandID));
+            line.appendChild(
+              createCommandHintElement(command, clientCommandID),
+            );
           }
         }
       }
     });
   }
 
-  function createCommandHintElement(command: string, clientCommandID?: string): HTMLSpanElement {
-    const hint = document.createElement('span');
-    hint.className = 'output-hint';
+  function createCommandHintElement(
+    command: string,
+    clientCommandID?: string,
+  ): HTMLSpanElement {
+    const hint = document.createElement("span");
+    hint.className = "output-hint";
     if (clientCommandID) {
-      hint.dataset['clientCommandId'] = clientCommandID;
+      hint.dataset["clientCommandId"] = clientCommandID;
     }
     hint.textContent = `-> ${command}`;
     return hint;
   }
 
-  function pendingCommandIDFor(entry: LogEntry, command: string, assignedIDs: Set<string>): string | undefined {
+  function pendingCommandIDFor(
+    entry: LogEntry,
+    command: string,
+    assignedIDs: Set<string>,
+  ): string | undefined {
     for (const [id, pending] of pendingCommandHints) {
       if (assignedIDs.has(id)) continue;
       if (pending.entry === entry && pending.source === command) {
@@ -1423,16 +1644,22 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     return undefined;
   }
 
-  function replacePendingCommandHintInDOM(clientCommandID: string, buffer: string, commands: string[]): boolean {
+  function replacePendingCommandHintInDOM(
+    clientCommandID: string,
+    buffer: string,
+    commands: string[],
+  ): boolean {
     let replaced = false;
 
-    renderedPanes.forEach(pane => {
+    renderedPanes.forEach((pane) => {
       if (pane.node.buffer !== buffer) {
         return;
       }
 
       for (const container of paneOutputContainers(pane)) {
-        const hints = container.querySelectorAll<HTMLElement>(`[data-client-command-id="${clientCommandID}"]`);
+        const hints = container.querySelectorAll<HTMLElement>(
+          `[data-client-command-id="${clientCommandID}"]`,
+        );
         if (!hints.length) {
           continue;
         }
@@ -1464,21 +1691,30 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     pendingCommandHints.delete(clientCommandID);
 
     pending.entry.commands = pending.entry.commands || [];
-    const sourceIndex = pending.entry.commands[pending.commandIndex] === pending.source
-      ? pending.commandIndex
-      : pending.entry.commands.indexOf(pending.source);
-    const canonicalCommands = commands.filter((command) => command.trim() !== '');
+    const sourceIndex =
+      pending.entry.commands[pending.commandIndex] === pending.source
+        ? pending.commandIndex
+        : pending.entry.commands.indexOf(pending.source);
+    const canonicalCommands = commands.filter(
+      (command) => command.trim() !== "",
+    );
     if (sourceIndex >= 0) {
       pending.entry.commands.splice(sourceIndex, 1, ...canonicalCommands);
     } else {
       pending.entry.commands.push(...canonicalCommands);
     }
 
-    if (replacePendingCommandHintInDOM(clientCommandID, pending.buffer, canonicalCommands)) {
+    if (
+      replacePendingCommandHintInDOM(
+        clientCommandID,
+        pending.buffer,
+        canonicalCommands,
+      )
+    ) {
       return;
     }
 
-    renderedPanes.forEach(pane => {
+    renderedPanes.forEach((pane) => {
       if (pane.node.buffer === pending.buffer) {
         renderPaneBuffer(pane.node.id);
         renderScrollbackRegion(pane.node.id);
@@ -1488,11 +1724,11 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
   function clearOutput() {
     bufferData.clear();
-    renderedPanes.forEach(pane => {
+    renderedPanes.forEach((pane) => {
       if (isMapPane(pane)) return; // map panes hold a canvas, not text output
-      pane.outputEl.innerHTML = '';
+      pane.outputEl.innerHTML = "";
       if (pane.scrollbackOutputEl) {
-        pane.scrollbackOutputEl.innerHTML = '';
+        pane.scrollbackOutputEl.innerHTML = "";
       }
       updateScrollButtonVisibility(pane);
     });
@@ -1500,7 +1736,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function scrollOutputToBottom() {
-    renderedPanes.forEach(pane => {
+    renderedPanes.forEach((pane) => {
       if (isMapPane(pane)) return; // no scrollable text output on a map pane
       pane.outputEl.scrollTop = pane.outputEl.scrollHeight;
       updateScrollButtonVisibility(pane);
@@ -1509,7 +1745,10 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
   function shouldStickToBottom(pane: RenderedPane): boolean {
     const threshold = 100; // pixels from bottom
-    const distanceToBottom = pane.outputEl.scrollHeight - pane.outputEl.scrollTop - pane.outputEl.clientHeight;
+    const distanceToBottom =
+      pane.outputEl.scrollHeight -
+      pane.outputEl.scrollTop -
+      pane.outputEl.clientHeight;
     return distanceToBottom <= threshold;
   }
 
@@ -1519,37 +1758,69 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     }
     if (isMapPane(pane)) return; // map panes have no scroll-to-bottom button
 
-    const hasOverflow = pane.outputEl.scrollHeight > pane.outputEl.clientHeight + 8;
+    const hasOverflow =
+      pane.outputEl.scrollHeight > pane.outputEl.clientHeight + 8;
     pane.scrollButtonEl.hidden = !hasOverflow || shouldStickToBottom(pane);
   }
 
-  function setActivePanel(panel: 'keyboard' | 'variables' | 'groups' | null) {
+  function setActivePanel(panel: "keyboard" | "variables" | "groups" | null) {
     state.activePanel = state.activePanel === panel ? null : panel;
 
-    elements.keyboardToggle.classList.toggle('panel-tab_active', state.activePanel === 'keyboard');
-    elements.variablesToggle.classList.toggle('panel-tab_active', state.activePanel === 'variables');
-    elements.groupsToggle.classList.toggle('panel-tab_active', state.activePanel === 'groups');
+    elements.keyboardToggle.classList.toggle(
+      "panel-tab_active",
+      state.activePanel === "keyboard",
+    );
+    elements.variablesToggle.classList.toggle(
+      "panel-tab_active",
+      state.activePanel === "variables",
+    );
+    elements.groupsToggle.classList.toggle(
+      "panel-tab_active",
+      state.activePanel === "groups",
+    );
 
-    elements.keyboardPanel.classList.toggle('bottom-panel_active', state.activePanel === 'keyboard');
-    elements.variablesPanel.classList.toggle('bottom-panel_active', state.activePanel === 'variables');
-    elements.groupsPanel.classList.toggle('bottom-panel_active', state.activePanel === 'groups');
+    elements.keyboardPanel.classList.toggle(
+      "bottom-panel_active",
+      state.activePanel === "keyboard",
+    );
+    elements.variablesPanel.classList.toggle(
+      "bottom-panel_active",
+      state.activePanel === "variables",
+    );
+    elements.groupsPanel.classList.toggle(
+      "bottom-panel_active",
+      state.activePanel === "groups",
+    );
 
-    elements.bottomPanels.classList.toggle('bottom-panels_visible', Boolean(state.activePanel));
+    elements.bottomPanels.classList.toggle(
+      "bottom-panels_visible",
+      Boolean(state.activePanel),
+    );
 
-    if (state.activePanel === 'variables') {
+    if (state.activePanel === "variables") {
       requestVariables();
     }
-    if (state.activePanel === 'groups') {
+    if (state.activePanel === "groups") {
       requestGroups();
     }
   }
 
   function updateConnectionStatus(status: string) {
     elements.connectionStatus.textContent = status;
-    elements.connectionStatus.classList.toggle('status-connected', status === 'connected');
-    elements.connectionStatus.classList.toggle('status-disconnected', status === 'disconnected');
-    elements.connectionStatus.classList.toggle('status-actionable', status === 'disconnected');
-    elements.connectionStatus.title = status === 'disconnected' ? 'Reconnect' : '';
+    elements.connectionStatus.classList.toggle(
+      "status-connected",
+      status === "connected",
+    );
+    elements.connectionStatus.classList.toggle(
+      "status-disconnected",
+      status === "disconnected",
+    );
+    elements.connectionStatus.classList.toggle(
+      "status-actionable",
+      status === "disconnected",
+    );
+    elements.connectionStatus.title =
+      status === "disconnected" ? "Reconnect" : "";
   }
 
   type ActiveTimerSnapshot = TimerSnapshot & { received_at_ms: number };
@@ -1559,12 +1830,15 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
   function renderTimers(timers: TimerSnapshot[]) {
     const receivedAt = performance.now();
-    activeTimers = (timers || []).map((timer) => ({ ...timer, received_at_ms: receivedAt }));
+    activeTimers = (timers || []).map((timer) => ({
+      ...timer,
+      received_at_ms: receivedAt,
+    }));
     updateTickerUI();
 
-    if (!tickerInterval && activeTimers.some(t => t.enabled)) {
+    if (!tickerInterval && activeTimers.some((t) => t.enabled)) {
       tickerInterval = setInterval(updateTickerUI, 1000);
-    } else if (tickerInterval && activeTimers.every(t => !t.enabled)) {
+    } else if (tickerInterval && activeTimers.every((t) => !t.enabled)) {
       clearInterval(tickerInterval);
       tickerInterval = null;
     }
@@ -1574,20 +1848,27 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     if (sec >= 60) {
       const m = Math.floor(sec / 60);
       const s = sec % 60;
-      return `${m}:${String(s).padStart(2, '0')}`;
+      return `${m}:${String(s).padStart(2, "0")}`;
     }
     return String(sec);
   }
 
   function getRemainingSeconds(timer: ActiveTimerSnapshot): number {
-    const cycleSeconds = timer.cycle_ms > 0 ? Math.ceil(timer.cycle_ms / 1000) : 0;
+    const cycleSeconds =
+      timer.cycle_ms > 0 ? Math.ceil(timer.cycle_ms / 1000) : 0;
     const snapshotRemaining = Number.isFinite(timer.remaining_ms)
       ? Math.max(0, timer.remaining_ms)
       : Math.max(0, new Date(timer.next_tick_at).getTime() - Date.now());
     const elapsed = Math.max(0, performance.now() - timer.received_at_ms);
-    const remaining = Math.ceil(Math.max(0, snapshotRemaining - elapsed) / 1000);
+    const remaining = Math.ceil(
+      Math.max(0, snapshotRemaining - elapsed) / 1000,
+    );
 
-    if (remaining === 0 && cycleSeconds > 0 && timer.repeat_mode !== 'one_shot') {
+    if (
+      remaining === 0 &&
+      cycleSeconds > 0 &&
+      timer.repeat_mode !== "one_shot"
+    ) {
       return cycleSeconds;
     }
     if (cycleSeconds > 0 && remaining > cycleSeconds) {
@@ -1597,35 +1878,37 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function updateTickerUI() {
-    const primary = activeTimers.find(t => t.name === 'ticker');
-    const secondary = activeTimers.filter(t => t.name !== 'ticker' && t.enabled);
+    const primary = activeTimers.find((t) => t.name === "ticker");
+    const secondary = activeTimers.filter(
+      (t) => t.name !== "ticker" && t.enabled,
+    );
 
     // Primary ticker
     if (!primary || !primary.enabled) {
-      elements.ticker.textContent = 'tick off';
-      elements.ticker.classList.remove('ticker_active', 'ticker_low');
+      elements.ticker.textContent = "tick off";
+      elements.ticker.classList.remove("ticker_active", "ticker_low");
     } else {
       const remaining = getRemainingSeconds(primary);
 
-      const icon = primary.icon || '🕒';
+      const icon = primary.icon || "🕒";
       elements.ticker.textContent = `${icon} tick ${formatRemaining(remaining)}`;
-      elements.ticker.classList.add('ticker_active');
+      elements.ticker.classList.add("ticker_active");
       if (remaining > 0 && remaining < 5) {
-        elements.ticker.classList.add('ticker_low');
+        elements.ticker.classList.add("ticker_low");
       } else {
-        elements.ticker.classList.remove('ticker_low');
+        elements.ticker.classList.remove("ticker_low");
       }
     }
 
     // Secondary timers
-    elements.secondaryTimers.innerHTML = '';
-    secondary.forEach(t => {
+    elements.secondaryTimers.innerHTML = "";
+    secondary.forEach((t) => {
       const remaining = getRemainingSeconds(t);
 
-      const pill = document.createElement('span');
-      pill.className = 'timer-pill';
+      const pill = document.createElement("span");
+      pill.className = "timer-pill";
       if (remaining > 0 && remaining < 5) {
-        pill.classList.add('timer-pill_low');
+        pill.classList.add("timer-pill_low");
       }
 
       if (t.icon) {
@@ -1639,23 +1922,23 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function createHotkeyChip(item: Hotkey, hideShortcut = false): HTMLElement {
-    const chip = document.createElement('span');
-    chip.className = 'hotkey-chip';
+    const chip = document.createElement("span");
+    chip.className = "hotkey-chip";
 
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.addEventListener('click', () => {
-      sendCommand(item.command, 'key');
+    const button = document.createElement("button");
+    button.type = "button";
+    button.addEventListener("click", () => {
+      sendCommand(item.command, "key");
       scrollOutputToBottom();
     });
 
     if (!hideShortcut) {
-      const key = document.createElement('kbd');
+      const key = document.createElement("kbd");
       key.textContent = item.shortcut;
       button.appendChild(key);
     }
 
-    const label = document.createElement('span');
+    const label = document.createElement("span");
     label.textContent = item.command;
     button.appendChild(label);
 
@@ -1664,7 +1947,7 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
   }
 
   function renderHotkeys(items: Hotkey[]) {
-    elements.hotkeysBox.innerHTML = '';
+    elements.hotkeysBox.innerHTML = "";
     const hotkeys = items || [];
     const isMobile = window.innerWidth <= 640;
 
@@ -1673,34 +1956,43 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
         elements.hotkeysBox.appendChild(createHotkeyChip(item));
       });
     } else {
-      const positioned = hotkeys.filter(h => h.mobile_row && h.mobile_row > 0);
-      const free = [...hotkeys.filter(h => !h.mobile_row || h.mobile_row <= 0)];
+      const positioned = hotkeys.filter(
+        (h) => h.mobile_row && h.mobile_row > 0,
+      );
+      const free = [
+        ...hotkeys.filter((h) => !h.mobile_row || h.mobile_row <= 0),
+      ];
 
       const rowsMap = new Map<number, HTMLElement>();
-      const sortedRowNums = Array.from(new Set(positioned.map(h => h.mobile_row!))).sort((a, b) => a - b);
+      const sortedRowNums = Array.from(
+        new Set(positioned.map((h) => h.mobile_row!)),
+      ).sort((a, b) => a - b);
 
-      sortedRowNums.forEach(rowNum => {
-        const rowEl = document.createElement('div');
-        rowEl.className = 'hotkeys-row';
+      sortedRowNums.forEach((rowNum) => {
+        const rowEl = document.createElement("div");
+        rowEl.className = "hotkeys-row";
         rowEl.dataset.row = String(rowNum);
         elements.hotkeysBox.appendChild(rowEl);
         rowsMap.set(rowNum, rowEl);
       });
 
       // Add positioned hotkeys
-      positioned.sort((a, b) => (a.mobile_order || 0) - (b.mobile_order || 0)).forEach(hk => {
-        rowsMap.get(hk.mobile_row!)!.appendChild(createHotkeyChip(hk, true));
-      });
+      positioned
+        .sort((a, b) => (a.mobile_order || 0) - (b.mobile_order || 0))
+        .forEach((hk) => {
+          rowsMap.get(hk.mobile_row!)!.appendChild(createHotkeyChip(hk, true));
+        });
 
       // Best-effort auto-fill
       if (free.length > 0) {
-        const containerWidth = elements.hotkeysBox.clientWidth || (window.innerWidth - 24);
+        const containerWidth =
+          elements.hotkeysBox.clientWidth || window.innerWidth - 24;
         const gap = 6;
 
-        free.forEach(hk => {
+        free.forEach((hk) => {
           const chip = createHotkeyChip(hk, true);
           elements.hotkeysBox.appendChild(chip);
-          const chipWidth = chip.offsetWidth || (hk.command.length * 9 + 24);
+          const chipWidth = chip.offsetWidth || hk.command.length * 9 + 24;
           chip.remove();
 
           let placed = false;
@@ -1708,7 +2000,9 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
             const rowEl = rowsMap.get(rowNum)!;
             let currentRowWidth = 0;
             for (const child of Array.from(rowEl.children)) {
-              currentRowWidth += ((child as HTMLElement).offsetWidth || (child.textContent?.length || 0) * 9 + 24) + gap;
+              currentRowWidth +=
+                ((child as HTMLElement).offsetWidth ||
+                  (child.textContent?.length || 0) * 9 + 24) + gap;
             }
 
             if (currentRowWidth + chipWidth < containerWidth - 12) {
@@ -1719,13 +2013,16 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
           }
 
           if (!placed) {
-            const freeRows = elements.hotkeysBox.querySelectorAll('.hotkeys-row_free');
+            const freeRows =
+              elements.hotkeysBox.querySelectorAll(".hotkeys-row_free");
             let lastFreeRow = freeRows[freeRows.length - 1] as HTMLElement;
 
             if (lastFreeRow) {
               let currentRowWidth = 0;
               for (const child of Array.from(lastFreeRow.children)) {
-                currentRowWidth += ((child as HTMLElement).offsetWidth || (child.textContent?.length || 0) * 9 + 24) + gap;
+                currentRowWidth +=
+                  ((child as HTMLElement).offsetWidth ||
+                    (child.textContent?.length || 0) * 9 + 24) + gap;
               }
               if (currentRowWidth + chipWidth < containerWidth - 12) {
                 lastFreeRow.appendChild(chip);
@@ -1734,8 +2031,8 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
             }
 
             if (!placed) {
-              lastFreeRow = document.createElement('div');
-              lastFreeRow.className = 'hotkeys-row hotkeys-row_free';
+              lastFreeRow = document.createElement("div");
+              lastFreeRow.className = "hotkeys-row hotkeys-row_free";
               lastFreeRow.appendChild(chip);
               elements.hotkeysBox.appendChild(lastFreeRow);
             }
@@ -1744,49 +2041,51 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       }
     }
 
-    elements.keyboardToggle.style.display = hotkeys.length ? 'inline-flex' : 'none';
-    if (!hotkeys.length && state.activePanel === 'keyboard') {
-      setActivePanel('keyboard');
+    elements.keyboardToggle.style.display = hotkeys.length
+      ? "inline-flex"
+      : "none";
+    if (!hotkeys.length && state.activePanel === "keyboard") {
+      setActivePanel("keyboard");
     }
   }
 
   function renderGroups(items: RuleGroup[]) {
-    elements.groupsList.innerHTML = '';
+    elements.groupsList.innerHTML = "";
     if (!items || !items.length) {
-      const empty = document.createElement('div');
-      empty.className = 'variables-empty';
-      empty.textContent = 'No groups defined in active profiles.';
+      const empty = document.createElement("div");
+      empty.className = "variables-empty";
+      empty.textContent = "No groups defined in active profiles.";
       elements.groupsList.appendChild(empty);
       return;
     }
 
-    const chipsContainer = document.createElement('div');
-    chipsContainer.className = 'group-chips-container';
+    const chipsContainer = document.createElement("div");
+    chipsContainer.className = "group-chips-container";
 
     // Sort by name for stability
     items.sort((a, b) => a.group_name.localeCompare(b.group_name));
 
-    items.forEach(g => {
-      const chip = document.createElement('label');
-      chip.className = 'group-chip';
+    items.forEach((g) => {
+      const chip = document.createElement("label");
+      chip.className = "group-chip";
 
-      const checkbox = document.createElement('input');
-      checkbox.type = 'checkbox';
-      checkbox.className = 'group-checkbox';
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.className = "group-checkbox";
       const allEnabled = g.enabled_count === g.total_count;
       const noneEnabled = g.enabled_count === 0;
       checkbox.checked = allEnabled;
       checkbox.indeterminate = !allEnabled && !noneEnabled;
-      checkbox.addEventListener('change', () => {
+      checkbox.addEventListener("change", () => {
         toggleGroup(g.group_name, checkbox.checked);
       });
 
-      const label = document.createElement('span');
-      label.className = 'group-label';
+      const label = document.createElement("span");
+      label.className = "group-label";
       label.textContent = g.group_name;
 
-      const count = document.createElement('span');
-      count.className = 'group-badge';
+      const count = document.createElement("span");
+      count.className = "group-badge";
       count.textContent = String(g.total_count);
 
       chip.appendChild(checkbox);
@@ -1800,66 +2099,75 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
 
   function renderVariables(items: (Variable | ResolvedVariable)[]) {
     const focused = document.activeElement as HTMLInputElement | null;
-    const focusedKey = focused?.dataset['varKey'] ?? null;
-    const focusedValue = focusedKey != null && focused!.value !== focused!.defaultValue ? focused!.value : null;
+    const focusedKey = focused?.dataset["varKey"] ?? null;
+    const focusedValue =
+      focusedKey != null && focused!.value !== focused!.defaultValue
+        ? focused!.value
+        : null;
 
-    elements.variablesList.innerHTML = '';
+    elements.variablesList.innerHTML = "";
 
     if (!items || !items.length) {
-      const empty = document.createElement('div');
-      empty.className = 'variables-empty';
-      empty.textContent = 'No variables defined yet.';
+      const empty = document.createElement("div");
+      empty.className = "variables-empty";
+      empty.textContent = "No variables defined yet.";
       elements.variablesList.appendChild(empty);
       return;
     }
 
     const params = new URLSearchParams(window.location.search);
-    const sessionID = params.get('session_id');
+    const sessionID = params.get("session_id");
 
     items.forEach((item) => {
-      const isResolved = 'name' in item;
-      const keyStr = isResolved ? (item as ResolvedVariable).name : (item as Variable).key;
-      const valStr = item.value || '';
-      const usesDefault = isResolved ? (item as ResolvedVariable).uses_default : false;
-      const isDeclared = isResolved ? (item as ResolvedVariable).declared : true;
+      const isResolved = "name" in item;
+      const keyStr = isResolved
+        ? (item as ResolvedVariable).name
+        : (item as Variable).key;
+      const valStr = item.value || "";
+      const usesDefault = isResolved
+        ? (item as ResolvedVariable).uses_default
+        : false;
+      const isDeclared = isResolved
+        ? (item as ResolvedVariable).declared
+        : true;
 
-      const row = document.createElement('div');
-      row.className = 'variable-row';
-      if (usesDefault) row.classList.add('variable-row_default');
-      if (!isDeclared) row.classList.add('variable-row_undeclared');
+      const row = document.createElement("div");
+      row.className = "variable-row";
+      if (usesDefault) row.classList.add("variable-row_default");
+      if (!isDeclared) row.classList.add("variable-row_undeclared");
 
-      const key = document.createElement('div');
-      key.className = 'variable-key';
+      const key = document.createElement("div");
+      key.className = "variable-key";
       key.textContent = `$${keyStr}`;
       row.appendChild(key);
 
-      const valueContainer = document.createElement('div');
-      valueContainer.className = 'variable-value-container';
+      const valueContainer = document.createElement("div");
+      valueContainer.className = "variable-value-container";
 
-      const input = document.createElement('input');
-      input.type = 'text';
-      input.className = 'variable-input';
-      input.dataset['varKey'] = keyStr;
+      const input = document.createElement("input");
+      input.type = "text";
+      input.className = "variable-input";
+      input.dataset["varKey"] = keyStr;
       input.value = valStr;
       input.defaultValue = valStr;
       if (usesDefault) {
         input.placeholder = (item as ResolvedVariable).default_value;
-        input.value = '';
-        input.defaultValue = '';
+        input.value = "";
+        input.defaultValue = "";
       }
       if (keyStr === focusedKey && focusedValue !== null) {
         input.value = focusedValue;
       }
 
-      input.addEventListener('keydown', async (e) => {
-        if (e.key === 'Enter') {
+      input.addEventListener("keydown", async (e) => {
+        if (e.key === "Enter") {
           const newVal = input.value.trim();
           if (!newVal) return;
           if (sessionID) {
             await fetchWithToken(`/api/sessions/${sessionID}/variables`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ key: keyStr, value: newVal })
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ key: keyStr, value: newVal }),
             });
             requestVariables();
           }
@@ -1868,15 +2176,18 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
       valueContainer.appendChild(input);
 
       if (isResolved && (item as ResolvedVariable).has_value) {
-        const clearBtn = document.createElement('button');
-        clearBtn.className = 'btn-clear';
-        clearBtn.innerHTML = '×';
-        clearBtn.title = 'Clear override';
-        clearBtn.addEventListener('click', async () => {
+        const clearBtn = document.createElement("button");
+        clearBtn.className = "btn-clear";
+        clearBtn.innerHTML = "×";
+        clearBtn.title = "Clear override";
+        clearBtn.addEventListener("click", async () => {
           if (sessionID) {
-            await fetchWithToken(`/api/sessions/${sessionID}/variables/${encodeURIComponent(keyStr)}`, {
-              method: 'DELETE'
-            });
+            await fetchWithToken(
+              `/api/sessions/${sessionID}/variables/${encodeURIComponent(keyStr)}`,
+              {
+                method: "DELETE",
+              },
+            );
             requestVariables();
           }
         });
@@ -1888,8 +2199,11 @@ export function createRenderer({ elements, ansiUp, fontSizeControls, sendCommand
     });
 
     if (focusedKey != null) {
-      const restored = Array.from(elements.variablesList.querySelectorAll<HTMLInputElement>('[data-var-key]'))
-        .find((input) => input.dataset['varKey'] === focusedKey);
+      const restored = Array.from(
+        elements.variablesList.querySelectorAll<HTMLInputElement>(
+          "[data-var-key]",
+        ),
+      ).find((input) => input.dataset["varKey"] === focusedKey);
       if (restored) {
         restored.focus();
         const len = restored.value.length;
@@ -1957,7 +2271,10 @@ function linkifyHttpsUrls(root: HTMLElement) {
     node.childNodes.forEach((child) => {
       if (child.nodeType === Node.TEXT_NODE) {
         textNodes.push(child as Text);
-      } else if (child.nodeType === Node.ELEMENT_NODE && (child as Element).tagName !== 'A') {
+      } else if (
+        child.nodeType === Node.ELEMENT_NODE &&
+        (child as Element).tagName !== "A"
+      ) {
         collectTextNodes(child);
       }
     });
@@ -1965,7 +2282,7 @@ function linkifyHttpsUrls(root: HTMLElement) {
   collectTextNodes(root);
 
   textNodes.forEach((textNode) => {
-    const text = textNode.textContent || '';
+    const text = textNode.textContent || "";
     httpsUrlPattern.lastIndex = 0;
     if (!httpsUrlPattern.test(text)) return;
 
@@ -1975,17 +2292,19 @@ function linkifyHttpsUrls(root: HTMLElement) {
     for (const match of text.matchAll(httpsUrlPattern)) {
       const rawUrl = match[0];
       const start = match.index || 0;
-      const url = rawUrl.replace(trailingUrlPunctuation, '');
+      const url = rawUrl.replace(trailingUrlPunctuation, "");
       const trailing = rawUrl.slice(url.length);
       if (start > lastIndex) {
-        fragment.appendChild(document.createTextNode(text.slice(lastIndex, start)));
+        fragment.appendChild(
+          document.createTextNode(text.slice(lastIndex, start)),
+        );
       }
 
-      const anchor = document.createElement('a');
-      anchor.className = 'ansi-bright-cyan-fg';
+      const anchor = document.createElement("a");
+      anchor.className = "ansi-bright-cyan-fg";
       anchor.href = url;
-      anchor.target = '_blank';
-      anchor.rel = 'noopener noreferrer';
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
       anchor.textContent = url;
       fragment.appendChild(anchor);
       if (trailing) {

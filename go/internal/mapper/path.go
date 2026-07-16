@@ -1,5 +1,7 @@
 package mapper
 
+import "strings"
+
 // Pathfinding ports rmud_locate.world_neighbors + global BFS: fewest-steps route
 // over the set's rooms, DT cells hard-excluded, seams as directed edges. Output
 // is an ordered list of RU direction/command tokens for mud_send_command.
@@ -9,6 +11,7 @@ package mapper
 // (the server traverses a whole pipe run with one command; see collapsePipeRuns).
 type PathStep struct {
 	Command string // RU direction ("с ю в з вв вн") or seam command ("на восток")
+	Dir     string // canonical EN direction letter for a grid hop ("n/s/e/w/u/d"); "" for a seam
 	Seam    bool   // true when this hop crosses a zone seam
 	Door    bool   // true when the departing edge is a door (agent must open first)
 	ToZone  string // target zone of the hop (the cell this step lands on)
@@ -209,6 +212,7 @@ func collapsePipeRuns(raw []rawStep) []PathStep {
 		}
 		out = append(out, PathStep{
 			Command: rs.command,
+			Dir:     strings.ToLower(rs.dir),
 			Seam:    rs.seam,
 			Door:    rs.door,
 			ToZone:  rs.toZone,

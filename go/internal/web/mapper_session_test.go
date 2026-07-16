@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"rubymud/go/internal/storage"
 )
 
 // These cover the session-scoped mapper REST endpoints added for the UI map
@@ -130,6 +132,145 @@ func TestRESTMapAnchor(t *testing.T) {
 	}
 	if !out.OK || !out.Exact {
 		t.Fatalf("anchor result = %+v, want ok+exact (room (0,0,0) exists in the set)", out)
+	}
+}
+
+// postMapPath hits POST /api/sessions/{id}/map-path and returns the decoded body.
+func postMapPath(t *testing.T, ts *httptest.Server, token string, sid int64, body string) map[string]any {
+	t.Helper()
+	req, _ := newAuthenticatedRequest(http.MethodPost, fmt.Sprintf("%s/api/sessions/%d/map-path", ts.URL, sid),
+		strings.NewReader(body), token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST map-path: %v", err)
+	}
+	defer resp.Body.Close()
+	// Soft-fail contract: always 200, never 500.
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("map-path status = %d, want 200 (soft-fail contract)", resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return out
+}
+
+// asDirs coerces the JSON `directions` array to []string.
+func asDirs(v any) []string {
+	arr, ok := v.([]any)
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, e := range arr {
+		s, _ := e.(string)
+		out = append(out, s)
+	}
+	return out
+}
+
+// TestRESTMapPathFromCurrentPosition: with a seeded position, clicking a distant
+// room returns canonical lowercase English directions joinable with ';'.
+func TestRESTMapPathFromCurrentPosition(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+	sid := sess.SessionID()
+
+	seedTrackerSet(t, s, sid)
+	sess.LoadActiveMapSet()
+	// Anchor at (0,0,0); route to (2,0,0) is S,S => "s;s" (S = x+1).
+	callTool(t, s, "mud_anchor_here", fmt.Sprintf(`{"session_id":%d,"zone":"Z","x":0,"y":0,"l":0}`, sid))
+
+	out := postMapPath(t, ts, s.apiToken, sid, `{"to":{"zone":"Z","x":2,"y":0,"l":0}}`)
+	if out["reachable"] != true {
+		t.Fatalf("expected reachable, got %#v", out)
+	}
+	dirs := asDirs(out["directions"])
+	if strings.Join(dirs, ";") != "s;s" {
+		t.Fatalf("directions = %v, want [s s] (canonical lowercase english)", dirs)
+	}
+}
+
+// TestRESTMapPathLostPosition: no anchor => red/lost => soft-fail reachable:false.
+func TestRESTMapPathLostPosition(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+	sid := sess.SessionID()
+
+	seedTrackerSet(t, s, sid)
+	sess.LoadActiveMapSet() // no anchor => position lost
+
+	out := postMapPath(t, ts, s.apiToken, sid, `{"to":{"zone":"Z","x":2,"y":0,"l":0}}`)
+	if out["reachable"] != false {
+		t.Fatalf("expected reachable:false when lost, got %#v", out)
+	}
+	if reason, _ := out["reason"].(string); !strings.Contains(reason, "lost") {
+		t.Fatalf("expected lost reason, got %q", reason)
+	}
+}
+
+// TestRESTMapPathCurrentRoom: clicking the room you're standing in is a no-op
+// (reachable + empty directions + here flag), so the UI does not insert garbage.
+func TestRESTMapPathCurrentRoom(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+	sid := sess.SessionID()
+
+	seedTrackerSet(t, s, sid)
+	sess.LoadActiveMapSet()
+	callTool(t, s, "mud_anchor_here", fmt.Sprintf(`{"session_id":%d,"zone":"Z","x":0,"y":0,"l":0}`, sid))
+
+	out := postMapPath(t, ts, s.apiToken, sid, `{"to":{"zone":"Z","x":0,"y":0,"l":0}}`)
+	if out["reachable"] != true || out["here"] != true {
+		t.Fatalf("expected reachable+here for current room, got %#v", out)
+	}
+	if dirs := asDirs(out["directions"]); len(dirs) != 0 {
+		t.Fatalf("expected empty directions for current room, got %v", dirs)
+	}
+}
+
+// TestRESTMapPathDTTarget: routing to a death-trap target soft-fails with dt:true.
+func TestRESTMapPathDTTarget(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+	sid := sess.SessionID()
+
+	// A(0,0,0)->S->DT(1,0,0). The DT is the click target.
+	id, err := s.store.CreateMapSet(storage.MapSetInput{
+		Name: "DT", ZoneCount: 1, RoomCount: 2,
+		Rooms: []storage.Room{
+			{Zone: "Z", X: 0, Y: 0, L: 0, Tag: intPtr(1), Hint: "A", Exits: "S", EDirs: `["S"]`, Doors: `[]`, Ch: 2},
+			{Zone: "Z", X: 1, Y: 0, L: 0, Tag: intPtr(2), Hint: "Trap", Exits: "N", EDirs: `["N"]`, Doors: `[]`, Ch: 1, IsDT: true},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateMapSet: %v", err)
+	}
+	s.store.SetActiveMapSetID(sid, id)
+	sess.LoadActiveMapSet()
+	callTool(t, s, "mud_anchor_here", fmt.Sprintf(`{"session_id":%d,"zone":"Z","x":0,"y":0,"l":0}`, sid))
+
+	out := postMapPath(t, ts, s.apiToken, sid, `{"to":{"zone":"Z","x":1,"y":0,"l":0}}`)
+	if out["reachable"] != false || out["dt"] != true {
+		t.Fatalf("expected reachable:false + dt:true for DT target, got %#v", out)
+	}
+}
+
+func TestRESTMapPathNoTracker(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+	sess.LoadActiveMapSet() // no active set
+
+	out := postMapPath(t, ts, s.apiToken, sess.SessionID(), `{"to":{"zone":"Z","x":0,"y":0,"l":0}}`)
+	if out["reachable"] != false {
+		t.Fatalf("expected reachable:false with no active set, got %#v", out)
 	}
 }
 

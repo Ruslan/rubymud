@@ -1,8 +1,8 @@
-import './styles/main.css';
-import { AnsiUp } from 'ansi_up';
+import "./styles/main.css";
+import { AnsiUp } from "ansi_up";
 
-import { applyAnsiTheme } from './ansi';
-import { getAppElements, fetchWithToken } from './dom';
+import { applyAnsiTheme } from "./ansi";
+import { getAppElements, fetchWithToken } from "./dom";
 import {
   applyFontSizeVars,
   clampFontSize,
@@ -10,24 +10,24 @@ import {
   fontSizeStorageKey,
   maxFontSize,
   minFontSize,
-} from './fontSize';
-import { commandHistoryStorageKey, InputHistory } from './history';
-import { matchHotkey } from './hotkeys';
-import { safeCatchupCursor } from './logCatchup';
-import { ReverseSearchController } from './reverseSearchController';
-import { createRenderer } from './render';
-import { createSocket, sendSocketCommand } from './socket';
-import type { Hotkey, LogEntry, ServerMessage } from './types';
-import { parseRoomPosition, type RoomPositionMessage } from './map/wsPosition';
+} from "./fontSize";
+import { commandHistoryStorageKey, InputHistory } from "./history";
+import { matchHotkey } from "./hotkeys";
+import { safeCatchupCursor } from "./logCatchup";
+import { ReverseSearchController } from "./reverseSearchController";
+import { createRenderer } from "./render";
+import { createSocket, sendSocketCommand } from "./socket";
+import type { Hotkey, LogEntry, ServerMessage } from "./types";
+import { parseRoomPosition, type RoomPositionMessage } from "./map/wsPosition";
 
 type WakeLockSentinelLike = {
   release(): Promise<void>;
-  addEventListener(type: 'release', listener: () => void): void;
+  addEventListener(type: "release", listener: () => void): void;
 };
 
 type WakeLockNavigator = Navigator & {
   wakeLock?: {
-    request(type: 'screen'): Promise<WakeLockSentinelLike>;
+    request(type: "screen"): Promise<WakeLockSentinelLike>;
   };
 };
 
@@ -36,34 +36,34 @@ type LiveLogsResponse = {
   has_more?: boolean;
 };
 
-const wakeLockEnabledStorageKey = 'mudhost.wakeLockEnabled';
+const wakeLockEnabledStorageKey = "mudhost.wakeLockEnabled";
 let currentFontSize = defaultFontSize;
-const fontSizeControls = document.createElement('div');
-fontSizeControls.className = 'font-size-controls';
-fontSizeControls.setAttribute('aria-label', 'Font size controls');
+const fontSizeControls = document.createElement("div");
+fontSizeControls.className = "font-size-controls";
+fontSizeControls.setAttribute("aria-label", "Font size controls");
 
-const fontSizeDecreaseButton = document.createElement('button');
-fontSizeDecreaseButton.className = 'font-size-btn';
-fontSizeDecreaseButton.type = 'button';
-fontSizeDecreaseButton.title = 'Decrease font size';
-fontSizeDecreaseButton.textContent = 'A-';
+const fontSizeDecreaseButton = document.createElement("button");
+fontSizeDecreaseButton.className = "font-size-btn";
+fontSizeDecreaseButton.type = "button";
+fontSizeDecreaseButton.title = "Decrease font size";
+fontSizeDecreaseButton.textContent = "A-";
 
-const fontSizeValue = document.createElement('span');
-fontSizeValue.className = 'font-size-value';
+const fontSizeValue = document.createElement("span");
+fontSizeValue.className = "font-size-value";
 fontSizeValue.textContent = `${defaultFontSize}px`;
 
-const fontSizeIncreaseButton = document.createElement('button');
-fontSizeIncreaseButton.className = 'font-size-btn';
-fontSizeIncreaseButton.type = 'button';
-fontSizeIncreaseButton.title = 'Increase font size';
-fontSizeIncreaseButton.textContent = 'A+';
+const fontSizeIncreaseButton = document.createElement("button");
+fontSizeIncreaseButton.className = "font-size-btn";
+fontSizeIncreaseButton.type = "button";
+fontSizeIncreaseButton.title = "Increase font size";
+fontSizeIncreaseButton.textContent = "A+";
 
 fontSizeControls.appendChild(fontSizeDecreaseButton);
 fontSizeControls.appendChild(fontSizeValue);
 fontSizeControls.appendChild(fontSizeIncreaseButton);
 
 function isWakeLockEnabled(): boolean {
-  return localStorage.getItem(wakeLockEnabledStorageKey) !== 'false';
+  return localStorage.getItem(wakeLockEnabledStorageKey) !== "false";
 }
 
 function readFontSize(): number {
@@ -97,7 +97,7 @@ async function releaseWakeLock() {
   try {
     await activeWakeLock.release();
   } catch (err) {
-    console.error('Failed to release wake lock:', err);
+    console.error("Failed to release wake lock:", err);
   }
 }
 
@@ -111,7 +111,7 @@ function logBoot(stage: string, extra?: unknown) {
   console.log(`[boot ${time}ms] ${stage}`, extra);
 }
 
-logBoot('module start');
+logBoot("module start");
 applyFontSize(readFontSize());
 
 const wakeLockNavigator = navigator as WakeLockNavigator;
@@ -123,32 +123,36 @@ async function requestWakeLock() {
     return;
   }
 
-  if (!wakeLockNavigator.wakeLock || document.visibilityState !== 'visible' || wakeLock) {
+  if (
+    !wakeLockNavigator.wakeLock ||
+    document.visibilityState !== "visible" ||
+    wakeLock
+  ) {
     return;
   }
 
   try {
-    wakeLock = await wakeLockNavigator.wakeLock.request('screen');
-    wakeLock.addEventListener('release', () => {
+    wakeLock = await wakeLockNavigator.wakeLock.request("screen");
+    wakeLock.addEventListener("release", () => {
       wakeLock = null;
     });
-    logBoot('wake lock acquired');
+    logBoot("wake lock acquired");
   } catch (err) {
-    console.error('Failed to acquire wake lock:', err);
+    console.error("Failed to acquire wake lock:", err);
   }
 }
 
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') {
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") {
     void requestWakeLock();
   }
 });
 
-window.addEventListener('focus', () => {
+window.addEventListener("focus", () => {
   void requestWakeLock();
 });
 
-window.addEventListener('storage', (event) => {
+window.addEventListener("storage", (event) => {
   if (event.key === wakeLockEnabledStorageKey) {
     void requestWakeLock();
   }
@@ -157,7 +161,7 @@ window.addEventListener('storage', (event) => {
 void requestWakeLock();
 
 const elements = getAppElements();
-logBoot('dom elements resolved');
+logBoot("dom elements resolved");
 renderFontSizeControls();
 
 const params = new URLSearchParams(window.location.search);
@@ -184,21 +188,23 @@ function applyCurrentSessionSettings(sessions: SessionSummary[]) {
   applyAnsiTheme(current.ansi_theme);
 }
 
-applyAnsiTheme('classic');
+applyAnsiTheme("classic");
 
-if (!params.get('session_id')) {
-  fetchWithToken('/api/sessions')
+if (!params.get("session_id")) {
+  fetchWithToken("/api/sessions")
     .then((res) => res.json())
     .then((sessions: SessionSummary[]) => {
       const firstSessionID = sessions[0]?.id;
       if (!firstSessionID) return;
-      params.set('session_id', String(firstSessionID));
+      params.set("session_id", String(firstSessionID));
       window.location.search = params.toString();
     })
-    .catch((err) => console.error('Failed to pick default session:', err));
+    .catch((err) => console.error("Failed to pick default session:", err));
 }
 
-const sessionID = params.get('session_id') ? parseInt(params.get('session_id')!, 10) : undefined;
+const sessionID = params.get("session_id")
+  ? parseInt(params.get("session_id")!, 10)
+  : undefined;
 
 function currentHotkeysViewportWidth(): number {
   return Math.round(window.visualViewport?.width || window.innerWidth);
@@ -207,28 +213,32 @@ function currentHotkeysViewportWidth(): number {
 const history = new InputHistory();
 const reverseSearchController = new ReverseSearchController({
   input: elements.input,
-  inputWrap: elements.input.closest('.input-wrap') as HTMLElement | null,
+  inputWrap: elements.input.closest(".input-wrap") as HTMLElement | null,
   searcher: history,
 });
-logBoot('history initialized');
+logBoot("history initialized");
 
 let socket = createSocket(sessionID);
 let reconnectTimer: number | null = null;
 let reconnectAttempts = 0;
 let lastHotkeysViewportWidth = currentHotkeysViewportWidth();
-let connectionStatus = 'connecting';
+let connectionStatus = "connecting";
 let logCatchupInFlight = false;
 let logCatchupQueued = false;
 let restoreCursor = 0;
 let restoreCursorKnown = false;
-logBoot('socket created', { readyState: socket.readyState, url: socket.url, sessionID });
+logBoot("socket created", {
+  readyState: socket.readyState,
+  url: socket.url,
+  sessionID,
+});
 
 const ansiUp = new AnsiUp();
 ansiUp.use_classes = true;
-logBoot('ansi initialized');
+logBoot("ansi initialized");
 
 const state = {
-  activePanel: null as 'keyboard' | 'variables' | 'groups' | null,
+  activePanel: null as "keyboard" | "variables" | "groups" | null,
   restoreInProgress: false,
 };
 
@@ -243,16 +253,16 @@ const onButtonRendered = (btn: any, el: HTMLButtonElement) => {
   autoButtonIndex = (autoButtonIndex + 1) % 10;
   const index = autoButtonIndex;
 
-  const hint = document.createElement('span');
-  hint.className = 'button-hotkey-hint';
+  const hint = document.createElement("span");
+  hint.className = "button-hotkey-hint";
   hint.textContent = `Alt+${index}`;
   el.prepend(hint);
 
   autoButtons[index] = () => {
     if (el.disabled) return;
     el.click();
-    el.classList.add('trigger-button_active');
-    setTimeout(() => el.classList.remove('trigger-button_active'), 500);
+    el.classList.add("trigger-button_active");
+    setTimeout(() => el.classList.remove("trigger-button_active"), 500);
   };
 };
 
@@ -260,13 +270,25 @@ function isEditableElement(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   if (target instanceof HTMLInputElement) {
     const type = target.type.toLowerCase();
-    return type !== 'button' && type !== 'checkbox' && type !== 'radio' && type !== 'range' && type !== 'submit';
+    return (
+      type !== "button" &&
+      type !== "checkbox" &&
+      type !== "radio" &&
+      type !== "range" &&
+      type !== "submit"
+    );
   }
-  return target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement || target.isContentEditable;
+  return (
+    target instanceof HTMLTextAreaElement ||
+    target instanceof HTMLSelectElement ||
+    target.isContentEditable
+  );
 }
 
 function isPrintableKey(event: KeyboardEvent): boolean {
-  return event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey;
+  return (
+    event.key.length === 1 && !event.ctrlKey && !event.metaKey && !event.altKey
+  );
 }
 
 function insertInputText(text: string) {
@@ -296,9 +318,16 @@ function applyHistoryValue(value: string) {
   elements.input.setSelectionRange(length, length);
 }
 
+// Replace the command input with a value and focus it, WITHOUT sending — used by
+// the map pane's "click a room → route into the input" feature so the user can
+// review/edit/send. Mirrors applyHistoryValue's focus+caret behavior.
+function setInputText(value: string) {
+  applyHistoryValue(value);
+}
+
 function renderHistorySuggestions(query: string, hide = false) {
   const container = elements.historySuggestions;
-  container.innerHTML = '';
+  container.innerHTML = "";
 
   if (hide) {
     container.hidden = true;
@@ -312,12 +341,12 @@ function renderHistorySuggestions(query: string, hide = false) {
   }
 
   matches.forEach((match) => {
-    const button = document.createElement('button');
-    button.className = 'history-suggestion';
-    button.type = 'button';
+    const button = document.createElement("button");
+    button.className = "history-suggestion";
+    button.type = "button";
     button.textContent = match;
     button.title = match;
-    button.addEventListener('click', () => {
+    button.addEventListener("click", () => {
       applyHistoryValue(match);
       renderHistorySuggestions(match, true);
     });
@@ -336,7 +365,7 @@ function syncHistoryFromStorage() {
   renderHistorySuggestions(elements.input.value);
 }
 
-window.addEventListener('storage', (event) => {
+window.addEventListener("storage", (event) => {
   if (event.key === commandHistoryStorageKey) {
     syncHistoryFromStorage();
   }
@@ -349,9 +378,9 @@ function requestVariables() {
   }
   // /resolved is the canonical source: declared vars + defaults + session overrides
   fetchWithToken(`/api/sessions/${sessionID}/variables/resolved`)
-    .then(res => res.json())
-    .then(data => renderer.renderVariables(data))
-    .catch(err => console.error('Failed to sync variables:', err));
+    .then((res) => res.json())
+    .then((data) => renderer.renderVariables(data))
+    .catch((err) => console.error("Failed to sync variables:", err));
 }
 
 function requestHotkeys() {
@@ -361,12 +390,12 @@ function requestHotkeys() {
     return;
   }
   fetchWithToken(`/api/sessions/${sessionID}/hotkeys`)
-    .then(res => res.json())
+    .then((res) => res.json())
     .then((data: Hotkey[]) => {
       configuredHotkeys = data || [];
       renderer.renderHotkeys(configuredHotkeys);
     })
-    .catch(err => console.error('Failed to sync hotkeys:', err));
+    .catch((err) => console.error("Failed to sync hotkeys:", err));
 }
 
 function requestGroups() {
@@ -375,38 +404,41 @@ function requestGroups() {
     return;
   }
   fetchWithToken(`/api/sessions/${sessionID}/groups`)
-    .then(res => res.json())
-    .then(data => renderer.renderGroups(data))
-    .catch(err => console.error('Failed to sync groups:', err));
+    .then((res) => res.json())
+    .then((data) => renderer.renderGroups(data))
+    .catch((err) => console.error("Failed to sync groups:", err));
 }
 
 function toggleGroup(groupName: string, enabled: boolean) {
   if (!sessionID) return;
-  fetchWithToken(`/api/sessions/${sessionID}/groups/${encodeURIComponent(groupName)}/toggle`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled })
-  }).then(() => requestGroups());
+  fetchWithToken(
+    `/api/sessions/${sessionID}/groups/${encodeURIComponent(groupName)}/toggle`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    },
+  ).then(() => requestGroups());
 }
 
 function nextClientCommandID(): string {
   return `cmd-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
-function sendCommand(value: string, source = 'input'): boolean {
+function sendCommand(value: string, source = "input"): boolean {
   if (!sessionID) {
-    renderer.appendEntry({ text: '[no session selected]' });
-    updateConnectionStatus('no session');
+    renderer.appendEntry({ text: "[no session selected]" });
+    updateConnectionStatus("no session");
     return false;
   }
 
   if (socket.readyState !== WebSocket.OPEN) {
-    renderer.appendEntry({ text: '[disconnected]' });
-    updateConnectionStatus('disconnected');
+    renderer.appendEntry({ text: "[disconnected]" });
+    updateConnectionStatus("disconnected");
     return false;
   }
 
-  if (connectionStatus !== 'connected') {
+  if (connectionStatus !== "connected") {
     renderer.appendEntry({ text: `[${connectionStatus}]` });
     return false;
   }
@@ -436,6 +468,7 @@ const renderer = createRenderer({
   state,
   sessionID,
   getActiveMapSetID: () => activeMapSetID,
+  setInputText,
 });
 renderer.loadLayout();
 
@@ -444,7 +477,9 @@ renderer.loadLayout();
 async function refreshActiveMapSet(): Promise<void> {
   if (!sessionID) return;
   try {
-    const res = await fetchWithToken(`/api/sessions/${sessionID}/active-map-set`);
+    const res = await fetchWithToken(
+      `/api/sessions/${sessionID}/active-map-set`,
+    );
     if (!res.ok) return;
     const data: { active_map_set_id: number | null } = await res.json();
     const next = data.active_map_set_id ?? null;
@@ -453,14 +488,17 @@ async function refreshActiveMapSet(): Promise<void> {
       renderer.reloadMapPanes();
     }
   } catch (err) {
-    console.warn('Failed to fetch active map set', err);
+    console.warn("Failed to fetch active map set", err);
   }
 }
 void refreshActiveMapSet();
-logBoot('renderer initialized');
+logBoot("renderer initialized");
 
 function latestEntryID(entries: LogEntry[], fallback: number): number {
-  return entries.reduce((latest, entry) => entry.id && entry.id > latest ? entry.id : latest, fallback);
+  return entries.reduce(
+    (latest, entry) => (entry.id && entry.id > latest ? entry.id : latest),
+    fallback,
+  );
 }
 
 async function requestLogCatchup() {
@@ -472,7 +510,11 @@ async function requestLogCatchup() {
   }
 
   const usingRestoreCursor = restoreCursorKnown;
-  const cursor = safeCatchupCursor(renderer.latestEntryID(), restoreCursor, restoreCursorKnown);
+  const cursor = safeCatchupCursor(
+    renderer.latestEntryID(),
+    restoreCursor,
+    restoreCursorKnown,
+  );
   if (cursor === null) return;
   let afterID = cursor;
 
@@ -482,9 +524,11 @@ async function requestLogCatchup() {
   }
   try {
     for (let page = 0; page < 20; page += 1) {
-      const res = await fetchWithToken(`/api/sessions/${sessionID}/logs/live?after_id=${afterID}&limit=1000`);
+      const res = await fetchWithToken(
+        `/api/sessions/${sessionID}/logs/live?after_id=${afterID}&limit=1000`,
+      );
       if (!res.ok) {
-        throw new Error(await res.text() || res.statusText);
+        throw new Error((await res.text()) || res.statusText);
       }
       const data: LiveLogsResponse = await res.json();
       const entries = data.entries || [];
@@ -505,7 +549,7 @@ async function requestLogCatchup() {
     if (usingRestoreCursor) {
       restoreCursorKnown = true;
     }
-    console.error('Failed to catch up logs:', err);
+    console.error("Failed to catch up logs:", err);
   } finally {
     logCatchupInFlight = false;
     if (logCatchupQueued) {
@@ -515,13 +559,13 @@ async function requestLogCatchup() {
   }
 }
 
-fetchWithToken('/api/sessions')
+fetchWithToken("/api/sessions")
   .then((res) => res.json())
   .then((sessions: SessionSummary[]) => {
     applyCurrentSessionSettings(sessions);
     renderer.refreshAnsiTheme();
   })
-  .catch((err) => console.error('Failed to load sessions for settings:', err));
+  .catch((err) => console.error("Failed to load sessions for settings:", err));
 
 function clearReconnectTimer() {
   if (reconnectTimer === null) {
@@ -539,26 +583,30 @@ function updateConnectionStatus(status: string) {
 
 async function connectMudSession() {
   if (!sessionID) {
-    updateConnectionStatus('no session');
+    updateConnectionStatus("no session");
     return;
   }
 
   clearReconnectTimer();
-  updateConnectionStatus('connecting');
+  updateConnectionStatus("connecting");
   try {
-    const res = await fetchWithToken(`/api/sessions/${sessionID}/connect`, { method: 'POST' });
+    const res = await fetchWithToken(`/api/sessions/${sessionID}/connect`, {
+      method: "POST",
+    });
     if (!res.ok) {
-      throw new Error(await res.text() || res.statusText);
+      throw new Error((await res.text()) || res.statusText);
     }
     if (socket.readyState === WebSocket.OPEN) {
-      socket.send(JSON.stringify({ method: 'attach', sess_id: sessionID }));
+      socket.send(JSON.stringify({ method: "attach", sess_id: sessionID }));
     } else {
       connectSocket();
     }
   } catch (err) {
-    console.error('Failed to connect session:', err);
-    updateConnectionStatus('disconnected');
-    renderer.appendEntry({ text: `[connect failed: ${err instanceof Error ? err.message : String(err)}]` });
+    console.error("Failed to connect session:", err);
+    updateConnectionStatus("disconnected");
+    renderer.appendEntry({
+      text: `[connect failed: ${err instanceof Error ? err.message : String(err)}]`,
+    });
   }
 }
 
@@ -583,7 +631,7 @@ function attachSocketHandlers(target: WebSocket) {
 
     clearReconnectTimer();
     reconnectAttempts = 0;
-    logBoot('socket open');
+    logBoot("socket open");
     elements.input.focus();
   };
 
@@ -592,24 +640,27 @@ function attachSocketHandlers(target: WebSocket) {
       return;
     }
 
-    logBoot('socket message received', { length: event.data.length });
+    logBoot("socket message received", { length: event.data.length });
     const message: ServerMessage = JSON.parse(event.data);
-    logBoot('socket message parsed', { type: message.type });
+    logBoot("socket message parsed", { type: message.type });
 
-    if (message.type === 'status') {
-      updateConnectionStatus(message.status || 'connected');
+    if (message.type === "status") {
+      updateConnectionStatus(message.status || "connected");
     }
 
-    if (message.type === 'restore_begin') {
-      logBoot('restore begin', {
+    if (message.type === "restore_begin") {
+      logBoot("restore begin", {
         history: message.history?.length || 0,
         hotkeys: message.hotkeys?.length || 0,
         variables: message.variables?.length || 0,
-        buffers: Object.keys(message.buffers || {}).join(', ') || 'none',
+        buffers: Object.keys(message.buffers || {}).join(", ") || "none",
         restoreCursor: message.restore_cursor || 0,
       });
       restoreCursor = message.restore_cursor || 0;
-      restoreCursorKnown = Object.prototype.hasOwnProperty.call(message, 'restore_cursor');
+      restoreCursorKnown = Object.prototype.hasOwnProperty.call(
+        message,
+        "restore_cursor",
+      );
       state.restoreInProgress = true;
       renderer.clearOutput();
       renderer.setAvailableBuffers(Object.keys(message.buffers || {}));
@@ -625,23 +676,25 @@ function attachSocketHandlers(target: WebSocket) {
       }
     }
 
-    if (message.type === 'tick' && message.timers) {
+    if (message.type === "tick" && message.timers) {
       renderer.renderTimers(message.timers);
     }
 
-    if (message.type === 'restore_chunk') {
-      logBoot('restore chunk (legacy)', { entries: message.entries?.length || 0 });
+    if (message.type === "restore_chunk") {
+      logBoot("restore chunk (legacy)", {
+        entries: message.entries?.length || 0,
+      });
       renderer.appendEntries(message.entries || []);
     }
 
-    if (message.type === 'restore_end') {
-      logBoot('restore end');
+    if (message.type === "restore_end") {
+      logBoot("restore end");
       state.restoreInProgress = false;
       renderer.scrollOutputToBottom();
       void requestLogCatchup();
     }
 
-    if (message.type === 'output' || message.type === 'variables') {
+    if (message.type === "output" || message.type === "variables") {
       if (lastInputAt !== null) {
         const delta = Math.round(performance.now() - lastInputAt);
         console.log(`[ping] ${delta}ms`);
@@ -649,46 +702,77 @@ function attachSocketHandlers(target: WebSocket) {
       }
     }
 
-    if (message.type === 'output') {
-      logBoot('output message', { entries: message.entries?.length || 0 });
+    if (message.type === "output") {
+      logBoot("output message", { entries: message.entries?.length || 0 });
       renderer.appendEntries(message.entries || []);
     }
 
-    if (message.type === 'variables') {
-      logBoot('variables message -> fetch resolved');
+    if (message.type === "variables") {
+      logBoot("variables message -> fetch resolved");
       requestVariables();
     }
 
-    if (message.type === 'settings.changed' && (message.settings?.domain === 'variables' || message.settings?.domain === 'profiles')) {
-      logBoot('settings changed -> request variables');
+    if (
+      message.type === "settings.changed" &&
+      (message.settings?.domain === "variables" ||
+        message.settings?.domain === "profiles")
+    ) {
+      logBoot("settings changed -> request variables");
       requestVariables();
     }
 
-    if (message.type === 'settings.changed' && (message.settings?.domain === 'hotkeys' || message.settings?.domain === 'profiles')) {
-      logBoot('settings changed -> request hotkeys');
+    if (
+      message.type === "settings.changed" &&
+      (message.settings?.domain === "hotkeys" ||
+        message.settings?.domain === "profiles")
+    ) {
+      logBoot("settings changed -> request hotkeys");
       requestHotkeys();
     }
 
-    if (message.type === 'command_hint' && message.entry_id && message.command) {
-      logBoot('command hint received', { id: message.entry_id, buffer: message.buffer, cmd: message.command });
-      renderer.addCommandHint(message.entry_id, message.buffer || 'main', message.command);
+    if (
+      message.type === "command_hint" &&
+      message.entry_id &&
+      message.command
+    ) {
+      logBoot("command hint received", {
+        id: message.entry_id,
+        buffer: message.buffer,
+        cmd: message.command,
+      });
+      renderer.addCommandHint(
+        message.entry_id,
+        message.buffer || "main",
+        message.command,
+      );
     }
 
-    if (message.type === 'command_trace' && message.client_command_id) {
-      logBoot('command trace received', { id: message.client_command_id, commands: message.commands });
-      renderer.resolveCommandTrace(message.client_command_id, message.commands || []);
+    if (message.type === "command_trace" && message.client_command_id) {
+      logBoot("command trace received", {
+        id: message.client_command_id,
+        commands: message.commands,
+      });
+      renderer.resolveCommandTrace(
+        message.client_command_id,
+        message.commands || [],
+      );
     }
 
     // Mapper: live tracker position → map panes update the "you are here"
     // marker, confidence badge, and (if following) re-center. `room` (current-
     // room signal) is not needed by the read-only map buffer, so it is ignored
     // here; the position broadcast carries everything the map needs.
-    if (message.type === 'room_position') {
-      renderer.handleRoomPosition(parseRoomPosition(message as unknown as RoomPositionMessage));
+    if (message.type === "room_position") {
+      renderer.handleRoomPosition(
+        parseRoomPosition(message as unknown as RoomPositionMessage),
+      );
     }
 
     // Map corpus changed (import / active-set change): map panes reload.
-    if (message.type === 'map_sets_changed' || message.type === 'rooms_changed') {
+    if (
+      message.type === "map_sets_changed" ||
+      message.type === "rooms_changed"
+    ) {
       void refreshActiveMapSet();
       renderer.reloadMapPanes();
     }
@@ -699,7 +783,7 @@ function attachSocketHandlers(target: WebSocket) {
       return;
     }
 
-    logBoot('socket error', event);
+    logBoot("socket error", event);
   };
 
   target.onclose = () => {
@@ -707,23 +791,33 @@ function attachSocketHandlers(target: WebSocket) {
       return;
     }
 
-    logBoot('socket close', { readyState: target.readyState, reconnectAttempts });
-    updateConnectionStatus('disconnected');
+    logBoot("socket close", {
+      readyState: target.readyState,
+      reconnectAttempts,
+    });
+    updateConnectionStatus("disconnected");
     if (reconnectAttempts === 0) {
-      renderer.appendEntry({ text: '[disconnected]' });
+      renderer.appendEntry({ text: "[disconnected]" });
     }
     scheduleReconnect();
   };
 }
 
 function connectSocket() {
-  if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+  if (
+    socket.readyState === WebSocket.OPEN ||
+    socket.readyState === WebSocket.CONNECTING
+  ) {
     return;
   }
 
-  updateConnectionStatus('connecting');
+  updateConnectionStatus("connecting");
   socket = createSocket(sessionID);
-  logBoot('socket reconnect created', { readyState: socket.readyState, url: socket.url, sessionID });
+  logBoot("socket reconnect created", {
+    readyState: socket.readyState,
+    url: socket.url,
+    sessionID,
+  });
   attachSocketHandlers(socket);
 }
 attachSocketHandlers(socket);
@@ -737,19 +831,25 @@ function rerenderHotkeysForViewportWidth() {
   renderer.renderHotkeys(configuredHotkeys);
 }
 
-window.addEventListener('resize', rerenderHotkeysForViewportWidth);
-window.visualViewport?.addEventListener('resize', rerenderHotkeysForViewportWidth);
+window.addEventListener("resize", rerenderHotkeysForViewportWidth);
+window.visualViewport?.addEventListener(
+  "resize",
+  rerenderHotkeysForViewportWidth,
+);
 
-window.addEventListener('keydown', (event) => {
+window.addEventListener("keydown", (event) => {
   if (reverseSearchController.handleGlobalKeydown(event)) {
     return;
   }
 
   const match = matchHotkey(event, configuredHotkeys);
   if (match) {
-    logBoot('hotkey matched', { shortcut: match.shortcut, command: match.command });
+    logBoot("hotkey matched", {
+      shortcut: match.shortcut,
+      command: match.command,
+    });
     event.preventDefault();
-    sendCommand(match.command, 'key');
+    sendCommand(match.command, "key");
     return;
   }
 
@@ -766,7 +866,7 @@ window.addEventListener('keydown', (event) => {
   // Handle Alt+0..9 for auto-buttons.
   // Use event.code (layout-independent) because on macOS event.key for Alt+digit
   // produces special characters (¡, ™, …) instead of the digit character.
-  if (event.altKey && event.code >= 'Digit0' && event.code <= 'Digit9') {
+  if (event.altKey && event.code >= "Digit0" && event.code <= "Digit9") {
     const index = parseInt(event.code.slice(5), 10); // 'Digit3' → 3
     if (autoButtons[index]) {
       event.preventDefault();
@@ -774,75 +874,86 @@ window.addEventListener('keydown', (event) => {
       return;
     }
   }
-
 });
 
-elements.keyboardToggle.addEventListener('click', () => renderer.setActivePanel('keyboard'));
-elements.variablesToggle.addEventListener('click', () => renderer.setActivePanel('variables'));
-elements.groupsToggle.addEventListener('click', () => renderer.setActivePanel('groups'));
-elements.settingsToggle.addEventListener('click', () => window.open('/settings', 'settings'));
-elements.historyUp.addEventListener('click', () => {
+elements.keyboardToggle.addEventListener("click", () =>
+  renderer.setActivePanel("keyboard"),
+);
+elements.variablesToggle.addEventListener("click", () =>
+  renderer.setActivePanel("variables"),
+);
+elements.groupsToggle.addEventListener("click", () =>
+  renderer.setActivePanel("groups"),
+);
+elements.settingsToggle.addEventListener("click", () =>
+  window.open("/settings", "settings"),
+);
+elements.historyUp.addEventListener("click", () => {
   reverseSearchController.reset();
   applyHistoryValue(history.up(elements.input.value));
   renderHistorySuggestions(elements.input.value, true);
 });
-elements.historyDown.addEventListener('click', () => {
+elements.historyDown.addEventListener("click", () => {
   reverseSearchController.reset();
   applyHistoryValue(history.down(elements.input.value));
   renderHistorySuggestions(elements.input.value, true);
 });
-fontSizeDecreaseButton.addEventListener('click', () => {
+fontSizeDecreaseButton.addEventListener("click", () => {
   applyFontSize(currentFontSize - 1);
   renderFontSizeControls();
 });
-fontSizeIncreaseButton.addEventListener('click', () => {
+fontSizeIncreaseButton.addEventListener("click", () => {
   applyFontSize(currentFontSize + 1);
   renderFontSizeControls();
 });
-elements.connectionStatus.addEventListener('click', () => {
-  if (connectionStatus !== 'disconnected') {
+elements.connectionStatus.addEventListener("click", () => {
+  if (connectionStatus !== "disconnected") {
     return;
   }
 
   void connectMudSession();
 });
 
-elements.panesContainer.addEventListener('click', (event) => {
+elements.panesContainer.addEventListener("click", (event) => {
   const selection = window.getSelection();
   if (selection && selection.toString()) {
     return;
   }
 
-  if ((event.target as HTMLElement | null)?.closest('button, input, select, textarea')) {
+  if (
+    (event.target as HTMLElement | null)?.closest(
+      "button, input, select, textarea",
+    )
+  ) {
     return;
   }
 
   elements.input.focus();
 });
-logBoot('event listeners attached');
+logBoot("event listeners attached");
 
-window.addEventListener('focus', () => {
-  logBoot('window focus -> request variables');
+window.addEventListener("focus", () => {
+  logBoot("window focus -> request variables");
   syncHistoryFromStorage();
   requestVariables();
   void requestLogCatchup();
   elements.input.focus();
 });
-document.addEventListener('visibilitychange', () => {
-  logBoot('visibility change', { hidden: document.hidden });
+document.addEventListener("visibilitychange", () => {
+  logBoot("visibility change", { hidden: document.hidden });
   if (!document.hidden) {
     syncHistoryFromStorage();
     requestVariables();
     void requestLogCatchup();
   }
 });
-elements.input.addEventListener('keydown', (event) => {
+elements.input.addEventListener("keydown", (event) => {
   if (reverseSearchController.handleInputKeydown(event)) {
     renderHistorySuggestions(elements.input.value, true);
     return;
   }
 
-  if (event.key === 'ArrowUp') {
+  if (event.key === "ArrowUp") {
     event.preventDefault();
     elements.input.value = history.up(elements.input.value);
     const length = elements.input.value.length;
@@ -851,7 +962,7 @@ elements.input.addEventListener('keydown', (event) => {
     return;
   }
 
-  if (event.key === 'ArrowDown') {
+  if (event.key === "ArrowDown") {
     event.preventDefault();
     elements.input.value = history.down(elements.input.value);
     const length = elements.input.value.length;
@@ -860,35 +971,35 @@ elements.input.addEventListener('keydown', (event) => {
     return;
   }
 
-  if (event.key !== 'Enter') return;
+  if (event.key !== "Enter") return;
 
   const value = elements.input.value.trim();
-  logBoot('input enter', { value, readyState: socket.readyState });
+  logBoot("input enter", { value, readyState: socket.readyState });
 
   if (value) {
     history.push(value);
   }
 
-  if (sendCommand(value, 'input')) {
+  if (sendCommand(value, "input")) {
     history.resetNavigation();
     reverseSearchController.reset();
-    elements.input.value = '';
-    renderHistorySuggestions('', true);
+    elements.input.value = "";
+    renderHistorySuggestions("", true);
   }
 });
 
-elements.input.addEventListener('input', () => {
+elements.input.addEventListener("input", () => {
   history.resetNavigation();
   reverseSearchController.reset();
   renderHistorySuggestions(elements.input.value);
 });
 
-elements.input.addEventListener('focus', () => {
+elements.input.addEventListener("focus", () => {
   renderHistorySuggestions(elements.input.value);
 });
 
-elements.input.addEventListener('blur', () => {
-  window.setTimeout(() => renderHistorySuggestions('', true), 120);
+elements.input.addEventListener("blur", () => {
+  window.setTimeout(() => renderHistorySuggestions("", true), 120);
 });
 
-logBoot('main ready');
+logBoot("main ready");

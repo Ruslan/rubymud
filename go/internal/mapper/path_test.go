@@ -226,6 +226,50 @@ func TestFindPathFlagsDoor(t *testing.T) {
 	}
 }
 
+// TestFindPathEnglishDir guards the new PathStep.Dir field: every grid hop
+// carries its canonical LOWERCASE ENGLISH letter (n/s/e/w/u/d) so the REST
+// map-path endpoint can emit a "w;e;s;n"-style walk for the command input. Uses
+// all four planar directions + up/down.
+func TestFindPathEnglishDir(t *testing.T) {
+	// Start at center (1,1,0). Neighbors: N=(0,1) S=(2,1) W=(1,0) E=(1,2),
+	// plus U=(1,1,1) D=(1,1,-1). We route S then E then U from a chain.
+	// Build a small L-shaped chain: A(1,1,0)-S->B(2,1,0)-E->C(2,2,0)-U->D(2,2,1).
+	rooms := []storage.Room{
+		mkRoom("Z", 1, 1, 0, 1, "A", "a", "S", chMask("S")),
+		mkRoom("Z", 2, 1, 0, 2, "B", "b", "N E", chMask("N", "E")),
+		mkRoom("Z", 2, 2, 0, 3, "C", "c", "W U", chMask("W", "U")),
+		mkRoom("Z", 2, 2, 1, 4, "D", "d", "D", chMask("D")),
+	}
+	idx := BuildIndex(1, rooms)
+	res := idx.FindPath(Coord{"Z", 1, 1, 0}, func(r *IndexRoom) bool { return r.Hint == "D" })
+	if !res.Reachable || len(res.Steps) != 3 {
+		t.Fatalf("expected 3-step route to D: %+v", res)
+	}
+	got := []string{res.Steps[0].Dir, res.Steps[1].Dir, res.Steps[2].Dir}
+	want := []string{"s", "e", "u"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("step %d Dir = %q, want %q (canonical lowercase english)", i, got[i], want[i])
+		}
+	}
+}
+
+// TestFindPathSeamDirEmpty: a seam hop has no single letter, so Dir stays "".
+func TestFindPathSeamDirEmpty(t *testing.T) {
+	rooms := []storage.Room{
+		mkRoom("A", 0, 0, 0, 1, "Берег", "shore", "E", 4, withAutomaps("B|на восток|50")),
+		mkRoom("B", 9, 9, 0, 50, "Море", "sea", "N", 0),
+	}
+	idx := BuildIndex(1, rooms)
+	res := idx.FindPath(Coord{"A", 0, 0, 0}, func(r *IndexRoom) bool { return r.Zone == "B" })
+	if !res.Reachable || len(res.Steps) != 1 {
+		t.Fatalf("seam route wrong: %+v", res)
+	}
+	if res.Steps[0].Dir != "" {
+		t.Errorf("seam step Dir = %q, want empty (no single letter for a seam)", res.Steps[0].Dir)
+	}
+}
+
 func TestFindPathSeamCrossing(t *testing.T) {
 	rooms := []storage.Room{
 		mkRoom("A", 0, 0, 0, 1, "Берег", "shore", "E", 4, withAutomaps("B|на восток|50")),

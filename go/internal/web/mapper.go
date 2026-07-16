@@ -315,6 +315,130 @@ func (s *Server) anchorMapPosition(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]any{"ok": true, "exact": exact})
 }
 
+// mapPath handles POST /api/sessions/{sessionID}/map-path with body
+// {to:{zone,x,y,l}} — the REST equivalent of the "click a room to route there"
+// map interaction. It computes a fewest-steps route from the tracker's CURRENT
+// position (mirroring MCP mud_path's from-current-position case) and returns the
+// route as canonical LOWERCASE ENGLISH direction tokens (n/s/e/w/u/d), one per
+// server step, so the UI can join them with ';' and drop them into the command
+// input. A seam hop has no single letter, so it emits the seam's MUD command for
+// that step and is flagged. Soft-fails (200 with {reachable:false,reason}) when
+// there is no session/tracker/position or the target is a DT — never 500.
+func (s *Server) mapPath(w http.ResponseWriter, r *http.Request) {
+	_, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, "invalid session id", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		To struct {
+			Zone string `json:"zone"`
+			X    int    `json:"x"`
+			Y    int    `json:"y"`
+			L    int    `json:"l"`
+		} `json:"to"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	sess, ok := s.manager.GetSession(id)
+	if !ok {
+		writeJSON(w, map[string]any{"reachable": false, "reason": "session not connected — no live tracker"})
+		return
+	}
+	to := mapper.Coord{Zone: body.To.Zone, X: body.To.X, Y: body.To.Y, L: body.To.L}
+	var resp map[string]any
+	found := sess.WithMapTracker(func(t *mapper.Tracker) {
+		idx := t.Index()
+		if idx == nil {
+			resp = map[string]any{"reachable": false, "reason": "no active map set for this session"}
+			return
+		}
+		pos := t.Position()
+		if pos.Confidence == mapper.Red || !pos.Valid {
+			resp = map[string]any{"reachable": false, "reason": "position lost — use \"I'm here\" to re-anchor"}
+			return
+		}
+		// Clicking the current room: nothing to walk.
+		if pos.Coord == to {
+			resp = map[string]any{"reachable": true, "directions": []string{}, "summary": "already here", "here": true}
+			return
+		}
+		res := idx.FindPath(pos.Coord, func(rm *mapper.IndexRoom) bool {
+			return rm.Zone == to.Zone && rm.X == to.X && rm.Y == to.Y && rm.L == to.L
+		})
+		resp = pathResultJSON(res)
+	})
+	if !found {
+		writeJSON(w, map[string]any{"reachable": false, "reason": "no active map set for this session"})
+		return
+	}
+	writeJSON(w, resp)
+}
+
+// pathResultJSON renders a mapper.PathResult as the map-path endpoint's JSON.
+// Each grid hop emits its canonical lowercase English letter; a seam hop (no
+// single letter) emits the seam's MUD command so the joined string still walks
+// correctly. dt/seam markers are surfaced for the UI to warn on.
+func pathResultJSON(res mapper.PathResult) map[string]any {
+	if res.DTTarget {
+		return map[string]any{"reachable": false, "dt": true, "reason": "target is a death trap"}
+	}
+	if !res.Reachable {
+		reason := res.Reason
+		if reason == "" {
+			reason = "no route to target in the active set"
+		}
+		return map[string]any{"reachable": false, "reason": reason}
+	}
+	dirs := make([]string, 0, len(res.Steps))
+	seams := 0
+	dt := 0
+	doors := 0
+	for _, st := range res.Steps {
+		if st.Seam {
+			seams++
+			// No single letter for a seam — emit its MUD command so the joined
+			// walk still works. UI treats it as an opaque token.
+			dirs = append(dirs, st.Command)
+		} else {
+			dirs = append(dirs, st.Dir)
+		}
+		if st.IsDT {
+			dt++
+		}
+		if st.Door {
+			doors++
+		}
+	}
+	summary := fmt.Sprintf("%d step(s)", len(res.Steps))
+	if seams > 0 {
+		summary += fmt.Sprintf(", %d seam(s)", seams)
+	}
+	if doors > 0 {
+		summary += fmt.Sprintf(", %d door(s)", doors)
+	}
+	if dt > 0 {
+		summary += fmt.Sprintf(", ⚠ %d death trap(s) on path", dt)
+	}
+	out := map[string]any{
+		"reachable":  true,
+		"directions": dirs,
+		"summary":    summary,
+	}
+	if seams > 0 {
+		out["seams"] = seams
+	}
+	if dt > 0 {
+		out["dt"] = true
+	}
+	if doors > 0 {
+		out["doors"] = doors
+	}
+	return out
+}
+
 // optionalSessionID reads a session id from ?session_id= for best-effort
 // broadcast targeting. Returns 0 when absent/invalid.
 func (s *Server) optionalSessionID(r *http.Request) int64 {
