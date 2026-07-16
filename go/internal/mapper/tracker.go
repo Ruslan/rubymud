@@ -137,14 +137,23 @@ func (t *Tracker) CancelHead() bool {
 	return true
 }
 
-// RefusalPhrases are the substrings that signal a blocked move ("Вы не можете
-// идти" / "не можете идти"). Matched on a stripped line by the session.
-var RefusalPhrases = []string{"не можете идти"}
+// RefusalPhrases are the substrings that signal a blocked move — the move was
+// sent but the MUD rejected it, so the pending FIFO head must be cancelled (no
+// position change). Matched on a stripped line by the session. Kept conservative
+// and specific to avoid false-positives on non-movement lines:
+//   - "не можете идти" — RMUD generic blocked move ("Вы не можете идти ...").
+//   - "дверь закрыта"  — RMUD closed-door block: the door in the walked direction
+//     is shut, so the step did not happen and the queued head must be popped
+//     (otherwise pending_moves leaks and stays stuck at >0 while position holds).
+var RefusalPhrases = []string{"не можете идти", "дверь закрыта"}
 
-// IsRefusal reports whether a stripped line is a movement refusal.
+// IsRefusal reports whether a stripped line is a movement refusal. Matching is
+// case-insensitive (the closed-door line "Дверь закрыта" is sentence-initial and
+// capitalized); the phrases are lowercase.
 func IsRefusal(stripped string) bool {
+	low := strings.ToLower(stripped)
 	for _, p := range RefusalPhrases {
-		if strings.Contains(stripped, p) {
+		if strings.Contains(low, p) {
 			return true
 		}
 	}

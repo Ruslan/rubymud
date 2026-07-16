@@ -222,3 +222,44 @@ func TestMCPPathFlagsDoorAndPipe(t *testing.T) {
 		t.Errorf("pipe run not noted on route: %q", text)
 	}
 }
+
+// TestMCPPathFlagsPresumedDoor is the live field case surfaced through mud_path:
+// hop с (north) into a cell whose SOUTH face records the door while the source
+// has no door on that face -> the route must flag it as a PRESUMED door, distinct
+// from a confirmed one, and count it separately in the summary.
+func TestMCPPathFlagsPresumedDoor(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	// (7,-4) A exits N, no door; (6,-4) B exits (S) -> door on its south face.
+	id, err := s.store.CreateMapSet(storage.MapSetInput{
+		Name: "Presumed", ZoneCount: 1, RoomCount: 2,
+		Rooms: []storage.Room{
+			{Zone: "Хилло", X: 7, Y: -4, L: 0, Tag: intPtr(1), Hint: "A", Exits: "N",
+				EDirs: `["N"]`, Doors: `[]`, Ch: 1},
+			{Zone: "Хилло", X: 6, Y: -4, L: 0, Tag: intPtr(2), Hint: "B", Exits: "(S)",
+				EDirs: `["S"]`, Doors: `["S"]`, Ch: 2},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateMapSet: %v", err)
+	}
+	s.store.SetActiveMapSetID(sess.SessionID(), id)
+	sess.LoadActiveMapSet()
+	callTool(t, s, "mud_anchor_here",
+		fmt.Sprintf(`{"session_id":%d,"zone":"Хилло","x":7,"y":-4,"l":0}`, sess.SessionID()))
+
+	res := callTool(t, s, "mud_path", fmt.Sprintf(`{"session_id":%d,"to_hint":"B"}`, sess.SessionID()))
+	text := toolText(t, res)
+	if res["isError"] == true {
+		t.Fatalf("mud_path errored: %q", text)
+	}
+	if !strings.Contains(text, "presumed door(s)") {
+		t.Errorf("summary should count presumed doors: %q", text)
+	}
+	if !strings.Contains(text, "presumed") || !strings.Contains(text, "с") {
+		t.Errorf("presumed door hop not flagged on the с step: %q", text)
+	}
+	// Must NOT report a confirmed "door(s) to open" (there is none on the source).
+	if strings.Contains(text, "door(s) to open") {
+		t.Errorf("should not report a confirmed door for a presumed-only hop: %q", text)
+	}
+}

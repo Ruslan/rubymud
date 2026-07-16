@@ -206,7 +206,7 @@ func TestFindPathPipeDirectionChangeDoesNotCollapse(t *testing.T) {
 
 func TestFindPathFlagsDoor(t *testing.T) {
 	// A --ю--> B where the ю exit from A is a DOOR ("(S)"). The step must be
-	// flagged Door so the agent opens it first.
+	// flagged Door (CONFIRMED — the source face carries it) so the agent opens it.
 	rooms := []storage.Room{
 		mkRoom("Z", 0, 0, 0, 1, "A", "a", "(S)", 0),
 		mkRoom("Z", 1, 0, 0, 2, "B", "b", "N", 0),
@@ -218,11 +218,60 @@ func TestFindPathFlagsDoor(t *testing.T) {
 	if !res.Reachable || len(res.Steps) != 1 {
 		t.Fatalf("expected 1-step route: %+v", res)
 	}
-	if !res.Steps[0].Door {
-		t.Errorf("door step should be flagged Door: %+v", res.Steps[0])
+	if !res.Steps[0].Door || res.Steps[0].DoorKind != DoorConfirmed {
+		t.Errorf("door step should be CONFIRMED: %+v", res.Steps[0])
 	}
 	if res.Steps[0].Command != "ю" {
 		t.Errorf("command = %q, want ю", res.Steps[0].Command)
+	}
+}
+
+// TestFindPathPresumedDoorFromTargetReverseFace is the live field case: hop N
+// into a cell whose SOUTH face records the door, while the SOURCE has no door on
+// N. The same physical door was recorded one-sided; the emitter must PRESUME it.
+// Mirrors Хилло (7,-4)->(6,-4) with (6,-4) doors=S walking N (N: x-1).
+func TestFindPathPresumedDoorFromTargetReverseFace(t *testing.T) {
+	rooms := []storage.Room{
+		// (7,-4) source "A" — exits N (no door recorded on this face).
+		mkRoom("Хилло", 7, -4, 0, 1, "A", "a", "N", chMask("N")),
+		// (6,-4) target "B" — records a door on its SOUTH face: exits "(S)".
+		mkRoom("Хилло", 6, -4, 0, 2, "B", "b", "(S)", chMask("S")),
+	}
+	idx := BuildIndex(1, rooms)
+	res := idx.FindPath(Coord{"Хилло", 7, -4, 0}, func(r *IndexRoom) bool {
+		return r.Hint == "B"
+	})
+	if !res.Reachable || len(res.Steps) != 1 {
+		t.Fatalf("expected 1-step route: %+v", res)
+	}
+	st := res.Steps[0]
+	if st.Command != "с" {
+		t.Errorf("command = %q, want с (north)", st.Command)
+	}
+	if st.DoorKind != DoorPresumed {
+		t.Errorf("hop with only the target's reverse face carrying the door must be PRESUMED, got %+v", st)
+	}
+	if !st.Door {
+		t.Errorf("presumed door should still set Door=true (any-door flag): %+v", st)
+	}
+}
+
+// TestFindPathNoDoorIsClean: a hop where neither face records a door has no door
+// flag of any kind.
+func TestFindPathNoDoorIsClean(t *testing.T) {
+	rooms := []storage.Room{
+		mkRoom("Z", 0, 0, 0, 1, "A", "a", "S", chMask("S")),
+		mkRoom("Z", 1, 0, 0, 2, "B", "b", "N", chMask("N")),
+	}
+	idx := BuildIndex(1, rooms)
+	res := idx.FindPath(Coord{"Z", 0, 0, 0}, func(r *IndexRoom) bool {
+		return r.Hint == "B"
+	})
+	if !res.Reachable || len(res.Steps) != 1 {
+		t.Fatalf("expected 1-step route: %+v", res)
+	}
+	if res.Steps[0].Door || res.Steps[0].DoorKind != DoorNone {
+		t.Errorf("clean hop should carry no door flag: %+v", res.Steps[0])
 	}
 }
 

@@ -270,7 +270,8 @@ func formatPath(targetDesc string, res mapper.PathResult) (string, bool) {
 	var sb strings.Builder
 	seams := 0
 	dt := 0
-	doors := 0
+	confirmedDoors := 0
+	presumedDoors := 0
 	var cmds []string
 	for _, st := range res.Steps {
 		if st.Seam {
@@ -279,27 +280,36 @@ func formatPath(targetDesc string, res mapper.PathResult) (string, bool) {
 		if st.IsDT {
 			dt++
 		}
-		if st.Door {
-			doors++
+		switch st.DoorKind {
+		case mapper.DoorConfirmed:
+			confirmedDoors++
+		case mapper.DoorPresumed:
+			presumedDoors++
 		}
 		cmds = append(cmds, st.Command)
 	}
 	sb.WriteString(fmt.Sprintf("Route to %s: %d command(s), %d seam(s)", targetDesc, len(res.Steps), seams))
-	if doors > 0 {
-		sb.WriteString(fmt.Sprintf(", %d door(s) to open", doors))
+	if confirmedDoors > 0 {
+		sb.WriteString(fmt.Sprintf(", %d door(s) to open", confirmedDoors))
+	}
+	if presumedDoors > 0 {
+		sb.WriteString(fmt.Sprintf(", %d presumed door(s)", presumedDoors))
 	}
 	if dt > 0 {
 		sb.WriteString(fmt.Sprintf(", WARNING %d death trap(s) on path", dt))
 	}
 	sb.WriteString("\n")
 	sb.WriteString("Commands: " + strings.Join(cmds, "; ") + "\n")
-	if doors > 0 {
-		sb.WriteString("Note: door hops are marked [DOOR] — `open` the door in that direction before moving.\n")
+	if confirmedDoors > 0 || presumedDoors > 0 {
+		sb.WriteString("Note: [DOOR] hops need `open` first; [дверь? presumed] hops record a door only on the far side — `open` there too (harmless if none). Do not blindly batch a door hop.\n")
 	}
 	for i, st := range res.Steps {
 		tag := ""
-		if st.Door {
+		switch st.DoorKind {
+		case mapper.DoorConfirmed:
 			tag += "  [DOOR — open first]"
+		case mapper.DoorPresumed:
+			tag += "  [дверь? presumed — open first]"
 		}
 		if st.Seam {
 			tag += "  [SEAM →" + st.ToZone + "]"

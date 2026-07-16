@@ -105,6 +105,39 @@ func TestTrackerHeadCancelOnRefusal(t *testing.T) {
 	}
 }
 
+// TestTrackerClosedDoorHeadCancel is the field bug: a closed-door block ("Дверь
+// закрыта") must be treated as a movement refusal so the pending FIFO head is
+// popped — otherwise pending_moves leaks and stays stuck at 1 while position
+// holds. Position must not drift.
+func TestTrackerClosedDoorHeadCancel(t *testing.T) {
+	// The closed-door line is recognized as a refusal (case-insensitive; it is
+	// sentence-initial and capitalized live).
+	if !IsRefusal("Дверь закрыта.") {
+		t.Fatal("IsRefusal should match the RU closed-door phrase 'Дверь закрыта'")
+	}
+	// A non-movement line must NOT be treated as a refusal (conservative match).
+	if IsRefusal("Вы открываете дверь на север.") {
+		t.Error("a plain door-open narration must not be treated as a refusal")
+	}
+
+	tr := NewTracker(linearIndex())
+	tr.Anchor(Coord{"Z", 0, 0, 0})
+	tr.PushMove("S") // queued a step; the door in that direction is shut
+	if tr.PendingCount() != 1 {
+		t.Fatalf("pending = %d, want 1", tr.PendingCount())
+	}
+	// The session bumper calls CancelHead when IsRefusal fires; simulate that.
+	if IsRefusal("Дверь закрыта.") {
+		tr.CancelHead()
+	}
+	if tr.PendingCount() != 0 {
+		t.Errorf("closed door should clear pending_moves, got %d", tr.PendingCount())
+	}
+	if tr.Position().Coord.X != 0 || tr.Position().Confidence != Green {
+		t.Errorf("position must not drift on a closed-door block: %+v", tr.Position())
+	}
+}
+
 func TestTrackerSpeedwalkMultiplePending(t *testing.T) {
 	tr := NewTracker(linearIndex())
 	tr.Anchor(Coord{"Z", 0, 0, 0})

@@ -6,18 +6,30 @@ import "strings"
 // over the set's rooms, DT cells hard-excluded, seams as directed edges. Output
 // is an ordered list of RU direction/command tokens for mud_send_command.
 
+// DoorKind grades whether a route hop crosses a door, and on which side the map
+// recorded it. A door is ONE physical object A↔B; hand-drawn maps often record it
+// on only one face, so the target's reverse face must also be consulted.
+type DoorKind int
+
+const (
+	DoorNone      DoorKind = iota // no door on this hop
+	DoorConfirmed                 // the SOURCE room records a door on the walked face
+	DoorPresumed                  // only the TARGET records a door on the reverse face
+)
+
 // PathStep is one emitted hop of a route — one command per ACTUAL server step.
 // A single PathStep may span several map cells when it crosses a pipe corridor
 // (the server traverses a whole pipe run with one command; see collapsePipeRuns).
 type PathStep struct {
-	Command string // RU direction ("с ю в з вв вн") or seam command ("на восток")
-	Dir     string // canonical EN direction letter for a grid hop ("n/s/e/w/u/d"); "" for a seam
-	Seam    bool   // true when this hop crosses a zone seam
-	Door    bool   // true when the departing edge is a door (agent must open first)
-	ToZone  string // target zone of the hop (the cell this step lands on)
-	Hint    string // target room hint (may be empty)
-	IsDT    bool   // target is a death trap (should never be true; DTs excluded)
-	Cells   int    // number of map cells this one command traverses (>=1)
+	Command  string   // RU direction ("с ю в з вв вн") or seam command ("на восток")
+	Dir      string   // canonical EN direction letter for a grid hop ("n/s/e/w/u/d"); "" for a seam
+	Seam     bool     // true when this hop crosses a zone seam
+	Door     bool     // true when this hop crosses a door (confirmed OR presumed)
+	DoorKind DoorKind // grade of the door on this hop (none|confirmed|presumed)
+	ToZone   string   // target zone of the hop (the cell this step lands on)
+	Hint     string   // target room hint (may be empty)
+	IsDT     bool     // target is a death trap (should never be true; DTs excluded)
+	Cells    int      // number of map cells this one command traverses (>=1)
 }
 
 // PathResult is a computed route.
@@ -30,13 +42,13 @@ type PathResult struct {
 
 // worldNeighbor is one adjacency edge from a node.
 type worldNeighbor struct {
-	to      Coord
-	command string
-	dir     string // canonical direction letter for a grid move ("" for seams)
-	seam    bool
-	door    bool // the edge is a door in this direction (from the source room)
-	toPipe  bool // the cell this edge lands on is a pipe corridor
-	toZone  string
+	to       Coord
+	command  string
+	dir      string // canonical direction letter for a grid move ("" for seams)
+	seam     bool
+	doorKind DoorKind // door grade on this edge (none|confirmed|presumed)
+	toPipe   bool     // the cell this edge lands on is a pipe corridor
+	toZone   string
 }
 
 // worldNeighbors yields exit-constrained grid neighbors + seam edges of a room,
@@ -65,13 +77,13 @@ func (idx *Index) worldNeighbors(c Coord) []worldNeighbor {
 			continue
 		}
 		out = append(out, worldNeighbor{
-			to:      nc,
-			command: DirRU(dir),
-			dir:     dir,
-			seam:    false,
-			door:    containsDir(r.Doors, dir),
-			toPipe:  nb.Pipe,
-			toZone:  nc.Zone,
+			to:       nc,
+			command:  DirRU(dir),
+			dir:      dir,
+			seam:     false,
+			doorKind: doorGrade(r, nb, dir),
+			toPipe:   nb.Pipe,
+			toZone:   nc.Zone,
 		})
 	}
 	for _, a := range r.Automaps {
@@ -92,6 +104,26 @@ func (idx *Index) worldNeighbors(c Coord) []worldNeighbor {
 		})
 	}
 	return out
+}
+
+// doorGrade classifies the door on a hop from room a to neighbor b in direction
+// dir. A door is one physical object A↔B; maps often record it on one face only:
+//   - DoorConfirmed: the source room a has a door on the walked face dir.
+//   - DoorPresumed:  a has no door on dir, but the target b records a door on the
+//     REVERSE face opposite(dir) — the same one-sided-recorded door (the live
+//     field bug: hop N into a cell whose SOUTH face carries the door).
+//   - DoorNone:      neither side records a door on this edge.
+//
+// We flag presumed generously: a false presumed is cheap ("открыть дверь" is a
+// harmless no-op when there is no door), whereas a MISSED door breaks the route.
+func doorGrade(a, b *IndexRoom, dir string) DoorKind {
+	if a != nil && containsDir(a.Doors, dir) {
+		return DoorConfirmed
+	}
+	if b != nil && containsDir(b.Doors, OppositeDir(dir)) {
+		return DoorPresumed
+	}
+	return DoorNone
 }
 
 // FindPath runs BFS from start to the first room satisfying goal. DT targets are
@@ -136,12 +168,12 @@ func (idx *Index) FindPath(start Coord, goal func(*IndexRoom) bool) PathResult {
 			}
 			target := idx.Room(nb.to)
 			rs := rawStep{
-				command: nb.command,
-				dir:     nb.dir,
-				seam:    nb.seam,
-				door:    nb.door,
-				toPipe:  nb.toPipe,
-				toZone:  nb.toZone,
+				command:  nb.command,
+				dir:      nb.dir,
+				seam:     nb.seam,
+				doorKind: nb.doorKind,
+				toPipe:   nb.toPipe,
+				toZone:   nb.toZone,
 			}
 			if target != nil {
 				rs.hint = target.Hint
@@ -173,14 +205,26 @@ func (idx *Index) FindPath(start Coord, goal func(*IndexRoom) bool) PathResult {
 
 // rawStep is one per-cell BFS edge before pipe-run collapse.
 type rawStep struct {
-	command string
-	dir     string // canonical dir letter ("" for seams)
-	seam    bool
-	door    bool
-	toPipe  bool // the cell this edge lands on is a pipe corridor
-	toZone  string
-	hint    string
-	isDT    bool
+	command  string
+	dir      string // canonical dir letter ("" for seams)
+	seam     bool
+	doorKind DoorKind
+	toPipe   bool // the cell this edge lands on is a pipe corridor
+	toZone   string
+	hint     string
+	isDT     bool
+}
+
+// strongerDoor returns the stronger door signal of two kinds: confirmed beats
+// presumed beats none (used when collapsing a pipe run that contains doors).
+func strongerDoor(a, b DoorKind) DoorKind {
+	if a == DoorConfirmed || b == DoorConfirmed {
+		return DoorConfirmed
+	}
+	if a == DoorPresumed || b == DoorPresumed {
+		return DoorPresumed
+	}
+	return DoorNone
 }
 
 // collapsePipeRuns folds a run of consecutive same-direction grid cells that pass
@@ -207,18 +251,20 @@ func collapsePipeRuns(raw []rawStep) []PathStep {
 			last.ToZone = rs.toZone
 			last.Hint = rs.hint
 			last.IsDT = last.IsDT || rs.isDT
-			last.Door = last.Door || rs.door
+			last.DoorKind = strongerDoor(last.DoorKind, rs.doorKind)
+			last.Door = last.DoorKind != DoorNone
 			continue
 		}
 		out = append(out, PathStep{
-			Command: rs.command,
-			Dir:     strings.ToLower(rs.dir),
-			Seam:    rs.seam,
-			Door:    rs.door,
-			ToZone:  rs.toZone,
-			Hint:    rs.hint,
-			IsDT:    rs.isDT,
-			Cells:   1,
+			Command:  rs.command,
+			Dir:      strings.ToLower(rs.dir),
+			Seam:     rs.seam,
+			Door:     rs.doorKind != DoorNone,
+			DoorKind: rs.doorKind,
+			ToZone:   rs.toZone,
+			Hint:     rs.hint,
+			IsDT:     rs.isDT,
+			Cells:    1,
 		})
 	}
 	return out
