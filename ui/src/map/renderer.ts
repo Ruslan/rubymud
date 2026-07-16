@@ -262,9 +262,11 @@ export class MapRenderer {
       ctx.fill();
     }
 
-    // Exit stubs (active level).
-    ctx.lineWidth = Math.max(1, 1.4 * S);
-    ctx.strokeStyle = COL.line;
+    // Exit stubs (active level). Drawn at the same thickness + bright fill as the
+    // narrow-corridor (pipe/tunnel) bars below, so simple corridors and tunnels
+    // read as one uniform connector weight.
+    ctx.lineWidth = Math.max(2, 4 * S);
+    ctx.strokeStyle = "rgba(47,138,82,.6)";
     for (const r of this.rooms) {
       if (r.l !== AL) continue;
       const cx = this.sx(r);
