@@ -27,7 +27,8 @@ type IndexRoom struct {
 	EDirs       []string // canonical exit dir letters (door markers stripped)
 	Doors       []string // door dir letters
 	Ch          int      // connectivity bitmask ChN..ChD
-	IsDT        bool
+	IsDT        bool     // EFFECTIVE death-trap: nativeIsDT || annotation dt
+	nativeIsDT  bool     // the room's own is_dt (from the map data), before overlay
 	Pipe        bool
 	ImageIndex  *int
 	Automaps    []string // "Zone|command|tag" seams
@@ -148,6 +149,7 @@ func BuildIndex(mapSetID int64, rooms []storage.Room) *Index {
 			Doors:       decodeDirs(r.Doors),
 			Ch:          r.Ch,
 			IsDT:        r.IsDT,
+			nativeIsDT:  r.IsDT,
 			Pipe:        r.Pipe,
 			ImageIndex:  r.ImageIndex,
 			Automaps:    decodeDirs(r.Automaps),
@@ -166,6 +168,42 @@ func BuildIndex(mapSetID int64, rooms []storage.Room) *Index {
 		idx.rooms = append(idx.rooms, ir)
 	}
 	return idx
+}
+
+// ApplyAnnotationDT augments the index's effective is_dt with DT flags carried by
+// room_annotations (plan §7: "DT-аннотация augment'ит rooms.is_dt"). It ORs the
+// annotation DT onto the matching IndexRoom's native is_dt so the EXISTING
+// consumers — mud_path's DT-refusal (FindPath/worldNeighbors read IndexRoom.IsDT)
+// and mud_look_map's DT display — pick it up automatically, with no separate DT
+// lookup path. Annotation DT can only ADD a death trap (true), never clear a
+// native one; a coord with no matching room is ignored (an annotation on a
+// non-existent cell has no routing effect). Call once after BuildIndex on the
+// full DT-coord set.
+func (idx *Index) ApplyAnnotationDT(dtCoords []Coord) {
+	if idx == nil {
+		return
+	}
+	for _, c := range dtCoords {
+		if r := idx.byCoord[c]; r != nil {
+			r.IsDT = true // native || true; every coord here carries annotation dt
+		}
+	}
+}
+
+// SetAnnotationDT recomputes ONE cell's effective is_dt in place from its native
+// is_dt OR'd with the given annotation DT flag — no rebuild. This is the seam for
+// a single DT-touching annotate: it handles both dt:true (add the trap) and
+// dt:false (drop back to the native value) without disturbing the tracker's
+// position, confidence, or pending queue. A coord with no matching room is a
+// no-op (dangling annotation — no routing effect). The owning session must hold
+// mapMu while calling this (the index is otherwise read-only after build).
+func (idx *Index) SetAnnotationDT(c Coord, annoDT bool) {
+	if idx == nil {
+		return
+	}
+	if r := idx.byCoord[c]; r != nil {
+		r.IsDT = r.nativeIsDT || annoDT
+	}
 }
 
 // decodeDirs decodes a JSON string array column into a slice; "" / bad => nil.

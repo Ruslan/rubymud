@@ -33,6 +33,22 @@ func (s *Session) LoadActiveMapSet() {
 			log.Printf("mapper: ListRooms(%d) failed: %v", setID, err)
 		} else {
 			idx = mapper.BuildIndex(setID, rooms)
+			// Overlay DT annotations onto the effective is_dt so mud_path's
+			// DT-refusal and mud_look_map's DT display treat an annotated cell as a
+			// death trap (plan §7). Annotations are a separate overlay path — they
+			// never fork the set; the index is rebuilt on annotations_changed.
+			annos, err := s.store.ListRoomAnnotations(setID, "")
+			if err != nil {
+				log.Printf("mapper: ListRoomAnnotations(%d) failed: %v", setID, err)
+			} else {
+				var dt []mapper.Coord
+				for _, a := range annos {
+					if a.DT {
+						dt = append(dt, mapper.Coord{Zone: a.Zone, X: a.X, Y: a.Y, L: a.L})
+					}
+				}
+				idx.ApplyAnnotationDT(dt)
+			}
 		}
 	}
 
@@ -181,6 +197,26 @@ func (s *Session) BroadcastMapPosition() {
 	if msg.Type != "" {
 		s.broadcastMsg(msg)
 	}
+}
+
+// ApplyAnnotationDT updates ONE cell's effective is_dt in the live tracker index
+// in place (native is_dt || annoDT), WITHOUT rebuilding the index — so a
+// DT-touching annotation on the current room does NOT reset the tracker's
+// position/confidence or flush the pending queue (a full reload would). Called by
+// the MCP annotate write for dt-touching annotates only. Returns false when there
+// is no tracker/index yet. Off the incoming-line hot path.
+func (s *Session) ApplyAnnotationDT(zone string, x, y, l int, annoDT bool) bool {
+	s.mapMu.Lock()
+	defer s.mapMu.Unlock()
+	if s.mapTracker == nil {
+		return false
+	}
+	idx := s.mapTracker.Index()
+	if idx == nil {
+		return false
+	}
+	idx.SetAnnotationDT(mapper.Coord{Zone: zone, X: x, Y: y, L: l}, annoDT)
+	return true
 }
 
 // ReloadActiveMapSet is the exported hook the web layer calls after changing the

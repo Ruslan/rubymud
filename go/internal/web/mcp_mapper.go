@@ -5,7 +5,23 @@ import (
 	"strings"
 
 	"rubymud/go/internal/mapper"
+	"rubymud/go/internal/session"
+	"rubymud/go/internal/storage"
 )
+
+// annotationsChangedMsg builds the light change-notification broadcast for an
+// annotation write (plan §8). It carries the map set id and the touched cell so a
+// future UI can re-render just that cell; no annotation body is included (the UI
+// re-reads). Reuses ServerMsg's existing map coordinate fields.
+func annotationsChangedMsg(mapSetID int64, c mcpCoordArg) session.ServerMsg {
+	return session.ServerMsg{
+		Type:  "annotations_changed",
+		Zone:  c.Zone,
+		RoomX: c.X,
+		RoomY: c.Y,
+		RoomL: c.L,
+	}
+}
 
 // This file implements the phase-3 mapper MCP tools: thin read-only wrappers over
 // the same backend tracker state the UI consumes, plus the gated
@@ -112,6 +128,8 @@ func (s *Server) mcpLookMap(sid int64) (string, bool) {
 		return "session not connected — no live tracker.", true
 	}
 	var sb strings.Builder
+	var annoCoord *mcpCoordArg
+	var mapSetID int64
 	found := sess.WithMapTracker(func(t *mapper.Tracker) {
 		pos := t.Position()
 		sb.WriteString(fmt.Sprintf("Confidence: %s\n", confidenceGlyph(pos.Confidence)))
@@ -120,6 +138,10 @@ func (s *Server) mcpLookMap(sid int64) (string, bool) {
 			sb.WriteString("Current room: unknown (no anchored position).\n")
 			return
 		}
+		if idx := t.Index(); idx != nil {
+			mapSetID = idx.MapSetID
+		}
+		annoCoord = &mcpCoordArg{Zone: room.Zone, X: room.X, Y: room.Y, L: room.L}
 		sb.WriteString(fmt.Sprintf("Hint: %s\n", room.Hint))
 		if room.Desc != "" {
 			sb.WriteString(fmt.Sprintf("Desc: %s\n", room.Desc))
@@ -133,6 +155,14 @@ func (s *Server) mcpLookMap(sid int64) (string, bool) {
 		sb.WriteString("Exits:\n")
 		writeExitLine(&sb, t, room)
 	})
+	// Surface the current room's annotation (if any) below the structural view.
+	// Read off the tracker lock (DB access must not run under mapMu).
+	if found && annoCoord != nil && mapSetID > 0 {
+		if anno, ok, err := s.store.GetRoomAnnotation(mapSetID, annoCoord.Zone, annoCoord.X, annoCoord.Y, annoCoord.L); err == nil && ok {
+			// showDT=false: the room-level "** DEATH TRAP **" above already covers it.
+			sb.WriteString(formatAnnotation(anno, false))
+		}
+	}
 	if !found {
 		return "No tracker for this session yet (no active map set loaded).", false
 	}
@@ -369,6 +399,169 @@ func (s *Server) mcpAnchorHere(sid int64, c mcpCoordArg) (string, bool) {
 	// Broadcast the new position to UI clients.
 	sess.BroadcastMapPosition()
 	return out, isErr
+}
+
+// annotationTimeFormat renders an annotation's updated_at unambiguously (UTC).
+const annotationTimeFormat = "2006-01-02 15:04:05 -0700"
+
+// formatAnnotation renders one annotation as a labelled block for text output.
+// Only non-empty fields are shown. showDT controls the dt line: callers that
+// already surface the cell's DEATH-TRAP status at the room level (mud_look_map)
+// pass false to avoid printing DEATH TRAP twice; the annotations reader passes
+// true so dt is visible there.
+func formatAnnotation(a storage.RoomAnnotation, showDT bool) string {
+	var sb strings.Builder
+	sb.WriteString("Annotation:\n")
+	if showDT && a.DT {
+		sb.WriteString("  dt: true (DEATH TRAP — annotated)\n")
+	}
+	if a.Hazard != "" {
+		sb.WriteString("  hazard: " + a.Hazard + "\n")
+	}
+	if a.Note != "" {
+		sb.WriteString("  note: " + a.Note + "\n")
+	}
+	if a.BattleLog != "" {
+		sb.WriteString("  battle_log: " + a.BattleLog + "\n")
+	}
+	meta := ""
+	if a.Author != "" {
+		meta = "author=" + a.Author
+	}
+	if a.UpdatedAt != nil && !a.UpdatedAt.Time.IsZero() {
+		if meta != "" {
+			meta += " "
+		}
+		meta += "updated_at=" + a.UpdatedAt.Time.UTC().Format(annotationTimeFormat)
+	}
+	if meta != "" {
+		sb.WriteString("  (" + meta + ")\n")
+	}
+	return sb.String()
+}
+
+// annotationFieldCap bounds each free-text annotation field so an agent can't
+// persist unbounded text. Over-length values are truncated (with a soft note)
+// rather than rejected — a slightly clipped note is more useful than a hard fail.
+const annotationFieldCap = 2048
+
+// capField truncates a field pointer in place to annotationFieldCap runes,
+// returning the field label if it was clipped (for a soft note), else "".
+func capField(p *string, label string) string {
+	if p == nil {
+		return ""
+	}
+	r := []rune(*p)
+	if len(r) <= annotationFieldCap {
+		return ""
+	}
+	*p = string(r[:annotationFieldCap])
+	return label
+}
+
+// mcpRoomAnnotate implements mud_room_annotate (LLM overlay write). It resolves +
+// VALIDATES the session's ACTIVE map set (in Go — a dangling active_map_set_id
+// pointing at a deleted set soft-fails, not relying on the FK), caps the
+// free-text fields, upserts the annotation for the given cell (edit-in-place,
+// partial: only provided fields change), and broadcasts annotations_changed. A
+// DT-touching annotate updates the live tracker index's effective is_dt IN PLACE
+// (no rebuild) so mud_path's DT-refusal / mud_look_map reflect it WITHOUT resetting
+// the tracker position (annotating the current room dt:true must not lose
+// position). An annotation on a cell that is not a room in the active set is still
+// written (dangling annotations are intentional) but flagged with a soft note.
+// Soft-fails (isError) when the session has no valid active map set.
+func (s *Server) mcpRoomAnnotate(sid int64, c mcpCoordArg, f storage.AnnotationFields) (string, bool) {
+	setID, ok, err := s.store.GetActiveMapSetID(sid)
+	if err != nil {
+		return "failed to resolve active map set: " + err.Error(), true
+	}
+	if !ok || setID <= 0 {
+		return "No active map set for this session — set one with mud_set_active_map_set before annotating.", true
+	}
+	// Validate the set exists in Go (the FK is not guaranteed enforced on every
+	// pooled-connection path): a dangling reference must soft-fail, not 500 or
+	// orphan a write.
+	if _, err := s.store.GetMapSet(setID); err != nil {
+		return fmt.Sprintf("Active map set %d for this session no longer exists — re-set it with mud_set_active_map_set.", setID), true
+	}
+
+	// Cap free-text fields (truncate, note which were clipped).
+	var clipped []string
+	for _, lbl := range []string{
+		capField(f.Hazard, "hazard"),
+		capField(f.Note, "note"),
+		capField(f.BattleLog, "battle_log"),
+		capField(f.Author, "author"),
+	} {
+		if lbl != "" {
+			clipped = append(clipped, lbl)
+		}
+	}
+
+	anno, err := s.store.UpsertRoomAnnotation(setID, c.Zone, c.X, c.Y, c.L, f)
+	if err != nil {
+		return "failed to write annotation: " + err.Error(), true
+	}
+
+	// Is this coord an actual room in the active set? A dangling annotation (on a
+	// not-yet-mapped cell) is intentional per spec — we still write it, but note it.
+	roomExists, err := s.store.RoomExistsInSet(setID, c.Zone, c.X, c.Y, c.L)
+	if err != nil {
+		roomExists = true // don't block on a lookup failure; skip the soft note
+	}
+
+	// Keep the tracker index in sync (AGENTS #2). A DT-touching annotate updates
+	// the ONE cell's effective is_dt in place — no rebuild — so the tracker's
+	// position/confidence and pending queue are untouched. Non-DT annotates need
+	// no index change. Always broadcast the change for any UI.
+	if sess, sok := s.manager.GetSession(sid); sok {
+		if f.DT != nil {
+			sess.ApplyAnnotationDT(c.Zone, c.X, c.Y, c.L, *f.DT)
+		}
+		sess.BroadcastServerMsg(annotationsChangedMsg(setID, c))
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Annotated cell {%s %d,%d,%d} on map set %d.\n", c.Zone, c.X, c.Y, c.L, setID))
+	if !roomExists {
+		sb.WriteString("note: no room at this cell in the active set — annotation is dangling (kept for a not-yet-mapped cell).\n")
+	}
+	if len(clipped) > 0 {
+		sb.WriteString(fmt.Sprintf("note: truncated to %d chars: %s.\n", annotationFieldCap, strings.Join(clipped, ", ")))
+	}
+	sb.WriteString(formatAnnotation(anno, true))
+	return sb.String(), false
+}
+
+// mcpRoomAnnotations implements mud_room_annotations — a read of the annotations
+// for the session's active set, optionally filtered to one zone.
+func (s *Server) mcpRoomAnnotations(sid int64, zone string) (string, bool) {
+	setID, ok, err := s.store.GetActiveMapSetID(sid)
+	if err != nil {
+		return "failed to resolve active map set: " + err.Error(), true
+	}
+	if !ok || setID <= 0 {
+		return "No active map set for this session.", true
+	}
+	rows, err := s.store.ListRoomAnnotations(setID, zone)
+	if err != nil {
+		return "failed to list annotations: " + err.Error(), true
+	}
+	var sb strings.Builder
+	scope := "all zones"
+	if zone != "" {
+		scope = fmt.Sprintf("zone %q", zone)
+	}
+	sb.WriteString(fmt.Sprintf("Map set %d annotations (%s): %d\n", setID, scope, len(rows)))
+	if len(rows) == 0 {
+		sb.WriteString("(none)\n")
+		return sb.String(), false
+	}
+	for _, a := range rows {
+		sb.WriteString(fmt.Sprintf("\n{%s %d,%d,%d}\n", a.Zone, a.X, a.Y, a.L))
+		sb.WriteString(formatAnnotation(a, true))
+	}
+	return sb.String(), false
 }
 
 // mcpSetActiveMapSet implements mud_set_active_map_set (gated write).

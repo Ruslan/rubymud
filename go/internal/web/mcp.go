@@ -282,6 +282,37 @@ func (s *Server) mcpListTools() any {
 				},
 			},
 			map[string]any{
+				"name":        "mud_room_annotate",
+				"description": "Annotate a room cell of the session's ACTIVE map set — a crowdsourced/LLM overlay stored separately from the map topology (works on frozen/imported sets; never forks). Keyed by the logical cell {zone,x,y,l}. Edit-in-place, partial update: only the fields you pass change; omitted fields are preserved. Fields: dt (mark the cell a DEATH TRAP — augments the map's is_dt so mud_path refuses routing INTO it and mud_look_map shows it DT), hazard, note, battle_log, author. To CLEAR a text field pass an empty string; to clear dt pass false. Soft-fails (isError) when the session has no active map set. An omitted session_id defaults to the first session.",
+				"inputSchema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"session_id": sessionIDProp,
+						"zone":       map[string]any{"type": "string"},
+						"x":          map[string]any{"type": "integer"},
+						"y":          map[string]any{"type": "integer"},
+						"l":          map[string]any{"type": "integer"},
+						"dt":         map[string]any{"type": "boolean", "description": "Mark/unmark the cell as a death trap. Augments the map's is_dt for mud_path/mud_look_map."},
+						"hazard":     map[string]any{"type": "string", "description": "Short hazard note (e.g. 'aggressive mob', 'no-recall'). Pass '' to clear."},
+						"note":       map[string]any{"type": "string", "description": "Free-form note. Pass '' to clear."},
+						"battle_log": map[string]any{"type": "string", "description": "Battle/observation log for the cell. Pass '' to clear."},
+						"author":     map[string]any{"type": "string", "description": "Who wrote this annotation. Pass '' to clear."},
+					},
+					"required": []string{"zone", "x", "y", "l"},
+				},
+			},
+			map[string]any{
+				"name":        "mud_room_annotations",
+				"description": "List the crowdsourced/LLM annotations of the session's active map set (dt/hazard/note/battle_log + author/updated_at per cell), optionally filtered to one zone. Read side of mud_room_annotate. An omitted session_id defaults to the first session.",
+				"inputSchema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"session_id": sessionIDProp,
+						"zone":       map[string]any{"type": "string", "description": "Optional zone filter; omit for all zones in the active set."},
+					},
+				},
+			},
+			map[string]any{
 				"name":        "mud_set_active_map_set",
 				"description": "Set the session's active map set and rebuild the tracker's in-memory index. Input {session_id?, map_set}. Returns confirmation. An omitted session_id defaults to the first session.",
 				"inputSchema": map[string]any{
@@ -776,6 +807,59 @@ func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 			break
 		}
 		content, isError = s.mcpAnchorHere(sid, mcpCoordArg{Zone: args.Zone, X: args.X, Y: args.Y, L: args.L})
+
+	case "mud_room_annotate":
+		var args struct {
+			SessionID int64   `json:"session_id"`
+			Zone      string  `json:"zone"`
+			X         int     `json:"x"`
+			Y         int     `json:"y"`
+			L         int     `json:"l"`
+			DT        *bool   `json:"dt"`
+			Hazard    *string `json:"hazard"`
+			Note      *string `json:"note"`
+			BattleLog *string `json:"battle_log"`
+			Author    *string `json:"author"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return nil, err
+		}
+		sid, err := s.mcpResolveSessionID(args.SessionID)
+		if err != nil {
+			content = err.Error()
+			isError = true
+			break
+		}
+		if strings.TrimSpace(args.Zone) == "" {
+			content = "zone is required."
+			isError = true
+			break
+		}
+		content, isError = s.mcpRoomAnnotate(sid,
+			mcpCoordArg{Zone: args.Zone, X: args.X, Y: args.Y, L: args.L},
+			storage.AnnotationFields{
+				DT:        args.DT,
+				Hazard:    args.Hazard,
+				Note:      args.Note,
+				BattleLog: args.BattleLog,
+				Author:    args.Author,
+			})
+
+	case "mud_room_annotations":
+		var args struct {
+			SessionID int64  `json:"session_id"`
+			Zone      string `json:"zone"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return nil, err
+		}
+		sid, err := s.mcpResolveSessionID(args.SessionID)
+		if err != nil {
+			content = err.Error()
+			isError = true
+			break
+		}
+		content, isError = s.mcpRoomAnnotations(sid, strings.TrimSpace(args.Zone))
 
 	case "mud_set_active_map_set":
 		var args struct {

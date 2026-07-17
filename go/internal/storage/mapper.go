@@ -371,6 +371,17 @@ func joinFields(parts []string) string {
 	return out
 }
 
+// RoomExistsInSet reports whether a room with the given logical coordinate
+// exists in the map set. Used by the annotation write to soft-note a dangling
+// annotation (one on a not-yet-mapped cell) without rejecting it.
+func (s *Store) RoomExistsInSet(mapSetID int64, zone string, x, y, l int) (bool, error) {
+	var count int64
+	err := s.db.Model(&Room{}).
+		Where("map_set_id = ? AND zone = ? AND x = ? AND y = ? AND l = ?", mapSetID, zone, x, y, l).
+		Count(&count).Error
+	return count > 0, err
+}
+
 // GetActiveMapSetID returns a session's active_map_set_id, or (0,false) when
 // unset/NULL.
 func (s *Store) GetActiveMapSetID(sessionID int64) (int64, bool, error) {
