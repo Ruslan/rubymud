@@ -274,6 +274,102 @@ func TestRESTMapPathNoTracker(t *testing.T) {
 	}
 }
 
+// postMapCellPatch hits POST /api/sessions/{id}/map-cell-patch.
+func postMapCellPatch(t *testing.T, ts *httptest.Server, token string, sid int64, body string) map[string]any {
+	t.Helper()
+	req, _ := newAuthenticatedRequest(http.MethodPost, fmt.Sprintf("%s/api/sessions/%d/map-cell-patch", ts.URL, sid),
+		strings.NewReader(body), token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST map-cell-patch: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("map-cell-patch status = %d, want 200 (soft-fail contract)", resp.StatusCode)
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	return out
+}
+
+// TestRESTMapCellPatchAddsExit: patching +U into the active set's room updates
+// its edirs + ch so a subsequent slim-room fetch shows the new exit.
+func TestRESTMapCellPatchAddsExit(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+	sid := sess.SessionID()
+
+	setID := seedTrackerSet(t, s, sid)
+	sess.LoadActiveMapSet()
+
+	// Seeded room (0,0,0) has edirs ["S"], ch=2. Add U.
+	out := postMapCellPatch(t, ts, s.apiToken, sid, `{"zone":"Z","x":0,"y":0,"l":0,"add_exits":["U"],"remove_exits":[]}`)
+	if out["ok"] != true {
+		t.Fatalf("expected ok:true, got %#v", out)
+	}
+	rooms, err := s.store.ListSlimRooms(setID, "Z")
+	if err != nil {
+		t.Fatalf("ListSlimRooms: %v", err)
+	}
+	var start *storage.SlimRoom
+	for i := range rooms {
+		if rooms[i].X == 0 && rooms[i].Y == 0 && rooms[i].L == 0 {
+			start = &rooms[i]
+		}
+	}
+	if start == nil {
+		t.Fatal("start room missing")
+	}
+	hasU := false
+	for _, d := range start.E {
+		if d == "U" {
+			hasU = true
+		}
+	}
+	if !hasU {
+		t.Errorf("expected U added to edirs, got %v", start.E)
+	}
+	if start.Ch&(1<<4) == 0 {
+		t.Errorf("expected ch U-bit set, got ch=%d", start.Ch)
+	}
+}
+
+// TestRESTMapCellPatchNoActiveSet: no active set => soft-fail ok:false, not 500.
+func TestRESTMapCellPatchNoActiveSet(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+	sess.LoadActiveMapSet() // no active set
+
+	out := postMapCellPatch(t, ts, s.apiToken, sess.SessionID(), `{"zone":"Z","x":0,"y":0,"l":0,"add_exits":["U"]}`)
+	if out["ok"] != false {
+		t.Fatalf("expected ok:false with no active set, got %#v", out)
+	}
+}
+
+// TestRESTMapCellPatchRoomNotFound: unknown room => soft-fail ok:false.
+func TestRESTMapCellPatchRoomNotFound(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+	sid := sess.SessionID()
+
+	seedTrackerSet(t, s, sid)
+	sess.LoadActiveMapSet()
+
+	out := postMapCellPatch(t, ts, s.apiToken, sid, `{"zone":"Z","x":42,"y":42,"l":0,"add_exits":["U"]}`)
+	if out["ok"] != false {
+		t.Fatalf("expected ok:false for unknown room, got %#v", out)
+	}
+	if reason, _ := out["reason"].(string); !strings.Contains(reason, "not found") {
+		t.Fatalf("expected not-found reason, got %q", reason)
+	}
+}
+
 func TestRESTMapAnchorNoTracker(t *testing.T) {
 	s, sess := setupMcpTestServer(t)
 	ts := httptest.NewServer(s.httpServer.Handler)

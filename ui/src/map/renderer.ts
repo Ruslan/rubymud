@@ -92,7 +92,7 @@ export class MapRenderer {
 
   // Callbacks the pane controller wires up.
   onSeamClick?: (target: ReturnType<typeof firstSeam>, room: SlimRoom) => void;
-  onRoomClick?: (room: SlimRoom) => void;
+  onRoomClick?: (room: SlimRoom, clientX: number, clientY: number) => void;
   onRoomHover?: (
     room: SlimRoom | null,
     clientX: number,
@@ -474,14 +474,13 @@ export class MapRenderer {
         const r = this.roomAt(px, py);
         if (!r) return;
         // A seam room keeps its cross-zone navigation on click (the amber-ring
-        // glyph advertises it). A plain (non-seam) room routes the player there:
-        // the pane controller computes a path from the live position and drops it
-        // into the command input.
+        // glyph advertises it). A plain (non-seam) room opens the cell context
+        // menu at the click position (route here / anchor / update from live).
         const seam = firstSeam(r);
         if (seam) {
           this.onSeamClick?.(seam, r);
         } else {
-          this.onRoomClick?.(r);
+          this.onRoomClick?.(r, e.clientX, e.clientY);
         }
       },
       { signal },

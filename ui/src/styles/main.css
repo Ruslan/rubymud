@@ -11,7 +11,9 @@ body {
   color: #e8edf2;
   /* Integer-pixel line-height: a fractional one (16px × 1.4 = 22.4px) makes
      output line spacing wobble by 1px as glyphs snap to whole pixels (#4). */
-  font: var(--app-font-size, 16px)/var(--app-line-height, 22px) "Fira Code", monospace;
+  font:
+    var(--app-font-size, 16px)/var(--app-line-height, 22px) "Fira Code",
+    monospace;
 }
 
 .app {
@@ -54,7 +56,10 @@ body {
   color: #b8c4d0;
   cursor: pointer;
   font: inherit;
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .panel-tab:hover {
@@ -283,8 +288,12 @@ body {
 }
 
 @keyframes ticker-pulse {
-  from { opacity: 1; }
-  to { opacity: 0.8; }
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.8;
+  }
 }
 
 .secondary-timers {
@@ -307,7 +316,6 @@ body {
   color: #ff899d;
   animation: ticker-pulse 1s infinite alternate;
 }
-
 
 #hotkeys {
   display: flex;
@@ -333,7 +341,10 @@ body {
   color: #b8c4d0;
   font-size: 12px;
   cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .hotkey-chip:hover {
@@ -411,7 +422,9 @@ body {
   line-height: inherit;
   vertical-align: baseline;
   cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .trigger-button:hover {
@@ -536,7 +549,6 @@ body {
 #input::placeholder {
   color: #798694;
 }
-
 
 @media (max-width: 640px) {
   body {
@@ -697,7 +709,6 @@ body {
 
 /* Variable Panel Enhancements */
 
-
 .variable-input {
   font-family: inherit;
 }
@@ -772,7 +783,8 @@ body {
   flex-shrink: 0;
   transition: background 0.15s;
 }
-.col-resize-handle:hover, .col-resize-handle:active {
+.col-resize-handle:hover,
+.col-resize-handle:active {
   background: #3d4f61;
 }
 
@@ -783,7 +795,8 @@ body {
   flex-shrink: 0;
   transition: background 0.15s;
 }
-.row-resize-handle:hover, .row-resize-handle:active {
+.row-resize-handle:hover,
+.row-resize-handle:active {
   background: #3d4f61;
 }
 
@@ -932,7 +945,7 @@ body {
   padding: 4px 0;
   min-width: 120px;
   z-index: 100;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
 .dropdown-item {
@@ -977,8 +990,14 @@ body {
 }
 
 @keyframes visual-bell-flash {
-  0% { box-shadow: inset 0 0 0 2px var(--ansi-bright-yellow-fg), 0 0 24px var(--ansi-bright-yellow-fg); }
-  100% { box-shadow: none; }
+  0% {
+    box-shadow:
+      inset 0 0 0 2px var(--ansi-bright-yellow-fg),
+      0 0 24px var(--ansi-bright-yellow-fg);
+  }
+  100% {
+    box-shadow: none;
+  }
 }
 
 .pane-scroll-bottom {
@@ -1064,7 +1083,11 @@ body {
   flex: 1;
   min-height: 0;
   background:
-    radial-gradient(1200px 700px at 50% 40%, rgba(84, 232, 136, 0.04), transparent 70%),
+    radial-gradient(
+      1200px 700px at 50% 40%,
+      rgba(84, 232, 136, 0.04),
+      transparent 70%
+    ),
     #090c0a;
   color: #cfe6d6;
 }
@@ -1087,8 +1110,14 @@ body {
   font-size: 12px;
   outline: none;
 }
-.map-pane__zone { min-width: 140px; max-width: 240px; }
-.map-pane__search { min-width: 100px; flex: 1; }
+.map-pane__zone {
+  min-width: 140px;
+  max-width: 240px;
+}
+.map-pane__search {
+  min-width: 100px;
+  flex: 1;
+}
 .map-pane__follow {
   display: flex;
   align-items: center;
@@ -1098,18 +1127,6 @@ body {
   cursor: pointer;
   user-select: none;
 }
-.map-pane__anchor {
-  background: #090c0a;
-  color: #cfe6d6;
-  border: 1px solid #1b2a20;
-  border-radius: 5px;
-  padding: 4px 9px;
-  font: inherit;
-  font-size: 11px;
-  cursor: pointer;
-}
-.map-pane__anchor:hover { border-color: #2f8a52; }
-.map-pane__anchor.active { border-color: #54e888; color: #54e888; }
 .map-pane__confidence {
   font-size: 14px;
   min-width: 20px;
@@ -1127,7 +1144,9 @@ body {
   height: 100%;
   cursor: grab;
 }
-.map-pane__canvas.drag { cursor: grabbing; }
+.map-pane__canvas.drag {
+  cursor: grabbing;
+}
 .map-pane__floors {
   position: absolute;
   top: 8px;
@@ -1171,10 +1190,21 @@ body {
   transform: translate(-50%, -115%);
   transition: opacity 0.1s;
 }
-.map-tip__name { color: #54e888; font-weight: 600; margin-bottom: 3px; }
-.map-tip__row { color: #7b9585; font-size: 11px; }
-.map-tip__dt { color: #ff5d5d; }
-.map-tip__seam { color: #f0b64e; }
+.map-tip__name {
+  color: #54e888;
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+.map-tip__row {
+  color: #7b9585;
+  font-size: 11px;
+}
+.map-tip__dt {
+  color: #ff5d5d;
+}
+.map-tip__seam {
+  color: #f0b64e;
+}
 .map-pane__status {
   position: absolute;
   left: 8px;
@@ -1187,6 +1217,69 @@ body {
   padding: 5px 9px;
   font-size: 11px;
   color: #7b9585;
+}
+
+.map-cell-menu {
+  position: absolute;
+  z-index: 6;
+  min-width: 210px;
+  max-width: 280px;
+  background: rgba(9, 14, 11, 0.98);
+  border: 1px solid #2f8a52;
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.map-cell-menu__header {
+  color: #cfe6d6;
+  font-weight: 600;
+  padding: 3px 6px 4px;
+  border-bottom: 1px solid #1b2a20;
+}
+.map-cell-menu__diff {
+  color: #f0b64e;
+  font-size: 11px;
+  padding: 3px 6px;
+}
+.map-cell-menu__section {
+  color: #7b9585;
+  font-size: 11px;
+  padding: 5px 6px 2px;
+  border-top: 1px solid #1b2a20;
+  margin-top: 2px;
+}
+.map-cell-menu__item {
+  background: #090c0a;
+  color: #cfe6d6;
+  border: 1px solid #1b2a20;
+  border-radius: 5px;
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.map-cell-menu__item:hover:not(:disabled) {
+  border-color: #2f8a52;
+}
+.map-cell-menu__item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.map-cell-menu__update {
+  border-color: #f0b64e;
+  color: #f0b64e;
+}
+.map-cell-menu__update:hover:not(:disabled) {
+  border-color: #f0b64e;
+}
+.map-cell-menu__anchor {
+  border-color: #2f8a52;
+  color: #54e888;
 }
 
 .map-pane__unavailable {

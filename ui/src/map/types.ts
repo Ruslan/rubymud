@@ -38,7 +38,7 @@ export interface SeamTarget {
 }
 
 // Live tracker position pushed via the room_position WS message.
-export type Confidence = 'green' | 'yellow' | 'red';
+export type Confidence = "green" | "yellow" | "red";
 
 export interface PlayerPosition {
   valid: boolean;
@@ -52,4 +52,10 @@ export interface PlayerPosition {
   hint?: string;
   isDT?: boolean;
   pipe?: boolean;
+  // Exit diff surfaced by the tracker on a yellow (assumed-cell) mismatch:
+  // exitsAddedLive = seen in the game but missing from the map; exitsRemovedMap =
+  // on the map but not observed live. Drives the cell menu's "update from live
+  // state" action.
+  exitsAddedLive?: string[];
+  exitsRemovedMap?: string[];
 }

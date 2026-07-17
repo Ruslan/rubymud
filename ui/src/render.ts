@@ -33,8 +33,8 @@ interface RendererDeps {
   sessionID?: number | undefined;
   getActiveMapSetID?: () => number | null;
   // Populate (replace + focus, do NOT send) the main command input — used by the
-  // map pane's "click a room → route into the input" feature. Threaded through
-  // so the map module never touches the input DOM directly.
+  // map pane's cell menu "insert path into chat" action. Threaded through so the
+  // map module never touches the input DOM directly.
   setInputText?: (text: string) => void;
 }
 
@@ -489,6 +489,11 @@ export function createRenderer({
           sessionID,
           getActiveMapSetID: getActiveMapSetID ?? (() => null),
           setInputText,
+          // The cell menu's "send to server" reuses the normal command-submit
+          // path (same as Enter in the input), tagged with a 'map' source.
+          sendCommand: (text: string) => {
+            sendCommand(text, "map");
+          },
         });
         pane.mapController = controller;
         mapControllers.set(node.id, controller);

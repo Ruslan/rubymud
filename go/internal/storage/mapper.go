@@ -284,6 +284,93 @@ func (s *Store) ListRooms(mapSetID int64) ([]Room, error) {
 	return rooms, err
 }
 
+// chBitOrder maps a canonical direction letter to its Ch bitmask bit
+// (ChN..ChD => 0..5), mirroring mapper.chBitOrder / mapimport.chBit. Duplicated
+// here (tiny, stable) so the storage layer need not import mapper.
+var chBitOrder = map[string]int{"N": 0, "S": 1, "E": 2, "W": 3, "U": 4, "D": 5}
+
+// PatchRoomExits updates ONE room of a map set in place: it adds addExits and
+// removes removeExits from the room's exit directions (edirs), the ch
+// connectivity bitmask, and the display Exits string. Directions are canonical
+// upper-case letters ("N".."D"); unknown tokens are ignored. Door markers in the
+// display string are preserved for surviving directions. Returns
+// (found=false, nil) when no room matches — the caller soft-fails rather than
+// 500s. The write is a single UPDATE inside the same store.
+//
+// This is the phase-4 "update cell from live state" in-place patch: no fork/undo
+// (that is phase 5); it mutates the imported set directly so a mis-mapped or
+// newly discovered exit becomes known to the tracker on the next reconcile.
+func (s *Store) PatchRoomExits(mapSetID int64, zone string, x, y, l int, addExits, removeExits []string) (bool, error) {
+	var room Room
+	err := s.db.Where("map_set_id = ? AND zone = ? AND x = ? AND y = ? AND l = ?",
+		mapSetID, zone, x, y, l).First(&room).Error
+	if err == gorm.ErrRecordNotFound {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+
+	// Work on a set of surviving edirs, in canonical order.
+	present := map[string]bool{}
+	for _, d := range decodeStrArray(room.EDirs) {
+		present[d] = true
+	}
+	for _, d := range removeExits {
+		delete(present, d)
+	}
+	for _, d := range addExits {
+		if _, ok := chBitOrder[d]; ok {
+			present[d] = true
+		}
+	}
+	doorSet := map[string]bool{}
+	for _, d := range decodeStrArray(room.Doors) {
+		doorSet[d] = true
+	}
+
+	// Rebuild edirs, ch mask, and the display Exits string in canonical order.
+	order := []string{"N", "S", "E", "W", "U", "D"}
+	edirs := make([]string, 0, len(present))
+	mask := 0
+	displayParts := make([]string, 0, len(present))
+	for _, d := range order {
+		if !present[d] {
+			continue
+		}
+		edirs = append(edirs, d)
+		mask |= 1 << chBitOrder[d]
+		if doorSet[d] {
+			displayParts = append(displayParts, "("+d+")")
+		} else {
+			displayParts = append(displayParts, d)
+		}
+	}
+	edirsJSON, _ := json.Marshal(edirs)
+
+	updates := map[string]any{
+		"edirs": string(edirsJSON),
+		"ch":    mask,
+		"exits": joinFields(displayParts),
+	}
+	if err := s.db.Model(&Room{}).Where("id = ?", room.ID).Updates(updates).Error; err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// joinFields joins exit tokens with a single space (matches the .mm2 Exits form).
+func joinFields(parts []string) string {
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out += " "
+		}
+		out += p
+	}
+	return out
+}
+
 // GetActiveMapSetID returns a session's active_map_set_id, or (0,false) when
 // unset/NULL.
 func (s *Store) GetActiveMapSetID(sessionID int64) (int64, bool, error) {

@@ -203,6 +203,7 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 				r.Post("/active-map-set", s.setActiveMapSet)
 				r.Post("/map-anchor", s.anchorMapPosition)
 				r.Post("/map-path", s.mapPath)
+				r.Post("/map-cell-patch", s.mapCellPatch)
 			})
 		})
 

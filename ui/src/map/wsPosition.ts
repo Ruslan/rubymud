@@ -1,4 +1,4 @@
-import type { Confidence, PlayerPosition } from './types';
+import type { Confidence, PlayerPosition } from "./types";
 
 // Shape of the mapper fields carried on a ServerMsg (see go/internal/session/
 // types.go ServerMsg). All optional/omitempty on the wire.
@@ -15,10 +15,12 @@ export interface RoomPositionMessage {
   is_dt?: boolean;
   pipe?: boolean;
   room_hint?: string;
+  exits_added_live?: string[];
+  exits_removed_map?: string[];
 }
 
 function normalizeConfidence(c: string | undefined): Confidence {
-  return c === 'green' || c === 'yellow' || c === 'red' ? c : 'red';
+  return c === "green" || c === "yellow" || c === "red" ? c : "red";
 }
 
 // Pure mapper from a raw room_position ServerMsg to the UI PlayerPosition model.
@@ -27,7 +29,7 @@ function normalizeConfidence(c: string | undefined): Confidence {
 export function parseRoomPosition(msg: RoomPositionMessage): PlayerPosition {
   return {
     valid: msg.position_valid ?? false,
-    zone: msg.zone ?? '',
+    zone: msg.zone ?? "",
     x: msg.room_x ?? 0,
     y: msg.room_y ?? 0,
     l: msg.room_l ?? 0,
@@ -37,5 +39,7 @@ export function parseRoomPosition(msg: RoomPositionMessage): PlayerPosition {
     hint: msg.room_hint || undefined,
     isDT: msg.is_dt ?? false,
     pipe: msg.pipe ?? false,
+    exitsAddedLive: msg.exits_added_live ?? [],
+    exitsRemovedMap: msg.exits_removed_map ?? [],
   };
 }

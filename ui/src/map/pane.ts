@@ -1,7 +1,16 @@
 import { fetchWithToken } from "../dom";
+import {
+  canRoute,
+  cellPatchPayload,
+  formatExitDiff,
+  hasExitDiff,
+  isCurrentCell,
+  statusHeaderText,
+  walkUpToFirstDoor,
+} from "./cellMenu";
 import { findZoneName, parseZoneList, resolveSeamTarget } from "./geometry";
 import { MapRenderer } from "./renderer";
-import type { Confidence, MapSet, PlayerPosition, SlimRoom } from "./types";
+import type { Confidence, PlayerPosition, SlimRoom } from "./types";
 
 // Confidence glyphs and marker ring colors.
 const CONF_GLYPH: Record<Confidence, string> = {
@@ -22,10 +31,13 @@ export const MAP_BUFFER = "~map";
 interface MapPaneConfig {
   sessionID: number | undefined;
   getActiveMapSetID: () => number | null;
-  // Populate (replace + focus, do NOT send) the main command input. Optional so
-  // the map module stays decoupled from the input DOM — when absent, room-click
-  // routing degrades to a status hint instead of touching the input.
+  // Populate (replace + focus, do NOT send) the main command input — the cell
+  // menu's "Вставить путь в чат" action. Optional so the map module stays
+  // decoupled from the input DOM.
   setInputText?: (text: string) => void;
+  // Actually submit a command to the MUD (reuses the Enter-submit path) — the
+  // cell menu's "Отправить на сервер" action. Optional.
+  sendCommand?: (text: string) => void;
 }
 
 // Endpoint response for POST /api/sessions/{id}/map-path.
@@ -36,14 +48,17 @@ interface MapPathResponse {
   reason?: string;
   dt?: boolean;
   seams?: number;
+  doors?: number;
+  door_at?: number;
   here?: boolean;
 }
 
 // MapPaneController owns one map pane: its canvas renderer plus the surrounding
-// controls (zone selector, floor stack, follow toggle, confidence badge,
-// "I'm here" re-anchor). It fetches slim rooms lazily per zone from the REST
-// feed and follows live `room_position` broadcasts. Read-only map render; the
-// only writes it issues are the active-map-set change and the anchor POST.
+// controls (zone selector, floor stack, follow toggle, confidence badge). It
+// fetches slim rooms lazily per zone from the REST feed and follows live
+// `room_position` broadcasts. Clicking a room cell opens a context menu (route
+// here / anchor here / update cell from live state); the top bar no longer
+// carries an "I'm here" button — that action moved into the menu.
 export class MapPaneController {
   readonly root: HTMLElement;
   private renderer: MapRenderer;
@@ -53,8 +68,9 @@ export class MapPaneController {
   private searchInput: HTMLInputElement;
   private tip: HTMLElement;
   private followToggle: HTMLInputElement;
-  private anchorBtn: HTMLButtonElement;
   private statusLine: HTMLElement;
+  // The open cell context menu element (null when closed). Only one at a time.
+  private cellMenu: HTMLElement | null = null;
 
   private mapSetID: number | null = null;
   private zoneNames: string[] = [];
@@ -103,15 +119,6 @@ export class MapPaneController {
     followLabel.appendChild(followText);
     bar.appendChild(followLabel);
 
-    this.anchorBtn = document.createElement("button");
-    this.anchorBtn.type = "button";
-    this.anchorBtn.className = "map-pane__anchor";
-    this.anchorBtn.textContent = "I'm here";
-    this.anchorBtn.title =
-      "Re-anchor the tracker to a room you click on the map";
-    this.anchorBtn.addEventListener("click", () => this.toggleAnchorMode());
-    bar.appendChild(this.anchorBtn);
-
     this.confidenceBadge = document.createElement("span");
     this.confidenceBadge.className = "map-pane__confidence";
     this.confidenceBadge.title = "Tracker confidence";
@@ -146,7 +153,10 @@ export class MapPaneController {
     this.renderer.onSeamClick = (seam, room) => {
       if (seam) void this.jumpSeam(seam, room);
     };
-    this.renderer.onRoomClick = (room) => void this.pathToInput(room);
+    // Plain (non-seam) cell click opens the context menu; a seam cell keeps its
+    // cross-zone jump on the amber-ring glyph (handled by onSeamClick above).
+    this.renderer.onRoomClick = (room, clientX, clientY) =>
+      this.openCellMenu(room, clientX, clientY);
     this.renderer.onRoomHover = (room, cx, cy) => this.showTip(room, cx, cy);
 
     void this.loadMapSet();
@@ -163,6 +173,7 @@ export class MapPaneController {
 
   dispose(): void {
     this.disposed = true;
+    this.closeCellMenu();
     this.renderer.destroy();
   }
 
@@ -370,14 +381,128 @@ export class MapPaneController {
     this.setStatus(`Jumped via seam to "${target}"`);
   }
 
-  // --- click a room → route into the command input -----------------------
+  // --- cell context menu -------------------------------------------------
 
-  // Compute a route from the live tracked position to the clicked room and drop
-  // the ';'-joined canonical directions (w;e;s;n;u;d) into the main command input
-  // WITHOUT sending, so the user can review/edit/send. Soft edge cases: clicking
-  // the current room is a no-op; a lost position shows a hint instead of inserting
-  // garbage; a DT target still inserts the walk but surfaces the warning.
-  private async pathToInput(room: SlimRoom): Promise<void> {
+  // Open the per-cell context menu at the click position. The menu is built from
+  // the live tracker position (confidence header + yellow exit-diff) plus the
+  // clicked cell (route / anchor). Only one menu is open at a time.
+  private openCellMenu(room: SlimRoom, clientX: number, clientY: number): void {
+    this.closeCellMenu();
+    const pos = this.lastPosition;
+    const cell = { z: room.z, x: room.x, y: room.y, l: room.l };
+
+    const menu = document.createElement("div");
+    menu.className = "map-cell-menu";
+    menu.setAttribute("role", "menu");
+
+    // 1) Status header: confidence + reason, plus a yellow exit-diff + update.
+    const header = document.createElement("div");
+    header.className = "map-cell-menu__header";
+    header.textContent = statusHeaderText(pos);
+    menu.appendChild(header);
+
+    if (hasExitDiff(pos)) {
+      const diff = document.createElement("div");
+      diff.className = "map-cell-menu__diff";
+      diff.textContent = formatExitDiff(pos);
+      menu.appendChild(diff);
+      const updateBtn = this.menuButton(
+        "Обновить клетку из живого стейта",
+        () => void this.patchCellFromLive(pos!),
+      );
+      updateBtn.classList.add("map-cell-menu__update");
+      menu.appendChild(updateBtn);
+    }
+
+    // 2) "Идти сюда" — insert into chat OR send to server.
+    const goHeader = document.createElement("div");
+    goHeader.className = "map-cell-menu__section";
+    goHeader.textContent = `Идти сюда: ${room.h || "клетка"}`;
+    menu.appendChild(goHeader);
+
+    const routable = canRoute(pos) && !isCurrentCell(pos, cell);
+    const insertBtn = this.menuButton(
+      "Вставить путь в чат",
+      () => void this.routeToCell(cell, room, "insert"),
+    );
+    const sendBtn = this.menuButton(
+      "Отправить на сервер",
+      () => void this.routeToCell(cell, room, "send"),
+    );
+    if (!routable) {
+      insertBtn.disabled = true;
+      sendBtn.disabled = true;
+      const why = isCurrentCell(pos, cell)
+        ? "вы уже здесь"
+        : "нет позиции — сначала «Я здесь»";
+      insertBtn.title = why;
+      sendBtn.title = why;
+    }
+    menu.appendChild(insertBtn);
+    menu.appendChild(sendBtn);
+
+    // 3) "Я здесь" — anchor the tracker to this cell.
+    const anchorBtn = this.menuButton(
+      "Я здесь",
+      () => void this.anchorHere(room),
+    );
+    anchorBtn.classList.add("map-cell-menu__anchor");
+    menu.appendChild(anchorBtn);
+
+    // Position at the click, relative to the pane root.
+    const rect = this.root.getBoundingClientRect();
+    menu.style.left = `${clientX - rect.left}px`;
+    menu.style.top = `${clientY - rect.top}px`;
+    this.root.appendChild(menu);
+    this.cellMenu = menu;
+
+    // Dismiss on outside-click / Esc. Defer the outside-click listener a tick so
+    // the click that opened the menu does not immediately close it.
+    setTimeout(() => {
+      if (this.disposed || this.cellMenu !== menu) return;
+      document.addEventListener("mousedown", this.onOutsideMenuClick, true);
+      document.addEventListener("keydown", this.onMenuKeydown, true);
+    }, 0);
+  }
+
+  private onOutsideMenuClick = (e: MouseEvent): void => {
+    if (this.cellMenu && !this.cellMenu.contains(e.target as Node)) {
+      this.closeCellMenu();
+    }
+  };
+
+  private onMenuKeydown = (e: KeyboardEvent): void => {
+    if (e.key === "Escape") this.closeCellMenu();
+  };
+
+  private closeCellMenu(): void {
+    document.removeEventListener("mousedown", this.onOutsideMenuClick, true);
+    document.removeEventListener("keydown", this.onMenuKeydown, true);
+    if (this.cellMenu) {
+      this.cellMenu.remove();
+      this.cellMenu = null;
+    }
+  }
+
+  private menuButton(label: string, onClick: () => void): HTMLButtonElement {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "map-cell-menu__item";
+    btn.textContent = label;
+    btn.addEventListener("click", () => {
+      this.closeCellMenu();
+      onClick();
+    });
+    return btn;
+  }
+
+  // Compute the route from the live position to `cell` and either insert it into
+  // the command input or send it to the MUD. Soft edge cases handled inline.
+  private async routeToCell(
+    cell: { z: string; x: number; y: number; l: number },
+    room: SlimRoom,
+    action: "insert" | "send",
+  ): Promise<void> {
     if (this.config.sessionID == null) {
       this.setStatus("No session — cannot compute a route");
       return;
@@ -389,14 +514,13 @@ export class MapPaneController {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            to: { zone: room.z, x: room.x, y: room.y, l: room.l },
+            to: { zone: cell.z, x: cell.x, y: cell.y, l: cell.l },
           }),
         },
       );
       if (!res.ok) throw new Error(await res.text());
       const data: MapPathResponse = await res.json();
       if (!data.reachable) {
-        // Lost position / DT target / unreachable: hint, don't insert garbage.
         const reason = data.dt
           ? "target is a death trap"
           : data.reason || "no route";
@@ -408,19 +532,87 @@ export class MapPaneController {
         this.setStatus(`Already at "${room.h}"`);
         return;
       }
-      const walk = dirs.join(";");
-      if (this.config.setInputText) {
-        this.config.setInputText(walk);
-        let status = `Route to "${room.h}": ${data.summary ?? `${dirs.length} step(s)`} → input`;
-        if (data.dt) status += " ⚠ death trap on path";
-        this.setStatus(status);
-      } else {
-        // No input hook wired — surface the walk so it is still usable.
-        this.setStatus(`Route to "${room.h}": ${walk}`);
+      if (action === "insert") {
+        const walk = dirs.join(";");
+        if (this.config.setInputText) {
+          this.config.setInputText(walk);
+          let status = `Route to "${room.h}": ${data.summary ?? `${dirs.length} step(s)`} → input`;
+          if (data.dt) status += " ⚠ death trap on path";
+          this.setStatus(status);
+        } else {
+          this.setStatus(`Route to "${room.h}": ${walk}`);
+        }
+        return;
       }
+      // action === "send": avoid blindly batching through a (presumed-)door — send
+      // only up to the first door hop, and hint the user to open + continue.
+      const { walk, truncatedAtDoor } = walkUpToFirstDoor(
+        dirs,
+        data.door_at ?? -1,
+      );
+      if (!this.config.sendCommand) {
+        this.setStatus(`Route to "${room.h}": ${dirs.join(";")}`);
+        return;
+      }
+      if (walk.length === 0 && truncatedAtDoor) {
+        // The very first hop is a door: don't auto-send; tell the user.
+        this.setStatus(
+          `Первый шаг к "${room.h}" — дверь: откройте её вручную, затем повторите`,
+        );
+        return;
+      }
+      this.config.sendCommand(walk.join(";"));
+      let status = `Отправлено к "${room.h}": ${walk.length} шаг(ов)`;
+      if (truncatedAtDoor) status += " · дальше дверь — откройте и повторите";
+      if (data.dt) status += " ⚠ death trap on path";
+      this.setStatus(status);
     } catch (err) {
       this.setStatus(
         `Route failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  // POST the yellow exit-diff to the map-cell-patch endpoint so the live-observed
+  // exits are written into the tracker's current map cell. On success the server
+  // reloads the tracker index and broadcasts rooms_changed, which triggers our
+  // reload() — so the edge becomes known (next visit → green).
+  private async patchCellFromLive(pos: PlayerPosition): Promise<void> {
+    if (this.config.sessionID == null) {
+      this.setStatus("No session — cannot update the cell");
+      return;
+    }
+    const { add_exits, remove_exits } = cellPatchPayload(pos);
+    if (add_exits.length === 0 && remove_exits.length === 0) {
+      this.setStatus("Нет изменений для применения");
+      return;
+    }
+    try {
+      const res = await fetchWithToken(
+        `/api/sessions/${this.config.sessionID}/map-cell-patch`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            zone: pos.zone,
+            x: pos.x,
+            y: pos.y,
+            l: pos.l,
+            add_exits,
+            remove_exits,
+          }),
+        },
+      );
+      if (!res.ok) throw new Error(await res.text());
+      const data: { ok?: boolean; reason?: string } = await res.json();
+      if (!data.ok) {
+        this.setStatus(`Не удалось обновить клетку: ${data.reason ?? "?"}`);
+        return;
+      }
+      this.setStatus("Клетка обновлена из живого стейта");
+    } catch (err) {
+      this.setStatus(
+        `Update failed: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
   }
@@ -444,29 +636,7 @@ export class MapPaneController {
     }
   }
 
-  // --- "I'm here" re-anchor ---------------------------------------------
-
-  private anchorMode = false;
-  private toggleAnchorMode(): void {
-    this.anchorMode = !this.anchorMode;
-    this.anchorBtn.classList.toggle("active", this.anchorMode);
-    if (this.anchorMode) {
-      this.setStatus("Click a room to anchor the tracker there…");
-      const handler = (e: MouseEvent) => {
-        const rect = this.renderer.canvas.getBoundingClientRect();
-        const px = e.clientX - rect.left;
-        const py = e.clientY - rect.top;
-        const room = this.renderer.pick(px, py);
-        this.anchorMode = false;
-        this.anchorBtn.classList.remove("active");
-        this.renderer.canvas.removeEventListener("click", handler, true);
-        if (room) void this.anchorHere(room);
-        else this.setStatus("No room under cursor — anchor cancelled");
-      };
-      // Capture so it fires before the renderer's own click (which would seam-jump).
-      this.renderer.canvas.addEventListener("click", handler, true);
-    }
-  }
+  // --- "Я здесь" re-anchor (invoked from the cell menu) ------------------
 
   private async anchorHere(room: SlimRoom): Promise<void> {
     if (this.config.sessionID == null) {

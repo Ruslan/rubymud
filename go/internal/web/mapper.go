@@ -377,6 +377,75 @@ func (s *Server) mapPath(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// mapCellPatch handles POST /api/sessions/{sessionID}/map-cell-patch with body
+// {zone,x,y,l, add_exits:[...], remove_exits:[...]} — the "update this cell from
+// the live game state" write behind the map cell context menu's yellow-diff
+// button. It patches THAT room of the session's ACTIVE map set IN PLACE (adds /
+// removes the given exit directions on edirs + the ch connectivity bitmask), then
+// reloads the tracker index so the new edge is known on the next reconcile and
+// broadcasts rooms_changed so open map panes reload. Soft-fails (200 with
+// {ok:false,reason}) when there is no active set or the room is not found — never
+// 500. Directions are canonical upper-case letters ("N".."D"); unknown tokens are
+// ignored by the store.
+func (s *Server) mapCellPatch(w http.ResponseWriter, r *http.Request) {
+	_, id, err := s.getSession(r)
+	if err != nil {
+		http.Error(w, "invalid session id", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Zone        string   `json:"zone"`
+		X           int      `json:"x"`
+		Y           int      `json:"y"`
+		L           int      `json:"l"`
+		AddExits    []string `json:"add_exits"`
+		RemoveExits []string `json:"remove_exits"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	setID, ok, err := s.store.GetActiveMapSetID(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok || setID <= 0 {
+		writeJSON(w, map[string]any{"ok": false, "reason": "no active map set for this session"})
+		return
+	}
+	found, err := s.store.PatchRoomExits(setID, body.Zone, body.X, body.Y, body.L, normalizeDirs(body.AddExits), normalizeDirs(body.RemoveExits))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !found {
+		writeJSON(w, map[string]any{"ok": false, "reason": "room not found in the active map set"})
+		return
+	}
+	// Reload the live tracker index so the patched edge is known (AGENTS #2), and
+	// tell open map panes to reload the zone.
+	if sess, ok := s.manager.GetSession(id); ok {
+		sess.ReloadActiveMapSet()
+		sess.BroadcastServerMsg(session.ServerMsg{Type: "rooms_changed"})
+	}
+	writeJSON(w, map[string]any{"ok": true})
+}
+
+// normalizeDirs upper-cases + trims direction tokens and drops empties so the
+// endpoint accepts "u"/"U"/" n " uniformly. Non-direction tokens are passed
+// through (the store ignores unknown letters).
+func normalizeDirs(in []string) []string {
+	out := make([]string, 0, len(in))
+	for _, d := range in {
+		d = strings.ToUpper(strings.TrimSpace(d))
+		if d != "" {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
 // pathResultJSON renders a mapper.PathResult as the map-path endpoint's JSON.
 // Each grid hop emits its canonical lowercase English letter; a seam hop (no
 // single letter) emits the seam's MUD command so the joined string still walks
@@ -396,7 +465,8 @@ func pathResultJSON(res mapper.PathResult) map[string]any {
 	seams := 0
 	dt := 0
 	doors := 0
-	for _, st := range res.Steps {
+	doorAt := -1 // index of the FIRST door hop, so the UI can avoid batching past it
+	for i, st := range res.Steps {
 		if st.Seam {
 			seams++
 			// No single letter for a seam — emit its MUD command so the joined
@@ -410,6 +480,9 @@ func pathResultJSON(res mapper.PathResult) map[string]any {
 		}
 		if st.Door {
 			doors++
+			if doorAt < 0 {
+				doorAt = i
+			}
 		}
 	}
 	summary := fmt.Sprintf("%d step(s)", len(res.Steps))
@@ -435,6 +508,7 @@ func pathResultJSON(res mapper.PathResult) map[string]any {
 	}
 	if doors > 0 {
 		out["doors"] = doors
+		out["door_at"] = doorAt
 	}
 	return out
 }

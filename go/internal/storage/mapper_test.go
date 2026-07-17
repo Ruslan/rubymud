@@ -53,6 +53,55 @@ func sampleInput() MapSetInput {
 	}
 }
 
+func TestPatchRoomExits(t *testing.T) {
+	store := newMapperTestStore(t)
+	id, err := store.CreateMapSet(sampleInput())
+	if err != nil {
+		t.Fatalf("CreateMapSet: %v", err)
+	}
+	// Alpha Start (0,0,0) starts with edirs [N,S], ch=3 (N|S), N is a door.
+	// Add U, remove N.
+	found, err := store.PatchRoomExits(id, "Alpha", 0, 0, 0, []string{"U"}, []string{"N"})
+	if err != nil {
+		t.Fatalf("PatchRoomExits: %v", err)
+	}
+	if !found {
+		t.Fatal("expected room found")
+	}
+	rooms, err := store.ListSlimRooms(id, "Alpha")
+	if err != nil {
+		t.Fatalf("ListSlimRooms: %v", err)
+	}
+	var start *SlimRoom
+	for i := range rooms {
+		if rooms[i].X == 0 && rooms[i].Y == 0 && rooms[i].L == 0 {
+			start = &rooms[i]
+		}
+	}
+	if start == nil {
+		t.Fatal("start room missing")
+	}
+	// edirs should be [S,U] in canonical order; ch = S(bit1)|U(bit4) = 2|16 = 18.
+	if fmt.Sprint(start.E) != "[S U]" {
+		t.Errorf("edirs = %v, want [S U]", start.E)
+	}
+	if start.Ch != (1<<1 | 1<<4) {
+		t.Errorf("ch = %d, want %d (S|U)", start.Ch, 1<<1|1<<4)
+	}
+}
+
+func TestPatchRoomExitsRoomNotFound(t *testing.T) {
+	store := newMapperTestStore(t)
+	id, _ := store.CreateMapSet(sampleInput())
+	found, err := store.PatchRoomExits(id, "Alpha", 99, 99, 0, []string{"U"}, nil)
+	if err != nil {
+		t.Fatalf("PatchRoomExits: %v", err)
+	}
+	if found {
+		t.Fatal("expected room NOT found for a bogus coord")
+	}
+}
+
 func TestCreateAndListMapSet(t *testing.T) {
 	store := newMapperTestStore(t)
 	id, err := store.CreateMapSet(sampleInput())
