@@ -583,3 +583,40 @@ func TestTrackerDoorMarkerTolerance(t *testing.T) {
 		t.Errorf("door-marker tolerance failed: %+v", pos)
 	}
 }
+
+// TestSetIndexPreservingPosition covers the topology-write refresh path: rebuild
+// the index but keep position/confidence/pending when the current cell survives,
+// and fall to red only when it does not exist in the new index.
+func TestSetIndexPreservingPosition(t *testing.T) {
+	tr := NewTracker(linearIndex())
+	tr.Anchor(Coord{"Z", 0, 0, 0})
+	tr.PushMove("S")
+	if tr.Position().Confidence != Green || tr.PendingCount() != 1 {
+		t.Fatalf("precondition: green + 1 pending, got %+v pending=%d", tr.Position(), tr.PendingCount())
+	}
+
+	// Rebuild an index that STILL contains (0,0,0) (e.g. an exit was added to it).
+	rebuilt := BuildIndex(1, []storage.Room{
+		mkRoom("Z", 0, 0, 0, 1, "Первая", "desc one", "S U", 0), // gained a U exit
+		mkRoom("Z", 1, 0, 0, 2, "Вторая", "desc two", "N S", 0),
+		mkRoom("Z", 2, 0, 0, 3, "Третья", "desc three", "N", 0),
+	})
+	tr.SetIndexPreservingPosition(rebuilt)
+	pos := tr.Position()
+	if pos.Confidence != Green || pos.Coord != (Coord{"Z", 0, 0, 0}) {
+		t.Errorf("position not preserved: %+v", pos)
+	}
+	if tr.PendingCount() != 1 {
+		t.Errorf("pending flushed: %d, want 1", tr.PendingCount())
+	}
+
+	// Rebuild an index WITHOUT the current cell (it was deleted) => fall to red.
+	shrunk := BuildIndex(1, []storage.Room{
+		mkRoom("Z", 1, 0, 0, 2, "Вторая", "desc two", "N S", 0),
+		mkRoom("Z", 2, 0, 0, 3, "Третья", "desc three", "N", 0),
+	})
+	tr.SetIndexPreservingPosition(shrunk)
+	if tr.Position().Confidence != Red {
+		t.Errorf("deleted current cell should fall to red, got %+v", tr.Position())
+	}
+}

@@ -8,6 +8,11 @@ import (
 )
 
 // MapSet is one imported archive of maps (a global entity a session references).
+//
+// Editable/ForkedFromID model the write-mode fork (plan §8): an imported set is
+// the user's frozen source of truth (Editable=false); the first topology write
+// forks it copy-on-write into an editable copy (Editable=true, ForkedFromID = the
+// source set's id) and writes land there.
 type MapSet struct {
 	ID            int64       `gorm:"primaryKey" json:"id"`
 	Name          string      `json:"name"`
@@ -17,6 +22,8 @@ type MapSet struct {
 	RoomCount     int         `json:"room_count"`
 	SeamCount     int         `json:"seam_count"`
 	Note          string      `json:"note"`
+	Editable      bool        `gorm:"column:editable" json:"editable"`
+	ForkedFromID  *int64      `gorm:"column:forked_from_id" json:"forked_from_id"`
 }
 
 func (MapSet) TableName() string { return "map_sets" }
@@ -111,6 +118,122 @@ func (s *Store) CreateMapSet(in MapSetInput) (int64, error) {
 		return nil
 	})
 	return id, err
+}
+
+// ForkMapSet forks a source map set copy-on-write into a fresh EDITABLE copy
+// (plan §8 "writable vs imported набор"). It creates a new map_sets row
+// (editable=1, forked_from_id=srcID, name "<orig> (editable)", copied counts) and
+// copies EVERY child of the source into the new set in ONE transaction:
+//   - all rooms          (rooms.map_set_id -> newID)
+//   - all room_annotations (room_annotations.map_set_id -> newID; the overlay is
+//     keyed by logical coord, not rooms.id, so it copies by re-keying the set id)
+//   - all room_images     (re-pointed to the copied rooms by logical coord, so the
+//     image travels with its room even though rooms.id changes on copy)
+//
+// The source set is left completely untouched (frozen source of truth). Returns
+// the new (editable) set id. A source that does not exist is an error.
+func (s *Store) ForkMapSet(srcID int64) (int64, error) {
+	var newID int64
+	err := s.db.Transaction(func(tx *gorm.DB) error {
+		var src MapSet
+		if err := tx.First(&src, srcID).Error; err != nil {
+			return err
+		}
+
+		fork := MapSet{
+			Name:          src.Name + " (editable)",
+			SourceArchive: src.SourceArchive,
+			ImportedAt:    nowSQLiteTimePtr(),
+			ZoneCount:     src.ZoneCount,
+			RoomCount:     src.RoomCount,
+			SeamCount:     src.SeamCount,
+			Note:          src.Note,
+			Editable:      true,
+			ForkedFromID:  &srcID,
+		}
+		if err := tx.Create(&fork).Error; err != nil {
+			return err
+		}
+		newID = fork.ID
+
+		// Copy rooms. Keep a map from the source room's logical coord to the new
+		// room id so images (keyed by rooms.id) can be re-pointed after the copy.
+		var srcRooms []Room
+		if err := tx.Where("map_set_id = ?", srcID).Find(&srcRooms).Error; err != nil {
+			return err
+		}
+		type coordKey struct {
+			zone    string
+			x, y, l int
+		}
+		oldRoomIDByCoord := map[coordKey]int64{}
+		newRooms := make([]Room, 0, len(srcRooms))
+		for i := range srcRooms {
+			r := srcRooms[i]
+			oldRoomIDByCoord[coordKey{r.Zone, r.X, r.Y, r.L}] = r.ID
+			r.ID = 0
+			r.MapSetID = newID
+			newRooms = append(newRooms, r)
+		}
+		if len(newRooms) > 0 {
+			if err := tx.CreateInBatches(newRooms, 500).Error; err != nil {
+				return err
+			}
+		}
+		// After insert, newRooms[i].ID is populated; build old-room-id -> new-room-id.
+		newRoomIDByOldID := map[int64]int64{}
+		for i := range newRooms {
+			nr := newRooms[i]
+			oldID := oldRoomIDByCoord[coordKey{nr.Zone, nr.X, nr.Y, nr.L}]
+			newRoomIDByOldID[oldID] = nr.ID
+		}
+
+		// Copy room_images, re-pointing room_id to the copied room.
+		var srcImages []RoomImage
+		if err := tx.Where("room_id IN (SELECT id FROM rooms WHERE map_set_id = ?)", srcID).
+			Find(&srcImages).Error; err != nil {
+			return err
+		}
+		if len(srcImages) > 0 {
+			newImages := make([]RoomImage, 0, len(srcImages))
+			for i := range srcImages {
+				img := srcImages[i]
+				nid, ok := newRoomIDByOldID[img.RoomID]
+				if !ok {
+					continue // orphan image (no matching room) — skip
+				}
+				img.ID = 0
+				img.RoomID = nid
+				newImages = append(newImages, img)
+			}
+			if len(newImages) > 0 {
+				if err := tx.CreateInBatches(newImages, 500).Error; err != nil {
+					return err
+				}
+			}
+		}
+
+		// Copy room_annotations (keyed by logical coord, not rooms.id): re-key the
+		// map_set_id to the fork so the overlay travels with the copy.
+		var srcAnnos []RoomAnnotation
+		if err := tx.Where("map_set_id = ?", srcID).Find(&srcAnnos).Error; err != nil {
+			return err
+		}
+		if len(srcAnnos) > 0 {
+			newAnnos := make([]RoomAnnotation, 0, len(srcAnnos))
+			for i := range srcAnnos {
+				a := srcAnnos[i]
+				a.ID = 0
+				a.MapSetID = newID
+				newAnnos = append(newAnnos, a)
+			}
+			if err := tx.CreateInBatches(newAnnos, 500).Error; err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return newID, err
 }
 
 // ListMapSets returns all map sets, newest first.
@@ -311,7 +434,83 @@ func (s *Store) PatchRoomExits(mapSetID int64, zone string, x, y, l int, addExit
 		return false, err
 	}
 
-	// Work on a set of surviving edirs, in canonical order.
+	updates := computeExitUpdates(room, addExits, removeExits)
+	if err := s.db.Model(&Room{}).Where("id = ?", room.ID).Updates(updates).Error; err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// PatchRoomExitsWithSnapshot is PatchRoomExits plus a BEFORE-STATE capture for
+// the undo journal (plan §8). In ONE transaction it reads the target room's exact
+// prior exit state (edirs/doors/ch/exits, verbatim), applies the same idempotent
+// add/remove patch, and returns the snapshot. Capturing the literal prior state —
+// rather than a symmetric add<->remove inverse — is what makes undo correct even
+// when the patch is a no-op: adding an exit the room already has (or removing an
+// absent one) snapshots the unchanged state, so undo restores it exactly instead
+// of deleting a pre-existing exit or fabricating a phantom one. Returns
+// (before, found=true) on success, (_, found=false) when the room is absent.
+func (s *Store) PatchRoomExitsWithSnapshot(mapSetID int64, zone string, x, y, l int, addExits, removeExits []string) (before RoomExitState, found bool, err error) {
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		var room Room
+		rerr := tx.Where("map_set_id = ? AND zone = ? AND x = ? AND y = ? AND l = ?",
+			mapSetID, zone, x, y, l).First(&room).Error
+		if rerr == gorm.ErrRecordNotFound {
+			return nil // found stays false
+		}
+		if rerr != nil {
+			return rerr
+		}
+		// Capture the exact prior state BEFORE mutating.
+		before = RoomExitState{
+			Zone: zone, X: x, Y: y, L: l, Exists: true,
+			EDirs: room.EDirs, Doors: room.Doors, Ch: room.Ch, Exits: room.Exits,
+		}
+		found = true
+		updates := computeExitUpdates(room, addExits, removeExits)
+		return tx.Model(&Room{}).Where("id = ?", room.ID).Updates(updates).Error
+	})
+	if err != nil {
+		return RoomExitState{}, false, err
+	}
+	return before, found, nil
+}
+
+// RestoreRoomExitState writes a room cell's exit fields back to an exact prior
+// snapshot (undo of a TopoPatchExits). It restores edirs/doors/ch/exits verbatim.
+// Returns found=false (no error) when the target room no longer exists (e.g. it
+// was deleted by a later write) so undo soft-reports rather than failing. Only
+// Exists=true snapshots are restorable here (TopoPatchExits always snapshots an
+// existing room; create/delete restore is slice-3 work).
+func (s *Store) RestoreRoomExitState(mapSetID int64, before RoomExitState) (found bool, err error) {
+	if !before.Exists {
+		return false, nil
+	}
+	var room Room
+	rerr := s.db.Where("map_set_id = ? AND zone = ? AND x = ? AND y = ? AND l = ?",
+		mapSetID, before.Zone, before.X, before.Y, before.L).First(&room).Error
+	if rerr == gorm.ErrRecordNotFound {
+		return false, nil
+	}
+	if rerr != nil {
+		return false, rerr
+	}
+	updates := map[string]any{
+		"edirs": before.EDirs,
+		"doors": before.Doors,
+		"ch":    before.Ch,
+		"exits": before.Exits,
+	}
+	if err := s.db.Model(&Room{}).Where("id = ?", room.ID).Updates(updates).Error; err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// computeExitUpdates builds the edirs/ch/exits update map for a room after adding
+// addExits and removing removeExits (canonical letters), preserving door markers
+// for surviving directions. Shared by PatchRoomExits and PatchRoomExitsWithSnapshot.
+func computeExitUpdates(room Room, addExits, removeExits []string) map[string]any {
 	present := map[string]bool{}
 	for _, d := range decodeStrArray(room.EDirs) {
 		present[d] = true
@@ -328,8 +527,6 @@ func (s *Store) PatchRoomExits(mapSetID int64, zone string, x, y, l int, addExit
 	for _, d := range decodeStrArray(room.Doors) {
 		doorSet[d] = true
 	}
-
-	// Rebuild edirs, ch mask, and the display Exits string in canonical order.
 	order := []string{"N", "S", "E", "W", "U", "D"}
 	edirs := make([]string, 0, len(present))
 	mask := 0
@@ -347,16 +544,11 @@ func (s *Store) PatchRoomExits(mapSetID int64, zone string, x, y, l int, addExit
 		}
 	}
 	edirsJSON, _ := json.Marshal(edirs)
-
-	updates := map[string]any{
+	return map[string]any{
 		"edirs": string(edirsJSON),
 		"ch":    mask,
 		"exits": joinFields(displayParts),
 	}
-	if err := s.db.Model(&Room{}).Where("id = ?", room.ID).Updates(updates).Error; err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 // joinFields joins exit tokens with a single space (matches the .mm2 Exits form).

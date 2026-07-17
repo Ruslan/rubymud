@@ -27,12 +27,16 @@ type ServerMsg struct {
 	PendingMoves   int    `json:"pending_moves,omitempty"`
 	PositionValid  bool   `json:"position_valid,omitempty"`
 	PositionReason string `json:"position_reason,omitempty"`
-	Zone           string `json:"zone,omitempty"`
-	RoomX          int    `json:"room_x,omitempty"`
-	RoomY          int    `json:"room_y,omitempty"`
-	RoomL          int    `json:"room_l,omitempty"`
-	IsDT           bool   `json:"is_dt,omitempty"`
-	Pipe           bool   `json:"pipe,omitempty"`
+	// MapSetID scopes write-path change notifications (rooms_changed /
+	// map_sets_changed) to a specific set so a map pane bound to a now-frozen
+	// original can filter — e.g. detect a fork moved the session to a new set.
+	MapSetID int64  `json:"map_set_id,omitempty"`
+	Zone     string `json:"zone,omitempty"`
+	RoomX    int    `json:"room_x,omitempty"`
+	RoomY    int    `json:"room_y,omitempty"`
+	RoomL    int    `json:"room_l,omitempty"`
+	IsDT     bool   `json:"is_dt,omitempty"`
+	Pipe     bool   `json:"pipe,omitempty"`
 	// Exit diff surfaced when the tracker assumed a cell on a room-event mismatch
 	// (yellow): exits_added_live = in the game but not the map; exits_removed_map =
 	// in the map but not the game. Feeds the UI hover-diff / map-patch tool.

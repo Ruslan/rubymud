@@ -1,9 +1,25 @@
 package storage
 
-import "gorm.io/gorm"
+import (
+	"sync"
+
+	"gorm.io/gorm"
+)
 
 type Store struct {
 	db *gorm.DB
+
+	// journal is the shared, in-memory per-map-set topology undo journal (plan §8).
+	// Lazily created via WriteJournal(); guarded by journalMu so concurrent
+	// sessions don't race the lazy init.
+	journalMu sync.Mutex
+	journal   *WriteJournal
+
+	// topoLocks are the per-map-set mutexes serializing the topology write-path
+	// (fork decision + apply + journal) so concurrent sessions can't double-fork a
+	// frozen set. Guarded by topoMu for the lazy per-key create.
+	topoMu    sync.Mutex
+	topoLocks map[int64]*sync.Mutex
 }
 
 func NewTestStore(db *gorm.DB) *Store {

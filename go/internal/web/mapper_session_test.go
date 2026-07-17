@@ -295,15 +295,44 @@ func postMapCellPatch(t *testing.T, ts *httptest.Server, token string, sid int64
 	return out
 }
 
-// TestRESTMapCellPatchAddsExit: patching +U into the active set's room updates
-// its edirs + ch so a subsequent slim-room fetch shows the new exit.
-func TestRESTMapCellPatchAddsExit(t *testing.T) {
+// slimRoomAt finds the slim room at a coord in a set (test helper).
+func slimRoomAt(t *testing.T, s *Server, setID int64, zone string, x, y, l int) *storage.SlimRoom {
+	t.Helper()
+	rooms, err := s.store.ListSlimRooms(setID, zone)
+	if err != nil {
+		t.Fatalf("ListSlimRooms: %v", err)
+	}
+	for i := range rooms {
+		if rooms[i].X == x && rooms[i].Y == y && rooms[i].L == l {
+			return &rooms[i]
+		}
+	}
+	return nil
+}
+
+func slimHasExit(r *storage.SlimRoom, dir string) bool {
+	if r == nil {
+		return false
+	}
+	for _, d := range r.E {
+		if d == dir {
+			return true
+		}
+	}
+	return false
+}
+
+// TestRESTMapCellPatchForksAndAddsExit: patching a FROZEN imported set forks it
+// copy-on-write into a new editable set, the exit lands on the FORK (not the
+// frozen original), the response reports forked_to, and the session's active set
+// switches to the fork. This is the unified write-path (plan §8) end to end.
+func TestRESTMapCellPatchForksAndAddsExit(t *testing.T) {
 	s, sess := setupMcpTestServer(t)
 	ts := httptest.NewServer(s.httpServer.Handler)
 	defer ts.Close()
 	sid := sess.SessionID()
 
-	setID := seedTrackerSet(t, s, sid)
+	setID := seedTrackerSet(t, s, sid) // imported => frozen (editable=0)
 	sess.LoadActiveMapSet()
 
 	// Seeded room (0,0,0) has edirs ["S"], ch=2. Add U.
@@ -311,30 +340,65 @@ func TestRESTMapCellPatchAddsExit(t *testing.T) {
 	if out["ok"] != true {
 		t.Fatalf("expected ok:true, got %#v", out)
 	}
-	rooms, err := s.store.ListSlimRooms(setID, "Z")
-	if err != nil {
-		t.Fatalf("ListSlimRooms: %v", err)
+	// A frozen set forks — the response must carry forked_to.
+	forkedTo, ok := out["forked_to"].(float64)
+	if !ok || int64(forkedTo) == 0 {
+		t.Fatalf("expected forked_to with a new set id, got %#v", out)
 	}
-	var start *storage.SlimRoom
-	for i := range rooms {
-		if rooms[i].X == 0 && rooms[i].Y == 0 && rooms[i].L == 0 {
-			start = &rooms[i]
-		}
+	forkID := int64(forkedTo)
+	if forkID == setID {
+		t.Fatalf("fork id %d must differ from the frozen original %d", forkID, setID)
 	}
-	if start == nil {
-		t.Fatal("start room missing")
+
+	// The session's active set switched to the fork.
+	if got := getActiveMapSetID(t, ts, s.apiToken, sid); got == nil || *got != forkID {
+		t.Fatalf("active set = %v, want fork %d", got, forkID)
 	}
-	hasU := false
-	for _, d := range start.E {
-		if d == "U" {
-			hasU = true
-		}
+
+	// The exit landed on the FORK.
+	forkStart := slimRoomAt(t, s, forkID, "Z", 0, 0, 0)
+	if !slimHasExit(forkStart, "U") {
+		t.Errorf("fork room missing added U exit, edirs=%v", forkStart.E)
 	}
-	if !hasU {
-		t.Errorf("expected U added to edirs, got %v", start.E)
+	if forkStart.Ch&(1<<4) == 0 {
+		t.Errorf("fork room ch U-bit unset, ch=%d", forkStart.Ch)
 	}
-	if start.Ch&(1<<4) == 0 {
-		t.Errorf("expected ch U-bit set, got ch=%d", start.Ch)
+
+	// The FROZEN original is untouched.
+	origStart := slimRoomAt(t, s, setID, "Z", 0, 0, 0)
+	if slimHasExit(origStart, "U") {
+		t.Errorf("frozen original must NOT have the added U exit, edirs=%v", origStart.E)
+	}
+}
+
+// TestRESTMapCellPatchSecondWriteNoRefork: once the active set is editable (a
+// prior write forked it), a second write applies IN PLACE and does NOT fork again.
+func TestRESTMapCellPatchSecondWriteNoRefork(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+	sid := sess.SessionID()
+
+	seedTrackerSet(t, s, sid)
+	sess.LoadActiveMapSet()
+
+	out1 := postMapCellPatch(t, ts, s.apiToken, sid, `{"zone":"Z","x":0,"y":0,"l":0,"add_exits":["U"]}`)
+	forkID := int64(out1["forked_to"].(float64))
+
+	// Second write on the now-editable set: no fork, applies in place.
+	out2 := postMapCellPatch(t, ts, s.apiToken, sid, `{"zone":"Z","x":0,"y":0,"l":0,"add_exits":["D"]}`)
+	if out2["ok"] != true {
+		t.Fatalf("second write not ok: %#v", out2)
+	}
+	if _, present := out2["forked_to"]; present {
+		t.Fatalf("second write must NOT fork again, got %#v", out2)
+	}
+	if got := getActiveMapSetID(t, ts, s.apiToken, sid); got == nil || *got != forkID {
+		t.Fatalf("active set changed on second write: %v, want %d", got, forkID)
+	}
+	start := slimRoomAt(t, s, forkID, "Z", 0, 0, 0)
+	if !slimHasExit(start, "U") || !slimHasExit(start, "D") {
+		t.Errorf("both U and D should be present after two writes, got %v", start.E)
 	}
 }
 

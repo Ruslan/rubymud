@@ -405,31 +405,45 @@ func (s *Server) mapCellPatch(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	setID, ok, err := s.store.GetActiveMapSetID(id)
+	// map-cell-patch now runs through the UNIFIED topology write-path (plan §8):
+	// fork-if-frozen (copy-on-write) + apply + undo journal + position-preserving
+	// index refresh + rooms_changed broadcast. The write-path lives on the live
+	// session (it owns the tracker + broadcasts), so an unconnected session soft-
+	// fails here just as before.
+	sess, ok := s.manager.GetSession(id)
+	if !ok {
+		writeJSON(w, map[string]any{"ok": false, "reason": "session not connected — no live tracker"})
+		return
+	}
+	op := storage.TopologyOp{
+		Kind:        storage.TopoPatchExits,
+		Zone:        body.Zone,
+		X:           body.X,
+		Y:           body.Y,
+		L:           body.L,
+		AddExits:    normalizeDirs(body.AddExits),
+		RemoveExits: normalizeDirs(body.RemoveExits),
+	}
+	res, err := sess.WriteTopology(op)
 	if err != nil {
+		if err == session.ErrNoActiveMapSet {
+			writeJSON(w, map[string]any{"ok": false, "reason": "no active map set for this session"})
+			return
+		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	if !ok || setID <= 0 {
-		writeJSON(w, map[string]any{"ok": false, "reason": "no active map set for this session"})
-		return
-	}
-	found, err := s.store.PatchRoomExits(setID, body.Zone, body.X, body.Y, body.L, normalizeDirs(body.AddExits), normalizeDirs(body.RemoveExits))
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	if !found {
+	if !res.Applied {
 		writeJSON(w, map[string]any{"ok": false, "reason": "room not found in the active map set"})
 		return
 	}
-	// Reload the live tracker index so the patched edge is known (AGENTS #2), and
-	// tell open map panes to reload the zone.
-	if sess, ok := s.manager.GetSession(id); ok {
-		sess.ReloadActiveMapSet()
-		sess.BroadcastServerMsg(session.ServerMsg{Type: "rooms_changed"})
+	out := map[string]any{"ok": true}
+	// A fork means the session's active set changed — tell the UI/agent so it can
+	// switch to the new editable set.
+	if res.Forked {
+		out["forked_to"] = res.ForkedTo
 	}
-	writeJSON(w, map[string]any{"ok": true})
+	writeJSON(w, out)
 }
 
 // normalizeDirs upper-cases + trims direction tokens and drops empties so the

@@ -583,6 +583,39 @@ func (s *Server) mcpSetActiveMapSet(sid, mapSet int64) (string, bool) {
 	return fmt.Sprintf("Active map set for session %d set to id=%d (%s). Tracker index rebuilt.", sid, mapSet, set.Name), false
 }
 
+// mcpMapUndo implements mud_map_undo: pop the last topology write on the session's
+// active set and RESTORE the recorded before-state through the SAME unified
+// write-path (broadcast + position-preserving refresh). The journal is per-map-set
+// (plan §8), so this only reverses writes made to the currently-active set. Returns
+// what was undone or "nothing to undo". Soft-fails (isError) when the session is not
+// connected or has no active set.
+func (s *Server) mcpMapUndo(sid int64) (string, bool) {
+	sess, ok := s.manager.GetSession(sid)
+	if !ok {
+		return "session not connected — no live tracker.", true
+	}
+	res, entry, err := sess.UndoTopology()
+	if err != nil {
+		if err == session.ErrNoActiveMapSet {
+			return "No active map set for this session — nothing to undo.", true
+		}
+		return "failed to undo: " + err.Error(), true
+	}
+	if res.NothingToUndo {
+		return fmt.Sprintf("Nothing to undo on map set %d.", res.SetID), false
+	}
+	if !res.Applied {
+		// The target cell vanished (e.g. deleted by a later write) — the before-state
+		// could not be restored. Report it rather than silently succeeding.
+		b := entry.Before
+		return fmt.Sprintf("Undo skipped: target cell {%s %d,%d,%d} no longer exists in set %d.",
+			b.Zone, b.X, b.Y, b.L, res.SetID), true
+	}
+	b := entry.Before
+	return fmt.Sprintf("Undid last write on map set %d (%s) — restored cell {%s %d,%d,%d}.",
+		res.SetID, entry.Label, b.Zone, b.X, b.Y, b.L), false
+}
+
 // --- small helpers ---------------------------------------------------------
 
 func containsStr(list []string, v string) bool {

@@ -324,6 +324,16 @@ func (s *Server) mcpListTools() any {
 					"required": []string{"map_set"},
 				},
 			},
+			map[string]any{
+				"name":        "mud_map_undo",
+				"description": "Undo the last topology write (e.g. an exit add/remove) on the session's ACTIVE map set. The undo journal is per map set (a write on set A is not undoable while set B is active) and in-memory (lost on host restart). Input {session_id?}. Returns what was undone, or \"nothing to undo\" when the set's journal is empty. An omitted session_id defaults to the first session.",
+				"inputSchema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"session_id": sessionIDProp,
+					},
+				},
+			},
 		},
 	}
 }
@@ -860,6 +870,21 @@ func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 			break
 		}
 		content, isError = s.mcpRoomAnnotations(sid, strings.TrimSpace(args.Zone))
+
+	case "mud_map_undo":
+		var args struct {
+			SessionID int64 `json:"session_id"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return nil, err
+		}
+		sid, err := s.mcpResolveSessionID(args.SessionID)
+		if err != nil {
+			content = err.Error()
+			isError = true
+			break
+		}
+		content, isError = s.mcpMapUndo(sid)
 
 	case "mud_set_active_map_set":
 		var args struct {

@@ -71,6 +71,36 @@ func (t *Tracker) SetIndex(idx *Index) {
 	t.pending = t.pending[:0]
 }
 
+// SetIndexPreservingPosition swaps the index to a rebuilt one (a topology write
+// changed the graph, so the index must be rebuilt) WITHOUT resetting the tracker
+// to 🔴 when the player has not moved. It captures the current
+// (coord, confidence, pending queue) before the swap and, if that coord STILL
+// EXISTS in the new index, restores the position + confidence + pending queue
+// verbatim. It falls to 🔴 (SetIndex semantics) only when there is no valid
+// position to preserve or the current cell no longer exists in the new index
+// (e.g. it was deleted by the write). This is the topology-write refresh path:
+// adding an exit to the CURRENT room must NOT lose position (same footgun class
+// as the annotation-DT reset — a naive SetIndex would flush pending + go red).
+//
+// A nil new index degrades to SetIndex(nil) (no set — nothing to preserve into).
+func (t *Tracker) SetIndexPreservingPosition(idx *Index) {
+	prevPos := t.pos
+	prevPending := append([]string(nil), t.pending...)
+
+	if idx == nil {
+		t.SetIndex(nil)
+		return
+	}
+	// Only a valid position anchored to a still-existing cell can be preserved.
+	if !prevPos.Valid || idx.Room(prevPos.Coord) == nil {
+		t.SetIndex(idx)
+		return
+	}
+	t.idx = idx
+	t.pos = prevPos
+	t.pending = prevPending
+}
+
 // Index returns the current index (may be nil).
 func (t *Tracker) Index() *Index { return t.idx }
 
