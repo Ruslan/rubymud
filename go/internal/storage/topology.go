@@ -10,23 +10,41 @@ import "sync"
 // tracker refresh — serialized per map_set_id — so UI edits and MCP CRUD share
 // ONE path ("никаких параллельных путей" scoped to topology).
 
-// TopologyOpKind enumerates the topology write ops. This slice wires exactly one
-// concrete op through the path — TopoPatchExits (the exit add/remove behind
-// map-cell-patch). Slice 3's CRUD (upsert/link/unlink/delete room) plugs in as
-// more kinds here: add the kind, its apply arm in ApplyTopologyOp, and (for
-// create/delete) extend the before-state snapshot to carry the whole room or its
-// absence — the journal, per-set serialization, fork, broadcast, and
-// position-preservation machinery are reused unchanged.
+// TopologyOpKind enumerates the topology write ops. Slice 2 wired one kind
+// (TopoPatchExits); slice 3 adds the CRUD kinds (upsert/link/unlink/delete room).
+// Every kind plugs into ONE mechanism: add the kind, its apply arm in
+// ApplyTopologyOp (capturing the affected cells' full before-snapshots), and its
+// UndoLabel — the journal, per-set serialization, fork, broadcast, and
+// position-preservation machinery are reused unchanged. A single generalized
+// undo (RestoreRoomSnapshots over a list of full-room snapshots) reverses ALL of
+// them, so create/delete/link/unlink and the exit patch share one undo path.
 type TopologyOpKind string
 
 const (
 	// TopoPatchExits adds AddExits and removes RemoveExits on ONE room's edirs /
 	// ch bitmask / display exits (the PatchRoomExits primitive).
 	TopoPatchExits TopologyOpKind = "patch_exits"
+	// TopoUpsertRoom creates a room at the target cell, or partially updates an
+	// existing one (only the fields the caller provided change; omitted fields are
+	// preserved on update / defaulted on create). Keyed by (zone,x,y,l).
+	TopoUpsertRoom TopologyOpKind = "upsert_room"
+	// TopoLink adds exit Dir to the target cell and, when a room exists at the grid
+	// neighbor, the reverse opposite(Dir) there (a bidirectional edge). With no
+	// neighbor room it records the one-sided exit (still valid).
+	TopoLink TopologyOpKind = "link"
+	// TopoUnlink removes exit Dir from the target cell and the reverse on the
+	// neighbor if that neighbor room advertises it.
+	TopoUnlink TopologyOpKind = "unlink"
+	// TopoDeleteRoom deletes the room at the target cell. Its room_annotations /
+	// room_images are left dangling (see deleteRoomWithSnapshot).
+	TopoDeleteRoom TopologyOpKind = "delete_room"
 )
 
 // TopologyOp is one topology write against a map set. Coord (zone,x,y,l) targets
-// the room; the exit lists are canonical upper-case direction letters ("N".."D").
+// the room; the remaining fields are op-specific:
+//   - TopoPatchExits: AddExits / RemoveExits (canonical letters "N".."D").
+//   - TopoLink / TopoUnlink: Dir (a single canonical letter).
+//   - TopoUpsertRoom: Fields — the partial patch (only set members apply).
 type TopologyOp struct {
 	Kind        TopologyOpKind
 	Zone        string
@@ -35,48 +53,104 @@ type TopologyOp struct {
 	L           int
 	AddExits    []string
 	RemoveExits []string
+	Dir         string
+	Fields      RoomFields
 }
 
-// RoomExitState is the exact prior exit state of one room cell — the fields a
-// TopoPatchExits write touches. It is the BEFORE-STATE snapshot captured before
-// an op applies; undo restores the room to precisely this state. Because it holds
-// the literal prior values (not a symmetric add/remove inverse), it is correct
-// regardless of PatchRoomExits' idempotency: adding an exit the room already has,
-// or removing an absent one, both snapshot the unchanged state, so undo restores
-// it exactly rather than fabricating/deleting an exit. Exists=false marks a cell
-// that had no room (reserved for slice-3 create/delete; TopoPatchExits only ever
-// snapshots existing rooms).
-type RoomExitState struct {
-	Zone   string
-	X      int
-	Y      int
-	L      int
-	Exists bool
-	EDirs  string // JSON array text, verbatim
-	Doors  string // JSON array text, verbatim
-	Ch     int
-	Exits  string // display exits string, verbatim
+// RoomFields is the partial field set of a mud_room_upsert: every member is a
+// pointer so "omitted" (nil, preserved on update / defaulted on create) is
+// distinct from "set to zero/empty" (a non-nil pointer to the zero value). Exits
+// can be given either as a display string (Exits) OR canonical dir letters
+// (via SetEDirs); the apply normalizes whichever is provided into edirs/ch/exits
+// consistently (Exits wins if both are set). Ch is accepted but recomputed from
+// the resolved edirs so the mask never drifts from the exit set.
+type RoomFields struct {
+	Hint       *string
+	Desc       *string
+	Exits      *string
+	edirs      []string
+	edirsSet   bool // whether edirs was provided (nil-slice "omit" vs empty "clear")
+	Ch         *int
+	IsDT       *bool
+	Pipe       *bool
+	ImageIndex *int
+	Note       *string
+	DX         *int
+	DY         *int
+	DL         *int
 }
 
-// UndoEntry is one journal record: the human label of the write plus the
-// before-state snapshot that reverses it. Undo applies the snapshot through
-// RestoreRoomExitState.
+// SetEDirs marks edirs as provided (even when empty, meaning "clear all exits").
+// The caller uses this so an omitted edirs (preserve) is distinct from an
+// explicit empty edirs (clear). Exits (display string) takes precedence if both
+// are set.
+func (f *RoomFields) SetEDirs(dirs []string) {
+	f.edirs = dirs
+	f.edirsSet = true
+}
+
+// EDirs / EDirsSet expose the parsed edirs patch (read side, for the apply).
+func (f RoomFields) EDirs() []string { return f.edirs }
+func (f RoomFields) EDirsSet() bool  { return f.edirsSet }
+
+// RoomSnapshot is the exact prior state of ONE cell — a WHOLE room plus an
+// "Existed" flag — captured before an op applies. It generalizes slice-2's
+// exits-only RoomExitState so create/delete/whole-room writes are undoable:
+//   - Existed=true  → the room existed; Room holds its exact prior fields, and
+//     undo upserts those fields back.
+//   - Existed=false → no room was at this cell; undo deletes any room the op
+//     created there (so undo of a create removes the room; undo of a patch on an
+//     absent cell fabricates nothing).
+//
+// Room.ID is not part of the logical identity (a fork re-keys ids); undo matches
+// by (map_set_id, zone,x,y,l) and preserves the surviving row's id. For an
+// Existed=false snapshot only the coord fields of Room are meaningful.
+type RoomSnapshot struct {
+	Existed bool
+	Room    Room
+}
+
+// UndoEntry is one journal record: the human label of the write plus the list of
+// per-cell before-snapshots that reverse it. It is a LIST because a single op can
+// touch more than one cell (link/unlink snapshot both the cell and its neighbor).
+// Undo applies the snapshots through RestoreRoomSnapshots — restoring the literal
+// prior state (not a symmetric inverse), so undo is correct even for idempotent
+// no-op writes.
 type UndoEntry struct {
 	Label  string
-	Before RoomExitState
+	Before []RoomSnapshot
+}
+
+// PrimaryCell returns the coord of the first snapshot (the op's target cell) for
+// reporting, plus ok=false when the entry has no snapshots.
+func (e UndoEntry) PrimaryCell() (zone string, x, y, l int, ok bool) {
+	if len(e.Before) == 0 {
+		return "", 0, 0, 0, false
+	}
+	r := e.Before[0].Room
+	return r.Zone, r.X, r.Y, r.L, true
 }
 
 // ApplyTopologyOp applies one topology op to the given (already-editable) map set
-// and returns the BEFORE-STATE snapshot needed to undo it. found=false (no error)
-// means the target room does not exist, so callers soft-fail rather than 500; the
-// snapshot is only meaningful when found=true. This is the ONLY function that
-// mutates topology; every write-path (UI, MCP CRUD, undo) funnels through it.
-func (s *Store) ApplyTopologyOp(mapSetID int64, op TopologyOp) (before RoomExitState, found bool, err error) {
+// and returns the BEFORE-STATE snapshots needed to undo it (one per affected
+// cell). found=false (no error) means the op could not apply to a required target
+// (e.g. delete/patch of a missing room), so callers soft-fail rather than 500;
+// the snapshots are only meaningful when found=true. This is the ONLY function
+// that mutates topology; every write-path (UI, MCP CRUD, undo) funnels through it.
+func (s *Store) ApplyTopologyOp(mapSetID int64, op TopologyOp) (before []RoomSnapshot, found bool, err error) {
 	switch op.Kind {
 	case TopoPatchExits:
-		return s.PatchRoomExitsWithSnapshot(mapSetID, op.Zone, op.X, op.Y, op.L, op.AddExits, op.RemoveExits)
+		return s.patchExitsWithSnapshot(mapSetID, op.Zone, op.X, op.Y, op.L, op.AddExits, op.RemoveExits)
+	case TopoUpsertRoom:
+		return s.upsertRoomWithSnapshot(mapSetID, op.Zone, op.X, op.Y, op.L, op.Fields)
+	case TopoLink:
+		return s.linkWithSnapshot(mapSetID, op.Zone, op.X, op.Y, op.L, op.Dir, true)
+	case TopoUnlink:
+		return s.linkWithSnapshot(mapSetID, op.Zone, op.X, op.Y, op.L, op.Dir, false)
+	case TopoDeleteRoom:
+		return s.deleteRoomWithSnapshot(mapSetID, op.Zone, op.X, op.Y, op.L)
 	default:
-		return RoomExitState{}, false, nil
+		return nil, false, nil
 	}
 }
 
@@ -99,6 +173,14 @@ func (op TopologyOp) UndoLabel() string {
 			s = "exit patch (no-op)"
 		}
 		return s
+	case TopoUpsertRoom:
+		return "upsert room"
+	case TopoLink:
+		return "link " + op.Dir
+	case TopoUnlink:
+		return "unlink " + op.Dir
+	case TopoDeleteRoom:
+		return "delete room"
 	default:
 		return string(op.Kind)
 	}

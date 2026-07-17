@@ -604,16 +604,145 @@ func (s *Server) mcpMapUndo(sid int64) (string, bool) {
 	if res.NothingToUndo {
 		return fmt.Sprintf("Nothing to undo on map set %d.", res.SetID), false
 	}
+	zone, x, y, l, ok := entry.PrimaryCell()
 	if !res.Applied {
-		// The target cell vanished (e.g. deleted by a later write) — the before-state
+		// Every target cell vanished (e.g. deleted by a later write) — the before-state
 		// could not be restored. Report it rather than silently succeeding.
-		b := entry.Before
-		return fmt.Sprintf("Undo skipped: target cell {%s %d,%d,%d} no longer exists in set %d.",
-			b.Zone, b.X, b.Y, b.L, res.SetID), true
+		if ok {
+			return fmt.Sprintf("Undo skipped: target cell {%s %d,%d,%d} no longer exists in set %d.",
+				zone, x, y, l, res.SetID), true
+		}
+		return fmt.Sprintf("Undo skipped: target no longer exists in set %d.", res.SetID), true
 	}
-	b := entry.Before
 	return fmt.Sprintf("Undid last write on map set %d (%s) — restored cell {%s %d,%d,%d}.",
-		res.SetID, entry.Label, b.Zone, b.X, b.Y, b.L), false
+		res.SetID, entry.Label, zone, x, y, l), false
+}
+
+// --- topology CRUD (plan §7/§8, slice 3) -----------------------------------
+//
+// mud_room_upsert / mud_room_link / mud_room_unlink / mud_room_delete all funnel
+// through Session.WriteTopology (the unified write-path): fork-if-frozen +
+// per-set lock + generalized before-state undo journal + rooms_changed broadcast +
+// position-preserving tracker refresh. Each soft-fails (isError) on no active set /
+// invalid input, and reports forked_to when the write forked a frozen set. Undo of
+// any of them is mud_map_undo.
+
+// writeTopologyResultText renders the shared confirmation tail (fork note) for a
+// successful topology write.
+func writeTopologyResultText(sb *strings.Builder, res session.TopologyWriteResult) {
+	if res.Forked {
+		sb.WriteString(fmt.Sprintf("forked_to: %d (frozen set forked to an editable copy; session now active on it)\n", res.ForkedTo))
+	}
+}
+
+// topoWrite runs op through the session write-path and maps the common outcomes
+// (no session / no active set) to soft-fail text. Returns (res, ""/errText,
+// isError). On success errText is "" and isError false.
+func (s *Server) topoWrite(sid int64, op storage.TopologyOp) (session.TopologyWriteResult, string, bool) {
+	sess, ok := s.manager.GetSession(sid)
+	if !ok {
+		return session.TopologyWriteResult{}, "session not connected — no live tracker.", true
+	}
+	res, err := sess.WriteTopology(op)
+	if err != nil {
+		if err == session.ErrNoActiveMapSet {
+			return res, "No active map set for this session — set one with mud_set_active_map_set first.", true
+		}
+		return res, "failed to write topology: " + err.Error(), true
+	}
+	return res, "", false
+}
+
+// mcpRoomUpsert implements mud_room_upsert: create-or-partial-update a room by
+// key (zone,x,y,l). Only provided fields change (create defaults the rest). The
+// free-text fields (hint/desc/note) are capped to annotationFieldCap runes —
+// truncated with a soft note rather than rejected — so an agent in a loop cannot
+// bloat a room row (matching slice-1's annotation cap).
+func (s *Server) mcpRoomUpsert(sid int64, c mcpCoordArg, f storage.RoomFields) (string, bool) {
+	var clipped []string
+	for _, lbl := range []string{
+		capField(f.Hint, "hint"),
+		capField(f.Desc, "desc"),
+		capField(f.Note, "note"),
+	} {
+		if lbl != "" {
+			clipped = append(clipped, lbl)
+		}
+	}
+
+	res, errText, isErr := s.topoWrite(sid, storage.TopologyOp{
+		Kind: storage.TopoUpsertRoom, Zone: c.Zone, X: c.X, Y: c.Y, L: c.L, Fields: f,
+	})
+	if isErr {
+		return errText, true
+	}
+	if !res.Applied {
+		return "upsert did not apply (unexpected).", true
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Upserted room {%s %d,%d,%d} on map set %d.\n", c.Zone, c.X, c.Y, c.L, res.SetID))
+	if len(clipped) > 0 {
+		sb.WriteString(fmt.Sprintf("note: truncated to %d chars: %s.\n", annotationFieldCap, strings.Join(clipped, ", ")))
+	}
+	writeTopologyResultText(&sb, res)
+	return sb.String(), false
+}
+
+// mcpRoomLink / mcpRoomUnlink implement mud_room_link / mud_room_unlink: add or
+// remove an exit-edge between the cell and its grid neighbor (bidirectional when
+// the neighbor room exists; one-sided otherwise).
+func (s *Server) mcpRoomLink(sid int64, c mcpCoordArg, dir string, add bool) (string, bool) {
+	kind := storage.TopoLink
+	verb := "Linked"
+	if !add {
+		kind = storage.TopoUnlink
+		verb = "Unlinked"
+	}
+	res, errText, isErr := s.topoWrite(sid, storage.TopologyOp{
+		Kind: kind, Zone: c.Zone, X: c.X, Y: c.Y, L: c.L, Dir: dir,
+	})
+	if isErr {
+		return errText, true
+	}
+	if !res.Applied {
+		return fmt.Sprintf("No room at {%s %d,%d,%d} in the active set — cannot %s.",
+			c.Zone, c.X, c.Y, c.L, strings.ToLower(verb)), true
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("%s exit %s at {%s %d,%d,%d} on map set %d (mirrored on the grid neighbor if a room is there).\n",
+		verb, dir, c.Zone, c.X, c.Y, c.L, res.SetID))
+	writeTopologyResultText(&sb, res)
+	return sb.String(), false
+}
+
+// mcpRoomDelete implements mud_room_delete: delete the room at the cell. Its
+// room_annotations / room_images are left dangling (annotation-overlay model).
+func (s *Server) mcpRoomDelete(sid int64, c mcpCoordArg) (string, bool) {
+	res, errText, isErr := s.topoWrite(sid, storage.TopologyOp{
+		Kind: storage.TopoDeleteRoom, Zone: c.Zone, X: c.X, Y: c.Y, L: c.L,
+	})
+	if isErr {
+		return errText, true
+	}
+	if !res.Applied {
+		return fmt.Sprintf("No room at {%s %d,%d,%d} in the active set — nothing to delete.",
+			c.Zone, c.X, c.Y, c.L), true
+	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Deleted room {%s %d,%d,%d} on map set %d (any annotations/images left dangling; mud_map_undo recreates it).\n",
+		c.Zone, c.X, c.Y, c.L, res.SetID))
+	writeTopologyResultText(&sb, res)
+	return sb.String(), false
+}
+
+// isCanonicalDir reports whether dir is one of the six canonical direction
+// letters (already upper-cased/trimmed by the caller).
+func isCanonicalDir(dir string) bool {
+	switch dir {
+	case "N", "S", "E", "W", "U", "D":
+		return true
+	}
+	return false
 }
 
 // --- small helpers ---------------------------------------------------------

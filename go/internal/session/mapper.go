@@ -409,12 +409,12 @@ func (s *Session) UndoTopology() (TopologyWriteResult, storage.UndoEntry, error)
 		res.NothingToUndo = true
 		return res, storage.UndoEntry{}, nil
 	}
-	found, err := s.store.RestoreRoomExitState(setID, entry.Before)
+	applied, err := s.store.RestoreRoomSnapshots(setID, entry.Before)
 	if err != nil {
 		return res, entry, err
 	}
-	if !found {
-		// The target cell vanished (deleted by a later write) — nothing to restore.
+	if !applied {
+		// Every target cell vanished (deleted by a later write) — nothing to restore.
 		return res, entry, nil
 	}
 	res.Applied = true

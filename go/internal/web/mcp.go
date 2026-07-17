@@ -334,6 +334,80 @@ func (s *Server) mcpListTools() any {
 					},
 				},
 			},
+			map[string]any{
+				"name":        "mud_room_upsert",
+				"description": "Create or partially update a room of the session's ACTIVE map set, keyed by the cell {zone,x,y,l}. Topology write — if the active set is frozen (imported) it is forked copy-on-write to an editable copy and the session switches to it (forked_to reported). Partial: only the fields you pass change; omitted fields are preserved on update / defaulted on create. Exits may be given as a display string (exits, e.g. \"N (S) U\") OR as canonical dir letters (edirs, e.g. [\"N\",\"S\"]); whichever is provided rewrites edirs/ch/exits together (exits wins if both). The fingerprint is recomputed from hint/desc/exits so tracker auto-resync stays consistent. Reversible with mud_map_undo (undo of a create deletes the room). Soft-fails (isError) with no active set. An omitted session_id defaults to the first session.",
+				"inputSchema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"session_id": sessionIDProp,
+						"zone":       map[string]any{"type": "string"},
+						"x":          map[string]any{"type": "integer"},
+						"y":          map[string]any{"type": "integer"},
+						"l":          map[string]any{"type": "integer"},
+						"hint":       map[string]any{"type": "string", "description": "Room hint (short name). Recomputes fingerprint."},
+						"desc":       map[string]any{"type": "string", "description": "Room description. Recomputes fingerprint."},
+						"exits":      map[string]any{"type": "string", "description": "Display exits string with optional door markers, e.g. \"N (S) U\". Rewrites edirs/ch/exits."},
+						"edirs":      map[string]any{"type": "array", "items": map[string]any{"type": "string"}, "description": "Canonical exit dir letters, e.g. [\"N\",\"S\",\"U\"]. Alternative to exits; pass [] to clear all exits."},
+						"ch":         map[string]any{"type": "integer", "description": "Connectivity bitmask (accepted but derived from the resolved edirs — the mask never drifts from the exit set)."},
+						"is_dt":      map[string]any{"type": "boolean", "description": "Mark the cell a death trap."},
+						"pipe":       map[string]any{"type": "boolean", "description": "Mark the cell a pipe corridor."},
+						"imageindex": map[string]any{"type": "integer", "description": "Room image index."},
+						"note":       map[string]any{"type": "string"},
+						"dx":         map[string]any{"type": "integer", "description": "Display X offset (layout)."},
+						"dy":         map[string]any{"type": "integer", "description": "Display Y offset (layout)."},
+						"dl":         map[string]any{"type": "integer", "description": "Display level offset (layout)."},
+					},
+					"required": []string{"zone", "x", "y", "l"},
+				},
+			},
+			map[string]any{
+				"name":        "mud_room_link",
+				"description": "Add an exit-edge in direction dir from the cell {zone,x,y,l} of the session's ACTIVE map set. Bidirectional: if a room exists at the grid neighbor (+delta(dir)) the reverse exit is added there too; otherwise a one-sided exit is recorded (still valid). Topology write — forks a frozen set (forked_to reported). dir is a canonical letter N/S/E/W/U/D. Reversible with mud_map_undo (restores BOTH cells). Soft-fails (isError) with no active set, no room at the cell, or a bad direction. An omitted session_id defaults to the first session.",
+				"inputSchema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"session_id": sessionIDProp,
+						"zone":       map[string]any{"type": "string"},
+						"x":          map[string]any{"type": "integer"},
+						"y":          map[string]any{"type": "integer"},
+						"l":          map[string]any{"type": "integer"},
+						"dir":        map[string]any{"type": "string", "description": "Exit direction: one of N,S,E,W,U,D (canonical letters)."},
+					},
+					"required": []string{"zone", "x", "y", "l", "dir"},
+				},
+			},
+			map[string]any{
+				"name":        "mud_room_unlink",
+				"description": "Remove the exit-edge in direction dir from the cell {zone,x,y,l} of the session's ACTIVE map set, and the reverse on the grid neighbor if that neighbor room advertises it. Topology write — forks a frozen set (forked_to reported). dir is a canonical letter N/S/E/W/U/D. Reversible with mud_map_undo (restores BOTH cells). Soft-fails (isError) with no active set, no room at the cell, or a bad direction. An omitted session_id defaults to the first session.",
+				"inputSchema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"session_id": sessionIDProp,
+						"zone":       map[string]any{"type": "string"},
+						"x":          map[string]any{"type": "integer"},
+						"y":          map[string]any{"type": "integer"},
+						"l":          map[string]any{"type": "integer"},
+						"dir":        map[string]any{"type": "string", "description": "Exit direction: one of N,S,E,W,U,D (canonical letters)."},
+					},
+					"required": []string{"zone", "x", "y", "l", "dir"},
+				},
+			},
+			map[string]any{
+				"name":        "mud_room_delete",
+				"description": "Delete the room at the cell {zone,x,y,l} of the session's ACTIVE map set. Topology write — forks a frozen set (forked_to reported). The cell's room_annotations / room_images are left dangling (the annotation overlay is keyed by logical coord and outlives the room). Reversible with mud_map_undo (recreates the room with all fields, exits, and fingerprint intact). Soft-fails (isError) with no active set or no room at the cell. An omitted session_id defaults to the first session.",
+				"inputSchema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"session_id": sessionIDProp,
+						"zone":       map[string]any{"type": "string"},
+						"x":          map[string]any{"type": "integer"},
+						"y":          map[string]any{"type": "integer"},
+						"l":          map[string]any{"type": "integer"},
+					},
+					"required": []string{"zone", "x", "y", "l"},
+				},
+			},
 		},
 	}
 }
@@ -885,6 +959,109 @@ func (s *Server) mcpCallTool(params json.RawMessage) (any, error) {
 			break
 		}
 		content, isError = s.mcpMapUndo(sid)
+
+	case "mud_room_upsert":
+		var args struct {
+			SessionID  int64     `json:"session_id"`
+			Zone       string    `json:"zone"`
+			X          int       `json:"x"`
+			Y          int       `json:"y"`
+			L          int       `json:"l"`
+			Hint       *string   `json:"hint"`
+			Desc       *string   `json:"desc"`
+			Exits      *string   `json:"exits"`
+			EDirs      *[]string `json:"edirs"`
+			Ch         *int      `json:"ch"`
+			IsDT       *bool     `json:"is_dt"`
+			Pipe       *bool     `json:"pipe"`
+			ImageIndex *int      `json:"imageindex"`
+			Note       *string   `json:"note"`
+			DX         *int      `json:"dx"`
+			DY         *int      `json:"dy"`
+			DL         *int      `json:"dl"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return nil, err
+		}
+		sid, err := s.mcpResolveSessionID(args.SessionID)
+		if err != nil {
+			content = err.Error()
+			isError = true
+			break
+		}
+		if strings.TrimSpace(args.Zone) == "" {
+			content = "zone is required."
+			isError = true
+			break
+		}
+		f := storage.RoomFields{
+			Hint: args.Hint, Desc: args.Desc, Exits: args.Exits, Ch: args.Ch,
+			IsDT: args.IsDT, Pipe: args.Pipe, ImageIndex: args.ImageIndex,
+			Note: args.Note, DX: args.DX, DY: args.DY, DL: args.DL,
+		}
+		if args.EDirs != nil {
+			f.SetEDirs(*args.EDirs)
+		}
+		content, isError = s.mcpRoomUpsert(sid,
+			mcpCoordArg{Zone: args.Zone, X: args.X, Y: args.Y, L: args.L}, f)
+
+	case "mud_room_link", "mud_room_unlink":
+		var args struct {
+			SessionID int64  `json:"session_id"`
+			Zone      string `json:"zone"`
+			X         int    `json:"x"`
+			Y         int    `json:"y"`
+			L         int    `json:"l"`
+			Dir       string `json:"dir"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return nil, err
+		}
+		sid, err := s.mcpResolveSessionID(args.SessionID)
+		if err != nil {
+			content = err.Error()
+			isError = true
+			break
+		}
+		if strings.TrimSpace(args.Zone) == "" {
+			content = "zone is required."
+			isError = true
+			break
+		}
+		dir := strings.ToUpper(strings.TrimSpace(args.Dir))
+		if !isCanonicalDir(dir) {
+			content = fmt.Sprintf("dir %q is not a canonical direction (want one of N,S,E,W,U,D).", args.Dir)
+			isError = true
+			break
+		}
+		content, isError = s.mcpRoomLink(sid,
+			mcpCoordArg{Zone: args.Zone, X: args.X, Y: args.Y, L: args.L},
+			dir, call.Name == "mud_room_link")
+
+	case "mud_room_delete":
+		var args struct {
+			SessionID int64  `json:"session_id"`
+			Zone      string `json:"zone"`
+			X         int    `json:"x"`
+			Y         int    `json:"y"`
+			L         int    `json:"l"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return nil, err
+		}
+		sid, err := s.mcpResolveSessionID(args.SessionID)
+		if err != nil {
+			content = err.Error()
+			isError = true
+			break
+		}
+		if strings.TrimSpace(args.Zone) == "" {
+			content = "zone is required."
+			isError = true
+			break
+		}
+		content, isError = s.mcpRoomDelete(sid,
+			mcpCoordArg{Zone: args.Zone, X: args.X, Y: args.Y, L: args.L})
 
 	case "mud_set_active_map_set":
 		var args struct {

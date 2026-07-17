@@ -159,7 +159,9 @@ func TestWriteJournal(t *testing.T) {
 	}
 
 	// Per-set keying: a push on set 1 is invisible to set 2.
-	j.Push(1, UndoEntry{Label: "add U", Before: RoomExitState{Zone: "Z", Exists: true, EDirs: `["S"]`}})
+	j.Push(1, UndoEntry{Label: "add U", Before: []RoomSnapshot{
+		{Existed: true, Room: Room{Zone: "Z", EDirs: `["S"]`}},
+	}})
 	if j.Depth(2) != 0 {
 		t.Error("set 2 journal must be empty")
 	}
@@ -170,7 +172,7 @@ func TestWriteJournal(t *testing.T) {
 		t.Error("Pop on the other set must be empty")
 	}
 	entry, ok := j.Pop(1)
-	if !ok || entry.Label != "add U" || entry.Before.EDirs != `["S"]` {
+	if !ok || entry.Label != "add U" || len(entry.Before) != 1 || entry.Before[0].Room.EDirs != `["S"]` {
 		t.Errorf("Pop(1) = %+v, ok=%v", entry, ok)
 	}
 
@@ -222,7 +224,7 @@ func TestApplyTopologyOpSnapshotAndRestore(t *testing.T) {
 		if got := exitsAt(t, store, id); !contains(got, "U") {
 			t.Fatalf("U not added: %v", got)
 		}
-		if _, err := store.RestoreRoomExitState(id, before); err != nil {
+		if _, err := store.RestoreRoomSnapshots(id, before); err != nil {
 			t.Fatalf("restore: %v", err)
 		}
 		if got := exitsAt(t, store, id); contains(got, "U") {
@@ -240,7 +242,7 @@ func TestApplyTopologyOpSnapshotAndRestore(t *testing.T) {
 		if got := exitsAt(t, store, id); !contains(got, "N") {
 			t.Fatalf("precondition: N should be present: %v", got)
 		}
-		if _, err := store.RestoreRoomExitState(id, before); err != nil {
+		if _, err := store.RestoreRoomSnapshots(id, before); err != nil {
 			t.Fatalf("restore: %v", err)
 		}
 		// The bug: undo would DELETE the pre-existing N. Must stay.
@@ -259,7 +261,7 @@ func TestApplyTopologyOpSnapshotAndRestore(t *testing.T) {
 		if got := exitsAt(t, store, id); contains(got, "U") {
 			t.Fatalf("precondition: U should be absent: %v", got)
 		}
-		if _, err := store.RestoreRoomExitState(id, before); err != nil {
+		if _, err := store.RestoreRoomSnapshots(id, before); err != nil {
 			t.Fatalf("restore: %v", err)
 		}
 		// The bug: undo would FABRICATE a phantom U. Must stay absent.

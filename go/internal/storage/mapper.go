@@ -3,8 +3,11 @@ package storage
 import (
 	"database/sql"
 	"encoding/json"
+	"strings"
 
 	"gorm.io/gorm"
+
+	"rubymud/go/internal/mapimport"
 )
 
 // MapSet is one imported archive of maps (a global entity a session references).
@@ -441,75 +444,315 @@ func (s *Store) PatchRoomExits(mapSetID int64, zone string, x, y, l int, addExit
 	return true, nil
 }
 
-// PatchRoomExitsWithSnapshot is PatchRoomExits plus a BEFORE-STATE capture for
-// the undo journal (plan §8). In ONE transaction it reads the target room's exact
-// prior exit state (edirs/doors/ch/exits, verbatim), applies the same idempotent
-// add/remove patch, and returns the snapshot. Capturing the literal prior state —
-// rather than a symmetric add<->remove inverse — is what makes undo correct even
-// when the patch is a no-op: adding an exit the room already has (or removing an
-// absent one) snapshots the unchanged state, so undo restores it exactly instead
-// of deleting a pre-existing exit or fabricating a phantom one. Returns
-// (before, found=true) on success, (_, found=false) when the room is absent.
-func (s *Store) PatchRoomExitsWithSnapshot(mapSetID int64, zone string, x, y, l int, addExits, removeExits []string) (before RoomExitState, found bool, err error) {
+// --- generalized topology apply arms (plan §8, slice 3) --------------------
+//
+// Each arm runs in ONE transaction, captures the affected cells' full before-
+// snapshots (RoomSnapshot: the whole prior room or Existed=false when the cell was
+// empty), applies the mutation, and returns the snapshot list for the undo journal.
+// A single RestoreRoomSnapshots reverses all of them (upsert-back / delete), so
+// create/delete/link/unlink and the exit patch share ONE undo mechanism.
+
+// snapshotRoom captures a cell's before-state within tx: the whole room when it
+// exists, or an Existed=false marker carrying just the coord when it does not.
+func snapshotRoom(tx *gorm.DB, mapSetID int64, zone string, x, y, l int) (RoomSnapshot, error) {
+	var room Room
+	err := tx.Where("map_set_id = ? AND zone = ? AND x = ? AND y = ? AND l = ?",
+		mapSetID, zone, x, y, l).First(&room).Error
+	if err == gorm.ErrRecordNotFound {
+		return RoomSnapshot{Existed: false, Room: Room{MapSetID: mapSetID, Zone: zone, X: x, Y: y, L: l}}, nil
+	}
+	if err != nil {
+		return RoomSnapshot{}, err
+	}
+	return RoomSnapshot{Existed: true, Room: room}, nil
+}
+
+// patchExitsWithSnapshot is PatchRoomExits plus a full-room BEFORE-STATE capture
+// for the undo journal (plan §8). In ONE transaction it snapshots the target
+// room, applies the same idempotent add/remove patch, and returns the snapshot.
+// Capturing the literal prior room — rather than a symmetric add<->remove inverse
+// — is what makes undo correct even when the patch is a no-op: adding an exit the
+// room already has (or removing an absent one) snapshots the unchanged state, so
+// undo restores it exactly instead of deleting a pre-existing exit or fabricating
+// a phantom one. Returns (before, found=true) on success, (_, found=false) when
+// the room is absent (no snapshot).
+func (s *Store) patchExitsWithSnapshot(mapSetID int64, zone string, x, y, l int, addExits, removeExits []string) (before []RoomSnapshot, found bool, err error) {
 	err = s.db.Transaction(func(tx *gorm.DB) error {
-		var room Room
-		rerr := tx.Where("map_set_id = ? AND zone = ? AND x = ? AND y = ? AND l = ?",
-			mapSetID, zone, x, y, l).First(&room).Error
-		if rerr == gorm.ErrRecordNotFound {
-			return nil // found stays false
+		snap, serr := snapshotRoom(tx, mapSetID, zone, x, y, l)
+		if serr != nil {
+			return serr
 		}
-		if rerr != nil {
-			return rerr
-		}
-		// Capture the exact prior state BEFORE mutating.
-		before = RoomExitState{
-			Zone: zone, X: x, Y: y, L: l, Exists: true,
-			EDirs: room.EDirs, Doors: room.Doors, Ch: room.Ch, Exits: room.Exits,
+		if !snap.Existed {
+			return nil // found stays false — no room to patch
 		}
 		found = true
-		updates := computeExitUpdates(room, addExits, removeExits)
-		return tx.Model(&Room{}).Where("id = ?", room.ID).Updates(updates).Error
+		before = []RoomSnapshot{snap}
+		updates := computeExitUpdates(snap.Room, addExits, removeExits)
+		return tx.Model(&Room{}).Where("id = ?", snap.Room.ID).Updates(updates).Error
 	})
 	if err != nil {
-		return RoomExitState{}, false, err
+		return nil, false, err
 	}
 	return before, found, nil
 }
 
-// RestoreRoomExitState writes a room cell's exit fields back to an exact prior
-// snapshot (undo of a TopoPatchExits). It restores edirs/doors/ch/exits verbatim.
-// Returns found=false (no error) when the target room no longer exists (e.g. it
-// was deleted by a later write) so undo soft-reports rather than failing. Only
-// Exists=true snapshots are restorable here (TopoPatchExits always snapshots an
-// existing room; create/delete restore is slice-3 work).
-func (s *Store) RestoreRoomExitState(mapSetID int64, before RoomExitState) (found bool, err error) {
-	if !before.Exists {
-		return false, nil
+// upsertRoomWithSnapshot creates a room at the cell, or partially updates the
+// existing one (only fields the caller provided change; omitted preserved on
+// update / defaulted on create). Exit fields are normalized consistently: a given
+// display Exits string OR canonical edirs is turned into edirs/ch/exits together
+// (Exits wins if both). The fingerprint is recomputed from the resolved
+// hint/desc/exits (reusing mapimport.Fingerprint) so auto-resync stays consistent.
+// Always found=true (a create is a valid outcome). Snapshots the one cell.
+func (s *Store) upsertRoomWithSnapshot(mapSetID int64, zone string, x, y, l int, f RoomFields) (before []RoomSnapshot, found bool, err error) {
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		snap, serr := snapshotRoom(tx, mapSetID, zone, x, y, l)
+		if serr != nil {
+			return serr
+		}
+		before = []RoomSnapshot{snap}
+		found = true
+
+		// Start from the existing room (update) or a fresh default room at the coord
+		// (create), then apply only the provided fields. On create, JSON-array columns
+		// default to "[]" (not "") so readers match imported rows and need not tolerate
+		// the empty string.
+		room := snap.Room
+		if !snap.Existed {
+			room = Room{MapSetID: mapSetID, Zone: zone, X: x, Y: y, L: l,
+				EDirs: "[]", Doors: "[]", Automaps: "[]"}
+		}
+
+		if f.Hint != nil {
+			room.Hint = *f.Hint
+		}
+		if f.Desc != nil {
+			room.Desc = *f.Desc
+		}
+		if f.IsDT != nil {
+			room.IsDT = *f.IsDT
+		}
+		if f.Pipe != nil {
+			room.Pipe = *f.Pipe
+		}
+		if f.ImageIndex != nil {
+			v := *f.ImageIndex
+			room.ImageIndex = &v
+		}
+		if f.Note != nil {
+			room.Note = *f.Note
+		}
+		if f.DX != nil {
+			room.DX = *f.DX
+		}
+		if f.DY != nil {
+			room.DY = *f.DY
+		}
+		if f.DL != nil {
+			room.DL = *f.DL
+		}
+
+		// Exit normalization — priority exits > edirs > ch:
+		//   - exits (display string): parsed into dir letters AND a door set, so a door
+		//     marker like "(S)" records the door (fingerprint stays door-insensitive —
+		//     it re-strips markers).
+		//   - edirs (canonical letters): dir set only; doors preserved from the room.
+		//   - ch (bitmask): reverse the chBitOrder mapping to dir letters so a lone ch
+		//     actually takes effect; doors preserved from the room.
+		// Whichever is provided rewrites edirs/ch/exits together; ch is always DERIVED
+		// from the resolved edirs so the mask never drifts. If none is provided the
+		// existing exit fields are preserved.
+		var exitDirs []string
+		haveExits := false
+		doorSet := map[string]bool{}
+		for _, d := range decodeStrArray(room.Doors) {
+			doorSet[d] = true
+		}
+		switch {
+		case f.Exits != nil:
+			var doors []string
+			exitDirs, doors = mapimport.NormExits(*f.Exits)
+			// The display string is the authority for doors when exits are given.
+			doorSet = map[string]bool{}
+			for _, d := range doors {
+				doorSet[d] = true
+			}
+			haveExits = true
+		case f.EDirsSet():
+			exitDirs = normalizeDirLetters(f.EDirs())
+			haveExits = true
+		case f.Ch != nil:
+			exitDirs = dirsFromChMask(*f.Ch)
+			haveExits = true
+		}
+		if haveExits {
+			ex := buildExitFields(exitDirs, doorSet)
+			room.EDirs = ex.edirs
+			room.Ch = ex.ch
+			room.Exits = ex.exits
+			doorsJSON := doorsArray(exitDirs, doorSet)
+			room.Doors = doorsJSON
+		}
+
+		// Recompute the fingerprint from the resolved hint/desc/exits (same normalizer
+		// as import) so a hint/desc/exits change keeps auto-resync consistent.
+		room.Fingerprint = mapimport.Fingerprint(room.Hint, room.Desc, room.Exits)
+
+		if snap.Existed {
+			return tx.Model(&Room{}).Where("id = ?", room.ID).Save(&room).Error
+		}
+		room.ID = 0
+		return tx.Create(&room).Error
+	})
+	if err != nil {
+		return nil, false, err
 	}
-	var room Room
-	rerr := s.db.Where("map_set_id = ? AND zone = ? AND x = ? AND y = ? AND l = ?",
-		mapSetID, before.Zone, before.X, before.Y, before.L).First(&room).Error
-	if rerr == gorm.ErrRecordNotFound {
-		return false, nil
+	return before, found, nil
+}
+
+// linkWithSnapshot adds (add=true) or removes (add=false) exit dir on the target
+// cell, and mirrors the reverse opposite(dir) on the grid neighbor room when one
+// exists. Both touched cells are snapshotted (the neighbor only when a room is
+// there). The target room must exist (found=false otherwise); a missing neighbor
+// is fine (one-sided edge on add; nothing to remove on unlink). dir is a canonical
+// letter; an unknown dir is a no-op that still snapshots (undo restores the
+// unchanged state).
+func (s *Store) linkWithSnapshot(mapSetID int64, zone string, x, y, l int, dir string, add bool) (before []RoomSnapshot, found bool, err error) {
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		cell, serr := snapshotRoom(tx, mapSetID, zone, x, y, l)
+		if serr != nil {
+			return serr
+		}
+		if !cell.Existed {
+			return nil // found stays false — cannot link from a nonexistent room
+		}
+		found = true
+		before = []RoomSnapshot{cell}
+
+		// Patch this cell's exit.
+		if err := applyExitPatch(tx, cell.Room, dir, add); err != nil {
+			return err
+		}
+
+		// Mirror the reverse on the grid neighbor, if a room is there.
+		d, ok := dirDelta[dir]
+		if !ok {
+			return nil
+		}
+		nb, nerr := snapshotRoom(tx, mapSetID, zone, x+d.dx, y+d.dy, l+d.dl)
+		if nerr != nil {
+			return nerr
+		}
+		if !nb.Existed {
+			return nil // one-sided edge — valid
+		}
+		before = append(before, nb)
+		return applyExitPatch(tx, nb.Room, oppositeDir[dir], add)
+	})
+	if err != nil {
+		return nil, false, err
 	}
-	if rerr != nil {
-		return false, rerr
+	return before, found, nil
+}
+
+// deleteRoomWithSnapshot deletes the room at the cell, snapshotting the WHOLE
+// prior room so undo recreates it exactly (exits/ch/fingerprint/flags intact).
+// found=false when no room is there. The cell's room_annotations / room_images are
+// intentionally LEFT in place (dangling), consistent with the annotation overlay
+// model (annotations live on frozen sets and not-yet-mapped cells and are keyed by
+// logical coord, so a delete simply leaves them as any other dangling annotation;
+// re-creating the room via undo/upsert re-associates them). This is the simplest,
+// most consistent choice — no cascade.
+func (s *Store) deleteRoomWithSnapshot(mapSetID int64, zone string, x, y, l int) (before []RoomSnapshot, found bool, err error) {
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		snap, serr := snapshotRoom(tx, mapSetID, zone, x, y, l)
+		if serr != nil {
+			return serr
+		}
+		if !snap.Existed {
+			return nil // found stays false — nothing to delete
+		}
+		found = true
+		before = []RoomSnapshot{snap}
+		return tx.Delete(&Room{}, snap.Room.ID).Error
+	})
+	if err != nil {
+		return nil, false, err
 	}
-	updates := map[string]any{
-		"edirs": before.EDirs,
-		"doors": before.Doors,
-		"ch":    before.Ch,
-		"exits": before.Exits,
+	return before, found, nil
+}
+
+// applyExitPatch adds or removes a single canonical direction on room (within tx),
+// recomputing edirs/ch/exits (door markers preserved for surviving dirs). Reuses
+// computeExitUpdates so link/unlink normalize identically to the exit patch.
+func applyExitPatch(tx *gorm.DB, room Room, dir string, add bool) error {
+	var addD, remD []string
+	if add {
+		addD = []string{dir}
+	} else {
+		remD = []string{dir}
 	}
-	if err := s.db.Model(&Room{}).Where("id = ?", room.ID).Updates(updates).Error; err != nil {
+	updates := computeExitUpdates(room, addD, remD)
+	return tx.Model(&Room{}).Where("id = ?", room.ID).Updates(updates).Error
+}
+
+// RestoreRoomSnapshots reverses an op by restoring each cell to its exact prior
+// snapshot (the generalized undo, plan §8). For each snapshot: Existed=true →
+// upsert the room back to its exact prior fields (preserving the surviving row's
+// id, or re-creating it if a later write deleted it); Existed=false → delete any
+// room now at that cell (undo of a create). Returns applied=true when at least one
+// snapshot was restored, so undo can soft-report if every target cell vanished.
+func (s *Store) RestoreRoomSnapshots(mapSetID int64, snaps []RoomSnapshot) (applied bool, err error) {
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		for _, snap := range snaps {
+			r := snap.Room
+			var existing Room
+			ferr := tx.Where("map_set_id = ? AND zone = ? AND x = ? AND y = ? AND l = ?",
+				mapSetID, r.Zone, r.X, r.Y, r.L).First(&existing).Error
+			found := ferr == nil
+			if ferr != nil && ferr != gorm.ErrRecordNotFound {
+				return ferr
+			}
+
+			if !snap.Existed {
+				// The cell had no room before the op — delete whatever it created.
+				if found {
+					if derr := tx.Delete(&Room{}, existing.ID).Error; derr != nil {
+						return derr
+					}
+					applied = true
+				}
+				continue
+			}
+
+			// The cell had a room — write its exact prior fields back.
+			restore := r
+			restore.MapSetID = mapSetID
+			if found {
+				restore.ID = existing.ID
+				if uerr := tx.Model(&Room{}).Where("id = ?", existing.ID).Save(&restore).Error; uerr != nil {
+					return uerr
+				}
+			} else {
+				// A later write deleted it — re-create the room from the snapshot.
+				restore.ID = 0
+				if cerr := tx.Create(&restore).Error; cerr != nil {
+					return cerr
+				}
+			}
+			applied = true
+		}
+		return nil
+	})
+	if err != nil {
 		return false, err
 	}
-	return true, nil
+	return applied, nil
 }
 
 // computeExitUpdates builds the edirs/ch/exits update map for a room after adding
 // addExits and removing removeExits (canonical letters), preserving door markers
-// for surviving directions. Shared by PatchRoomExits and PatchRoomExitsWithSnapshot.
+// for surviving directions. Shared by PatchRoomExits, patchExitsWithSnapshot, and
+// the link/unlink single-dir patch (applyExitPatch).
 func computeExitUpdates(room Room, addExits, removeExits []string) map[string]any {
 	present := map[string]bool{}
 	for _, d := range decodeStrArray(room.EDirs) {
@@ -523,9 +766,40 @@ func computeExitUpdates(room Room, addExits, removeExits []string) map[string]an
 			present[d] = true
 		}
 	}
+	dirs := make([]string, 0, len(present))
+	for d := range present {
+		dirs = append(dirs, d)
+	}
 	doorSet := map[string]bool{}
 	for _, d := range decodeStrArray(room.Doors) {
 		doorSet[d] = true
+	}
+	ex := buildExitFields(dirs, doorSet)
+	return map[string]any{
+		"edirs": ex.edirs,
+		"ch":    ex.ch,
+		"exits": ex.exits,
+	}
+}
+
+// exitFields is the canonical (edirs JSON, ch mask, display exits string) triple
+// derived from a set of exit directions plus the door directions to mark.
+type exitFields struct {
+	edirs string // JSON array text
+	ch    int    // connectivity bitmask
+	exits string // display string with door markers
+}
+
+// buildExitFields renders the canonical edirs/ch/exits triple from a set of
+// direction letters (order-independent input; output ordered N,S,E,W,U,D). Door
+// letters in doorSet get parenthesized markers in the display string. Unknown
+// tokens are ignored. The single source of exit normalization for every write.
+func buildExitFields(dirs []string, doorSet map[string]bool) exitFields {
+	present := map[string]bool{}
+	for _, d := range dirs {
+		if _, ok := chBitOrder[d]; ok {
+			present[d] = true
+		}
 	}
 	order := []string{"N", "S", "E", "W", "U", "D"}
 	edirs := make([]string, 0, len(present))
@@ -544,11 +818,76 @@ func computeExitUpdates(room Room, addExits, removeExits []string) map[string]an
 		}
 	}
 	edirsJSON, _ := json.Marshal(edirs)
-	return map[string]any{
-		"edirs": string(edirsJSON),
-		"ch":    mask,
-		"exits": joinFields(displayParts),
+	return exitFields{edirs: string(edirsJSON), ch: mask, exits: joinFields(displayParts)}
+}
+
+// normalizeDirLetters upper-cases and filters a caller-provided edirs list down to
+// known canonical directions (drops unknown tokens; case-insensitive input).
+func normalizeDirLetters(dirs []string) []string {
+	out := make([]string, 0, len(dirs))
+	for _, d := range dirs {
+		u := strings.ToUpper(strings.TrimSpace(d))
+		if _, ok := chBitOrder[u]; ok {
+			out = append(out, u)
+		}
 	}
+	return out
+}
+
+// dirsFromChMask reverses chBitOrder: a connectivity bitmask → the canonical
+// direction letters whose bit is set (ordered N,S,E,W,U,D). Lets a lone `ch`
+// upsert field derive edirs so it actually takes effect.
+func dirsFromChMask(mask int) []string {
+	order := []string{"N", "S", "E", "W", "U", "D"}
+	out := make([]string, 0, len(order))
+	for _, d := range order {
+		if mask&(1<<chBitOrder[d]) != 0 {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// doorsArray renders the JSON doors array for the surviving exit directions:
+// door markers only apply to a direction that is actually an exit (ordered
+// N,S,E,W,U,D). Mirrors buildExitFields' notion of "present" so Doors and the
+// display exits string agree.
+func doorsArray(dirs []string, doorSet map[string]bool) string {
+	present := map[string]bool{}
+	for _, d := range dirs {
+		if _, ok := chBitOrder[d]; ok {
+			present[d] = true
+		}
+	}
+	order := []string{"N", "S", "E", "W", "U", "D"}
+	doors := make([]string, 0, len(present))
+	for _, d := range order {
+		if present[d] && doorSet[d] {
+			doors = append(doors, d)
+		}
+	}
+	b, _ := json.Marshal(doors)
+	return string(b)
+}
+
+// gridDelta / dirDelta / oppositeDir mirror mapper.dirDelta / mapper.oppositeDir.
+// Duplicated here (tiny, stable) so the storage layer need not import mapper —
+// which imports storage, so a storage→mapper edge would cycle. Same pattern as
+// chBitOrder above. Axis convention (mapper/dirs.go): N=x-1, S=x+1, W=y-1, E=y+1,
+// U=l+1, D=l-1.
+type gridDelta struct{ dx, dy, dl int }
+
+var dirDelta = map[string]gridDelta{
+	"N": {-1, 0, 0},
+	"S": {1, 0, 0},
+	"W": {0, -1, 0},
+	"E": {0, 1, 0},
+	"U": {0, 0, 1},
+	"D": {0, 0, -1},
+}
+
+var oppositeDir = map[string]string{
+	"N": "S", "S": "N", "E": "W", "W": "E", "U": "D", "D": "U",
 }
 
 // joinFields joins exit tokens with a single space (matches the .mm2 Exits form).
