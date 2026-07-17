@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"rubymud/go/internal/storage"
@@ -116,9 +117,9 @@ func TestCorpusRouteBankEntryDirection(t *testing.T) {
 		t.Fatalf("bank unreachable from Главная улица: %+v", res)
 	}
 	last := res.Steps[len(res.Steps)-1]
-	if last.Command != DirRU("N") {
+	if last.Command != "n" {
 		t.Errorf("bank entry command = %q, want %q (с/N — the bank's only real exit is S, so enter from its south neighbor going N)",
-			last.Command, DirRU("N"))
+			last.Command, "n")
 	}
 	assertRouteInvariant(t, idx, start.Coord, res)
 	assertRouteReachesGoal(t, idx, start.Coord, res, bank.Coord)
@@ -145,8 +146,8 @@ func TestCorpusRouteBankMultiHopReachesInside(t *testing.T) {
 	// Must terminate INSIDE the bank, not on its neighbor.
 	assertRouteReachesGoal(t, idx, start.Coord, res, bank.Coord)
 	assertRouteInvariant(t, idx, start.Coord, res)
-	if last := res.Steps[len(res.Steps)-1]; last.Command != DirRU("N") {
-		t.Errorf("final hop into bank = %q, want %q (с)", last.Command, DirRU("N"))
+	if last := res.Steps[len(res.Steps)-1]; last.Command != "n" {
+		t.Errorf("final hop into bank = %q, want %q (с)", last.Command, "n")
 	}
 	if bank.Coord != (Coord{"Хилло", -5, -8, 0}) {
 		t.Fatalf("corpus bank coord unexpected: %+v", bank.Coord)
@@ -171,8 +172,8 @@ func TestCorpusRouteYuzhnayaMultiHopReachesInside(t *testing.T) {
 	}
 	assertRouteReachesGoal(t, idx, start.Coord, res, yuzh.Coord)
 	assertRouteInvariant(t, idx, start.Coord, res)
-	if last := res.Steps[len(res.Steps)-1]; last.Command != DirRU("S") {
-		t.Errorf("final hop into Южная = %q, want %q (ю — its only exit is N, enter from north going S)", last.Command, DirRU("S"))
+	if last := res.Steps[len(res.Steps)-1]; last.Command != "s" {
+		t.Errorf("final hop into Южная = %q, want %q (ю — its only exit is N, enter from north going S)", last.Command, "s")
 	}
 	if yuzh.Coord != (Coord{"Хилло", 2, -5, 0}) {
 		t.Fatalf("corpus Южная coord unexpected: %+v", yuzh.Coord)
@@ -196,8 +197,8 @@ func TestCorpusRouteGostinitsaEntryDirection(t *testing.T) {
 	}
 	gost := findRoomByHint(idx, "Хилло", "Гостиница Хилло")
 	last := res.Steps[len(res.Steps)-1]
-	if last.Command != DirRU("E") {
-		t.Errorf("Гостиница entry command = %q, want %q (в/E)", last.Command, DirRU("E"))
+	if last.Command != "e" {
+		t.Errorf("Гостиница entry command = %q, want %q (в/E)", last.Command, "e")
 	}
 	assertRouteInvariant(t, idx, start.Coord, res)
 	if gost != nil {
@@ -221,7 +222,7 @@ func assertRouteInvariant(t *testing.T, idx *Index, start Coord, res PathResult)
 			cur = seamNextCoord(idx, cur, st)
 			continue
 		}
-		dir := ruToDir(st.Command)
+		dir := cmdToDir(st.Command)
 		if dir == "" {
 			t.Fatalf("step %d command %q is not a canonical grid direction", i+1, st.Command)
 		}
@@ -264,7 +265,7 @@ func assertRouteReachesGoal(t *testing.T, idx *Index, start Coord, res PathResul
 			cur = seamNextCoord(idx, cur, st)
 			continue
 		}
-		d := dirDelta[ruToDir(st.Command)]
+		d := dirDelta[cmdToDir(st.Command)]
 		n := st.Cells
 		if n < 1 {
 			n = 1
@@ -287,10 +288,13 @@ func seamNextCoord(idx *Index, from Coord, st PathStep) Coord {
 	return from
 }
 
-// ruToDir inverts DirRU (RU command word -> canonical letter).
-func ruToDir(cmd string) string {
+// cmdToDir maps an emitted english move command (lowercase n/s/e/w/u/d) back to
+// its canonical UPPER direction letter. Routes now emit english for grid AND
+// seams (a seam's raw "на восток" derails the client), so the invariant sampler
+// inverts the english command.
+func cmdToDir(cmd string) string {
 	for _, d := range dirOrder {
-		if DirRU(d) == cmd {
+		if strings.ToLower(d) == cmd {
 			return d
 		}
 	}

@@ -469,8 +469,9 @@ func pathResultJSON(res mapper.PathResult) map[string]any {
 	for i, st := range res.Steps {
 		if st.Seam {
 			seams++
-			// No single letter for a seam — emit its MUD command so the joined
-			// walk still works. UI treats it as an opaque token.
+			// A seam's emitted Command is the canonical english direction letter
+			// (derived from the seam's .mm2 command; the raw "на <dir>" would be
+			// mis-parsed as "надеть" by the client and derail the walk).
 			dirs = append(dirs, st.Command)
 		} else {
 			dirs = append(dirs, st.Dir)

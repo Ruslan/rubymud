@@ -149,8 +149,8 @@ func TestMCPPathAndRedRefusal(t *testing.T) {
 		t.Fatalf("mud_path after anchor should succeed: %q", toolText(t, res))
 	}
 	text := toolText(t, res)
-	if !strings.Contains(text, "2 command(s)") || !strings.Contains(text, "ю; ю") {
-		t.Errorf("mud_path route wrong: %q", text)
+	if !strings.Contains(text, "2 command(s)") || !strings.Contains(text, "s; s") {
+		t.Errorf("mud_path route wrong (expected english s; s): %q", text)
 	}
 }
 
@@ -255,11 +255,57 @@ func TestMCPPathFlagsPresumedDoor(t *testing.T) {
 	if !strings.Contains(text, "presumed door(s)") {
 		t.Errorf("summary should count presumed doors: %q", text)
 	}
-	if !strings.Contains(text, "presumed") || !strings.Contains(text, "с") {
-		t.Errorf("presumed door hop not flagged on the с step: %q", text)
+	if !strings.Contains(text, "presumed") || !strings.Contains(text, "Commands: n") {
+		t.Errorf("presumed door hop not flagged on the english n step: %q", text)
 	}
 	// Must NOT report a confirmed "door(s) to open" (there is none on the source).
 	if strings.Contains(text, "door(s) to open") {
 		t.Errorf("should not report a confirmed door for a presumed-only hop: %q", text)
+	}
+}
+
+// TestMCPPathSeamEmitsEnglish is the seam golden: a cross-zone route's seam hop
+// must emit the canonical english letter (e), NOT the raw ".mm2" command "на
+// восток" (which the client mis-parses as "надеть" and derails on). The
+// [SEAM →Zone] annotation must still be present, and the whole joined route must
+// be english.
+func TestMCPPathSeamEmitsEnglish(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	// Zone A "Берег" seams east ("на восток") into zone B "Море" (tag 50).
+	id, err := s.store.CreateMapSet(storage.MapSetInput{
+		Name: "Seam", ZoneCount: 2, RoomCount: 2, SeamCount: 1,
+		Rooms: []storage.Room{
+			{Zone: "A", X: 0, Y: 0, L: 0, Tag: intPtr(1), Hint: "Берег", Exits: "E",
+				EDirs: `["E"]`, Doors: `[]`, Ch: 4, Automaps: `["B|на восток|50"]`},
+			{Zone: "B", X: 9, Y: 9, L: 0, Tag: intPtr(50), Hint: "Море", Exits: "N",
+				EDirs: `["N"]`, Doors: `[]`, Ch: 1},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateMapSet: %v", err)
+	}
+	s.store.SetActiveMapSetID(sess.SessionID(), id)
+	sess.LoadActiveMapSet()
+	callTool(t, s, "mud_anchor_here",
+		fmt.Sprintf(`{"session_id":%d,"zone":"A","x":0,"y":0,"l":0}`, sess.SessionID()))
+
+	res := callTool(t, s, "mud_path", fmt.Sprintf(`{"session_id":%d,"to_zone":"B"}`, sess.SessionID()))
+	text := toolText(t, res)
+	if res["isError"] == true {
+		t.Fatalf("mud_path errored: %q", text)
+	}
+	// The emitted command must be english "e", NOT the raw "на восток".
+	if !strings.Contains(text, "Commands: e") {
+		t.Errorf("seam route should emit english 'e', got: %q", text)
+	}
+	if strings.Contains(text, "Commands: на восток") || strings.Contains(text, "; на восток") {
+		t.Errorf("seam route must NOT emit the raw 'на восток' command: %q", text)
+	}
+	// The [SEAM →B] annotation (with the raw map command) is still present.
+	if !strings.Contains(text, "[SEAM →B") {
+		t.Errorf("seam annotation missing: %q", text)
+	}
+	if !strings.Contains(text, "на восток") {
+		t.Errorf("raw seam command should still appear as an annotation: %q", text)
 	}
 }

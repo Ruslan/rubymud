@@ -20,16 +20,28 @@ const (
 // PathStep is one emitted hop of a route — one command per ACTUAL server step.
 // A single PathStep may span several map cells when it crosses a pipe corridor
 // (the server traverses a whole pipe run with one command; see collapsePipeRuns).
+//
+// Command is the CANONICAL ENGLISH move to send (n/s/e/w/u/d) for BOTH grid hops
+// AND seams. English is the de-facto standard (RMUD accepts n/s/e/w alongside
+// с/ю/в/з) and avoids clashing with client verb-aliases — crucially, a seam's raw
+// .mm2 command "на восток" is parsed by the client as the verb "надеть" (wear)
+// and derails the route, so we emit "e" instead and keep the raw command in
+// SeamCommand for annotation. Dir carries the same english letter (or "" if a
+// seam command could not be parsed to a direction — then Command falls back to
+// the raw SeamCommand and SeamUnparsed is set so it is flagged, not silently
+// emitted as an unusable token).
 type PathStep struct {
-	Command  string   // RU direction ("с ю в з вв вн") or seam command ("на восток")
-	Dir      string   // canonical EN direction letter for a grid hop ("n/s/e/w/u/d"); "" for a seam
-	Seam     bool     // true when this hop crosses a zone seam
-	Door     bool     // true when this hop crosses a door (confirmed OR presumed)
-	DoorKind DoorKind // grade of the door on this hop (none|confirmed|presumed)
-	ToZone   string   // target zone of the hop (the cell this step lands on)
-	Hint     string   // target room hint (may be empty)
-	IsDT     bool     // target is a death trap (should never be true; DTs excluded)
-	Cells    int      // number of map cells this one command traverses (>=1)
+	Command      string   // canonical english move to send ("n/s/e/w/u/d"); grid AND seam
+	Dir          string   // canonical EN direction letter ("n/s/e/w/u/d"); "" if a seam couldn't be parsed
+	Seam         bool     // true when this hop crosses a zone seam
+	SeamCommand  string   // raw .mm2 seam command ("на восток") — annotation only, not emitted
+	SeamUnparsed bool     // true when a seam command could not be mapped to a direction
+	Door         bool     // true when this hop crosses a door (confirmed OR presumed)
+	DoorKind     DoorKind // grade of the door on this hop (none|confirmed|presumed)
+	ToZone       string   // target zone of the hop (the cell this step lands on)
+	Hint         string   // target room hint (may be empty)
+	IsDT         bool     // target is a death trap (should never be true; DTs excluded)
+	Cells        int      // number of map cells this one command traverses (>=1)
 }
 
 // PathResult is a computed route.
@@ -42,13 +54,15 @@ type PathResult struct {
 
 // worldNeighbor is one adjacency edge from a node.
 type worldNeighbor struct {
-	to       Coord
-	command  string
-	dir      string // canonical direction letter for a grid move ("" for seams)
-	seam     bool
-	doorKind DoorKind // door grade on this edge (none|confirmed|presumed)
-	toPipe   bool     // the cell this edge lands on is a pipe corridor
-	toZone   string
+	to           Coord
+	command      string // canonical english move to send (n/s/e/w/u/d)
+	dir          string // canonical UPPER direction letter ("" if a seam couldn't be parsed)
+	seam         bool
+	seamCommand  string // raw .mm2 seam command (annotation only)
+	seamUnparsed bool
+	doorKind     DoorKind // door grade on this edge (none|confirmed|presumed)
+	toPipe       bool     // the cell this edge lands on is a pipe corridor
+	toZone       string
 }
 
 // worldNeighbors yields exit-constrained grid neighbors + seam edges of a room,
@@ -78,7 +92,7 @@ func (idx *Index) worldNeighbors(c Coord) []worldNeighbor {
 		}
 		out = append(out, worldNeighbor{
 			to:       nc,
-			command:  DirRU(dir),
+			command:  strings.ToLower(dir), // canonical english move (n/s/e/w/u/d)
 			dir:      dir,
 			seam:     false,
 			doorKind: doorGrade(r, nb, dir),
@@ -95,12 +109,28 @@ func (idx *Index) worldNeighbors(c Coord) []worldNeighbor {
 		if tr == nil || tr.IsDT {
 			continue
 		}
+		// A seam's raw .mm2 command ("на восток") must NOT be emitted — the client
+		// parses "на <X>" as "надеть" (wear) and the route derails. Emit the
+		// canonical english letter derived from the seam's RU direction word;
+		// keep the raw command as an annotation. If it can't be parsed to a
+		// direction, fall back to the raw command but flag it (don't silently emit
+		// an unusable token).
+		enDir := seamDir(s.Command) // canonical UPPER letter, or "" if unparsable
+		cmd := strings.ToLower(enDir)
+		unparsed := false
+		if enDir == "" {
+			cmd = s.Command
+			unparsed = true
+		}
 		out = append(out, worldNeighbor{
-			to:      tr.Coord,
-			command: s.Command,
-			seam:    true,
-			toPipe:  tr.Pipe,
-			toZone:  tr.Zone,
+			to:           tr.Coord,
+			command:      cmd,
+			dir:          enDir,
+			seam:         true,
+			seamCommand:  s.Command,
+			seamUnparsed: unparsed,
+			toPipe:       tr.Pipe,
+			toZone:       tr.Zone,
 		})
 	}
 	return out
@@ -168,12 +198,14 @@ func (idx *Index) FindPath(start Coord, goal func(*IndexRoom) bool) PathResult {
 			}
 			target := idx.Room(nb.to)
 			rs := rawStep{
-				command:  nb.command,
-				dir:      nb.dir,
-				seam:     nb.seam,
-				doorKind: nb.doorKind,
-				toPipe:   nb.toPipe,
-				toZone:   nb.toZone,
+				command:      nb.command,
+				dir:          nb.dir,
+				seam:         nb.seam,
+				seamCommand:  nb.seamCommand,
+				seamUnparsed: nb.seamUnparsed,
+				doorKind:     nb.doorKind,
+				toPipe:       nb.toPipe,
+				toZone:       nb.toZone,
 			}
 			if target != nil {
 				rs.hint = target.Hint
@@ -205,14 +237,16 @@ func (idx *Index) FindPath(start Coord, goal func(*IndexRoom) bool) PathResult {
 
 // rawStep is one per-cell BFS edge before pipe-run collapse.
 type rawStep struct {
-	command  string
-	dir      string // canonical dir letter ("" for seams)
-	seam     bool
-	doorKind DoorKind
-	toPipe   bool // the cell this edge lands on is a pipe corridor
-	toZone   string
-	hint     string
-	isDT     bool
+	command      string
+	dir          string // canonical dir letter ("" if a seam couldn't be parsed)
+	seam         bool
+	seamCommand  string
+	seamUnparsed bool
+	doorKind     DoorKind
+	toPipe       bool // the cell this edge lands on is a pipe corridor
+	toZone       string
+	hint         string
+	isDT         bool
 }
 
 // strongerDoor returns the stronger door signal of two kinds: confirmed beats
@@ -256,15 +290,17 @@ func collapsePipeRuns(raw []rawStep) []PathStep {
 			continue
 		}
 		out = append(out, PathStep{
-			Command:  rs.command,
-			Dir:      strings.ToLower(rs.dir),
-			Seam:     rs.seam,
-			Door:     rs.doorKind != DoorNone,
-			DoorKind: rs.doorKind,
-			ToZone:   rs.toZone,
-			Hint:     rs.hint,
-			IsDT:     rs.isDT,
-			Cells:    1,
+			Command:      rs.command,
+			Dir:          strings.ToLower(rs.dir),
+			Seam:         rs.seam,
+			SeamCommand:  rs.seamCommand,
+			SeamUnparsed: rs.seamUnparsed,
+			Door:         rs.doorKind != DoorNone,
+			DoorKind:     rs.doorKind,
+			ToZone:       rs.toZone,
+			Hint:         rs.hint,
+			IsDT:         rs.isDT,
+			Cells:        1,
 		})
 	}
 	return out

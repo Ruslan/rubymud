@@ -40,7 +40,7 @@ func TestFindPathReachesAsymmetricDeadEnd(t *testing.T) {
 	}
 	// Must land INSIDE C at (0,2), with the final hop в.
 	last := res.Steps[len(res.Steps)-1]
-	if last.Command != DirRU("E") || last.Hint != "C" {
+	if last.Command != "e" || last.Hint != "C" {
 		t.Errorf("final hop into C = %q -> %q, want в -> C", last.Command, last.Hint)
 	}
 	if len(res.Steps) != 2 {
@@ -65,7 +65,7 @@ func TestFindPathStillRejectsDisplacedFalseEdge(t *testing.T) {
 	// From P, the bank must NOT be reachable by a fabricated в edge; it is only
 	// reachable via its south neighbor. Route from the south neighbor works:
 	res := idx.FindPath(Coord{"Z", 1, 1, 0}, func(r *IndexRoom) bool { return r.Hint == "Bank" })
-	if !res.Reachable || res.Steps[len(res.Steps)-1].Command != DirRU("N") {
+	if !res.Reachable || res.Steps[len(res.Steps)-1].Command != "n" {
 		t.Fatalf("bank should be entered via с from its south neighbor: %+v", res)
 	}
 	// And the permissive P must not offer a в edge into the bank (reverse denied).
@@ -88,9 +88,9 @@ func TestFindPathLinear(t *testing.T) {
 	if len(res.Steps) != 2 {
 		t.Fatalf("steps = %d, want 2", len(res.Steps))
 	}
-	// Going south twice: DirRU(S) = "ю".
-	if res.Steps[0].Command != "ю" || res.Steps[1].Command != "ю" {
-		t.Errorf("commands = %v, want [ю ю]", []string{res.Steps[0].Command, res.Steps[1].Command})
+	// Going south twice: english "s".
+	if res.Steps[0].Command != "s" || res.Steps[1].Command != "s" {
+		t.Errorf("commands = %v, want [s s]", []string{res.Steps[0].Command, res.Steps[1].Command})
 	}
 }
 
@@ -127,7 +127,7 @@ func TestFindPathExcludesDTOnRoute(t *testing.T) {
 func TestFindPathCollapsesPipeRun(t *testing.T) {
 	// A(0) -> P1(1,pipe) -> P2(2,pipe) -> B(3), all connected N/S along the S
 	// axis. The MUD traverses the whole pipe run with a single command, so the
-	// three same-direction cells must collapse to ONE emitted "ю" landing on B.
+	// three same-direction cells must collapse to ONE emitted "s" landing on B.
 	rooms := []storage.Room{
 		mkRoom("Z", 0, 0, 0, 1, "Вход", "entry", "S", 0),
 		mkRoom("Z", 1, 0, 0, 2, "", "", "N S", 0, withPipe()),
@@ -146,7 +146,7 @@ func TestFindPathCollapsesPipeRun(t *testing.T) {
 		t.Fatalf("pipe run should collapse to 1 command, got %d: %+v", len(res.Steps), res.Steps)
 	}
 	st := res.Steps[0]
-	if st.Command != "ю" {
+	if st.Command != "s" {
 		t.Errorf("collapsed command = %q, want ю", st.Command)
 	}
 	if st.Cells != 3 {
@@ -159,7 +159,7 @@ func TestFindPathCollapsesPipeRun(t *testing.T) {
 
 func TestFindPathMixedNormalAndPipe(t *testing.T) {
 	// A(0) --ю--> B(1,normal) --ю--> P(2,pipe) --ю--> C(3,normal).
-	// Expect 2 emitted commands: "ю" (A->B) and "ю" (B->P->C collapsed).
+	// Expect 2 emitted commands: "s" (A->B) and "s" (B->P->C collapsed).
 	rooms := []storage.Room{
 		mkRoom("Z", 0, 0, 0, 1, "A", "a", "S", 0),
 		mkRoom("Z", 1, 0, 0, 2, "B", "b", "N S", 0),
@@ -176,10 +176,10 @@ func TestFindPathMixedNormalAndPipe(t *testing.T) {
 	if len(res.Steps) != 2 {
 		t.Fatalf("mixed route should emit 2 commands, got %d: %+v", len(res.Steps), res.Steps)
 	}
-	if res.Steps[0].Command != "ю" || res.Steps[0].Cells != 1 || res.Steps[0].Hint != "B" {
+	if res.Steps[0].Command != "s" || res.Steps[0].Cells != 1 || res.Steps[0].Hint != "B" {
 		t.Errorf("step1 wrong: %+v", res.Steps[0])
 	}
-	if res.Steps[1].Command != "ю" || res.Steps[1].Cells != 2 || res.Steps[1].Hint != "C" {
+	if res.Steps[1].Command != "s" || res.Steps[1].Cells != 2 || res.Steps[1].Hint != "C" {
 		t.Errorf("step2 (collapsed pipe) wrong: %+v", res.Steps[1])
 	}
 }
@@ -199,7 +199,7 @@ func TestFindPathPipeDirectionChangeDoesNotCollapse(t *testing.T) {
 	if !res.Reachable || len(res.Steps) != 2 {
 		t.Fatalf("turning pipe should not collapse, want 2 commands: %+v", res)
 	}
-	if res.Steps[0].Command != "ю" || res.Steps[1].Command != "в" {
+	if res.Steps[0].Command != "s" || res.Steps[1].Command != "e" {
 		t.Errorf("commands = %q,%q, want ю,в", res.Steps[0].Command, res.Steps[1].Command)
 	}
 }
@@ -221,7 +221,7 @@ func TestFindPathFlagsDoor(t *testing.T) {
 	if !res.Steps[0].Door || res.Steps[0].DoorKind != DoorConfirmed {
 		t.Errorf("door step should be CONFIRMED: %+v", res.Steps[0])
 	}
-	if res.Steps[0].Command != "ю" {
+	if res.Steps[0].Command != "s" {
 		t.Errorf("command = %q, want ю", res.Steps[0].Command)
 	}
 }
@@ -245,7 +245,7 @@ func TestFindPathPresumedDoorFromTargetReverseFace(t *testing.T) {
 		t.Fatalf("expected 1-step route: %+v", res)
 	}
 	st := res.Steps[0]
-	if st.Command != "с" {
+	if st.Command != "n" {
 		t.Errorf("command = %q, want с (north)", st.Command)
 	}
 	if st.DoorKind != DoorPresumed {
@@ -303,8 +303,11 @@ func TestFindPathEnglishDir(t *testing.T) {
 	}
 }
 
-// TestFindPathSeamDirEmpty: a seam hop has no single letter, so Dir stays "".
-func TestFindPathSeamDirEmpty(t *testing.T) {
+// TestFindPathSeamEmitsEnglishLetter: a seam hop now emits the canonical english
+// letter derived from its .mm2 RU command ("на восток" -> "e"), NOT the raw
+// command (which the client mis-parses as "надеть" and derails on). The raw
+// command is preserved as an annotation, and Dir carries the english letter.
+func TestFindPathSeamEmitsEnglishLetter(t *testing.T) {
 	rooms := []storage.Room{
 		mkRoom("A", 0, 0, 0, 1, "Берег", "shore", "E", 4, withAutomaps("B|на восток|50")),
 		mkRoom("B", 9, 9, 0, 50, "Море", "sea", "N", 0),
@@ -314,8 +317,18 @@ func TestFindPathSeamDirEmpty(t *testing.T) {
 	if !res.Reachable || len(res.Steps) != 1 {
 		t.Fatalf("seam route wrong: %+v", res)
 	}
-	if res.Steps[0].Dir != "" {
-		t.Errorf("seam step Dir = %q, want empty (no single letter for a seam)", res.Steps[0].Dir)
+	st := res.Steps[0]
+	if st.Command != "e" {
+		t.Errorf("seam emitted command = %q, want %q (english, not raw 'на восток')", st.Command, "e")
+	}
+	if st.Dir != "e" {
+		t.Errorf("seam Dir = %q, want %q", st.Dir, "e")
+	}
+	if st.SeamCommand != "на восток" {
+		t.Errorf("raw seam command should be preserved as annotation, got %q", st.SeamCommand)
+	}
+	if st.SeamUnparsed {
+		t.Errorf("a 'на восток' seam should parse to a direction, not be flagged unparsed")
 	}
 }
 
@@ -331,7 +344,33 @@ func TestFindPathSeamCrossing(t *testing.T) {
 	if !res.Reachable || len(res.Steps) != 1 {
 		t.Fatalf("seam route wrong: %+v", res)
 	}
-	if !res.Steps[0].Seam || res.Steps[0].Command != "на восток" || res.Steps[0].ToZone != "B" {
+	if !res.Steps[0].Seam || res.Steps[0].Command != "e" || res.Steps[0].ToZone != "B" {
 		t.Errorf("seam step wrong: %+v", res.Steps[0])
+	}
+}
+
+// TestFindPathSeamUnparsedFallsBackFlagged: a seam command that has no direction
+// word ("войти") can't be mapped to a letter — it falls back to the raw command
+// but is FLAGGED (SeamUnparsed), so it is surfaced rather than silently emitting
+// an unusable token.
+func TestFindPathSeamUnparsedFallsBackFlagged(t *testing.T) {
+	rooms := []storage.Room{
+		mkRoom("A", 0, 0, 0, 1, "Врата", "gate", "E", 4, withAutomaps("B|войти|50")),
+		mkRoom("B", 9, 9, 0, 50, "Двор", "yard", "N", 0),
+	}
+	idx := BuildIndex(1, rooms)
+	res := idx.FindPath(Coord{"A", 0, 0, 0}, func(r *IndexRoom) bool { return r.Zone == "B" })
+	if !res.Reachable || len(res.Steps) != 1 {
+		t.Fatalf("seam route wrong: %+v", res)
+	}
+	st := res.Steps[0]
+	if !st.SeamUnparsed {
+		t.Errorf("a non-directional seam command should be flagged SeamUnparsed: %+v", st)
+	}
+	if st.Command != "войти" {
+		t.Errorf("unparsable seam should fall back to the raw command, got %q", st.Command)
+	}
+	if st.Dir != "" {
+		t.Errorf("unparsable seam Dir should be empty, got %q", st.Dir)
 	}
 }

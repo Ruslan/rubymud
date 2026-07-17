@@ -312,7 +312,14 @@ func formatPath(targetDesc string, res mapper.PathResult) (string, bool) {
 			tag += "  [дверь? presumed — open first]"
 		}
 		if st.Seam {
-			tag += "  [SEAM →" + st.ToZone + "]"
+			tag += "  [SEAM →" + st.ToZone
+			if st.SeamCommand != "" {
+				tag += ", map cmd \"" + st.SeamCommand + "\""
+			}
+			tag += "]"
+			if st.SeamUnparsed {
+				tag += "  [WARNING seam command not a direction — sends raw \"" + st.SeamCommand + "\"; verify]"
+			}
 		}
 		if st.IsDT {
 			tag += "  [DEATH TRAP]"
