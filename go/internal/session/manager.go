@@ -58,6 +58,61 @@ func (m *Manager) GetSession(id int64) (*Session, bool) {
 	return sess, ok
 }
 
+// ReloadDeletedMapSetSessions clears live tracker indexes after storage has
+// reset their active_map_set_id columns. It is intentionally separate from the
+// DB mutation so ReloadActiveMapSet never runs while its SQLite transaction is
+// open.
+func (m *Manager) ReloadDeletedMapSetSessions(ids []int64) {
+	for _, id := range ids {
+		if sess, ok := m.GetSession(id); ok {
+			sess.ReloadActiveMapSet()
+		}
+	}
+}
+
+// BroadcastMapSetsChanged invalidates map-set lists and panes in every live
+// session. A deletion is global: even a client following another set may show
+// the deleted set in Settings or a selector.
+func (m *Manager) BroadcastMapSetsChanged() {
+	m.mu.Lock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, sess := range m.sessions {
+		if !sess.IsClosed() {
+			sessions = append(sessions, sess)
+		}
+	}
+	m.mu.Unlock()
+	for _, sess := range sessions {
+		sess.BroadcastServerMsg(ServerMsg{Type: "map_sets_changed"})
+	}
+}
+
+// RefreshSharedZoneMove keeps other live sessions on an editable shared set
+// coherent after a namespace move. A COW fork has no peers on its new id, but an
+// ordinary editable set can be active in several sessions.
+func (m *Manager) RefreshSharedZoneMove(mapSetID, skipSessionID int64, move storage.ZoneMoveInput) {
+	m.mu.Lock()
+	sessions := make([]struct {
+		id int64
+		s  *Session
+	}, 0, len(m.sessions))
+	for id, s := range m.sessions {
+		if id != skipSessionID && !s.IsClosed() {
+			sessions = append(sessions, struct {
+				id int64
+				s  *Session
+			}{id, s})
+		}
+	}
+	m.mu.Unlock()
+	for _, item := range sessions {
+		active, ok, err := m.store.GetActiveMapSetID(item.id)
+		if err == nil && ok && active == mapSetID {
+			item.s.RefreshTopologyAfterZoneMove(mapSetID, move)
+		}
+	}
+}
+
 func (m *Manager) Connect(id int64) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -87,6 +142,16 @@ func (m *Manager) Connect(id int64) (*Session, error) {
 
 	m.sessions[id] = sess
 	go sess.RunReadLoop()
+
+	// Build the mapper tracker index from the session's active map set (off the
+	// hot path; degrades to an empty tracker if no/dangling set).
+	sess.LoadActiveMapSet()
+
+	// Resolve the session's room-format profile and build the accumulator from it
+	// (off the hot path; degrades to the builtin RMUD profile on any problem, and
+	// says so on the wire). This is the ONE place the profile is resolved on the
+	// connect path — never per incoming line.
+	sess.LoadMapperProfile()
 
 	sess.QueueStartupCommands()
 

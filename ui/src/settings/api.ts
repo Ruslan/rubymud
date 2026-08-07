@@ -1,6 +1,20 @@
-import type { HistoryListResponse, LogEntry } from './types';
+import type { HistoryListResponse, LogEntry, MapperProfile, MapperSpec } from './types';
 
 export type ProfileRuleDomain = 'aliases' | 'triggers' | 'subs' | 'highlights' | 'hotkeys' | 'declared_variables';
+
+export type MCPSettings = {
+  enabled: boolean;
+  requested_enabled: boolean;
+  effective_enabled: boolean;
+  token_configured: boolean;
+  externally_managed: boolean;
+  externally_managed_reason?: string;
+  enabled_externally_managed: boolean;
+  token_externally_managed: boolean;
+  listener_exposure: 'loopback' | 'network';
+};
+
+export type MCPSettingsWriteResponse = MCPSettings & { token?: string };
 
 function apiToken(): string {
   // @ts-ignore injected by settings.html
@@ -48,6 +62,9 @@ export async function fetchColors() {
 }
 export const fetchAppSettings = () => getJSON('/api/app/settings');
 export const saveAppSettingsRequest = (settings: any) => putJSON('/api/app/settings', settings);
+export const fetchMCPSettings = () => getJSON<MCPSettings>('/api/mcp/settings');
+export const saveMCPSettingsRequest = (enabled: boolean) => fetch('/api/mcp/settings', { method: 'PATCH', headers: apiHeaders(true), body: JSON.stringify({ enabled }) });
+export const rotateMCPTokenRequest = () => postNoBody('/api/mcp/settings/token');
 export const fetchProfileFiles = () => getJSON('/api/profiles/files');
 export const fetchSessionProfiles = (sessionID: number) => getJSON(`/api/sessions/${sessionID}/profiles`);
 export const fetchSessionVariables = (sessionID: number) => getJSON(`/api/sessions/${sessionID}/variables`);
@@ -106,6 +123,105 @@ export const saveRuntimeVariable = (sessionID: number, key: string, value: strin
 export const saveProfileRule = (profileID: number, domain: string, id: number, draft: any) => putJSON(`/api/profiles/${profileID}/${profileEndpoint(domain)}/${id}`, draft);
 export const saveProfile = (profileID: number, draft: any) => putJSON(`/api/profiles/${profileID}`, draft);
 export const saveSession = (sessionID: number, draft: any) => putJSON(`/api/sessions/${sessionID}`, draft);
+
+// Mapper API types: global map sets and this session's active set.
+export type MapSet = {
+  id: number;
+  name: string;
+  source_archive: string;
+  imported_at: string | null;
+  zone_count: number;
+  room_count: number;
+  seam_count: number;
+  note: string;
+  editable: boolean;
+  forked_from_id: number | null;
+};
+
+export type MapImportConflict = {
+  kind: string;
+  zone?: string;
+  x: number;
+  y: number;
+  l: number;
+  source?: string;
+  other_source?: string;
+};
+
+export type MapImportSummary = {
+  id: number;
+  name: string;
+  zone_count: number;
+  room_count: number;
+  seam_count: number;
+  unresolved: string[];
+  conflicts: MapImportConflict[];
+  conflicts_truncated?: boolean;
+};
+
+export type MapImportFailure = {
+  error: string;
+  conflicts: MapImportConflict[];
+  conflicts_truncated?: boolean;
+};
+
+export const fetchMapSets = () => getJSON<MapSet[]>('/api/map-sets');
+export function importMapSet(file: File): Promise<Response> {
+  const body = new FormData();
+  body.append('archive', file);
+  return fetch('/api/map-sets/import', { method: 'POST', headers: apiHeaders(), body });
+}
+export const deleteMapSet = (mapSetID: number) => deleteNoBody(`/api/map-sets/${mapSetID}`);
+export const fetchActiveMapSet = (sessionID: number) =>
+  getJSON<{ active_map_set_id: number | null }>(`/api/sessions/${sessionID}/active-map-set`);
+export const saveActiveMapSet = (sessionID: number, mapSetID: number | null) =>
+  postJSON(`/api/sessions/${sessionID}/active-map-set`, { map_set_id: mapSetID });
+
+// Mapper ROOM FORMATS ("mapper profiles"). Distinct from /api/profiles above,
+// which is the TinTin alias/trigger layering. The list always leads with the
+// synthetic read-only builtin (id 0).
+export const fetchMapperProfiles = () => getJSON<MapperProfile[]>('/api/mapper-profiles');
+export const createMapperProfile = (name: string, spec: MapperSpec) =>
+  postJSON('/api/mapper-profiles', { name, spec });
+export const saveMapperProfile = (id: number, name: string, spec: MapperSpec) =>
+  putJSON(`/api/mapper-profiles/${id}`, { name, spec });
+export const deleteMapperProfile = (id: number) => deleteNoBody(`/api/mapper-profiles/${id}`);
+
+// validateMapperProfile compile-checks a draft WITHOUT writing. mapper.Compile on
+// the server is the single source of validation truth — the form shows whatever
+// message comes back and never reimplements a rule.
+export const validateMapperProfile = (name: string, spec: MapperSpec) =>
+  postJSON('/api/mapper-profiles/validate', { name, spec });
+export const replayMapperProfile = (name: string, spec: MapperSpec, sessionID: number, limit: number) =>
+  postJSON('/api/mapper-profiles/replay', { name, spec, session_id: sessionID, limit });
+
+// Per-session room format.
+//
+// `mapper_format` is the STORED reference — "" (= NULL = the default builtin),
+// "builtin:<key>" or "db:<id>". It replaced the legacy `mapper_profile_id`, which
+// could only name a DB row and so could not name a compiled-in detector at all;
+// the old field is still returned (the row id, or null) purely so the list's row
+// highlighting keeps working.
+//
+// `active_ref`/`active_name`/`error` describe what a LIVE session actually ended
+// up parsing with, which differs from the stored reference exactly when the
+// stored one could not be honoured — a deleted row, a detector this build does
+// not carry, a spec that no longer compiles, or a Go detector that crashed.
+export const fetchSessionMapperProfile = (sessionID: number) =>
+  getJSON<{
+    mapper_format: string;
+    mapper_profile_id: number | null;
+    live: boolean;
+    active_ref: string;
+    active_id: number | null;
+    active_name: string;
+    error: string;
+  }>(`/api/sessions/${sessionID}/mapper-profile`);
+
+// saveSessionMapperProfile assigns a room format by REFERENCE. Pass '' for the
+// default builtin (stored as NULL).
+export const saveSessionMapperProfile = (sessionID: number, ref: string) =>
+  postJSON(`/api/sessions/${sessionID}/mapper-profile`, { format: ref });
 
 export function toggleProfileRule(profileID: number, domain: 'aliases' | 'triggers' | 'subs' | 'highlights', item: any, enabled: boolean) {
   return putJSON(`/api/profiles/${profileID}/${domain}/${item.id}`, { ...item, enabled });

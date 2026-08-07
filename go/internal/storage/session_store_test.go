@@ -24,7 +24,7 @@ func newSessionStoreTestStore(t *testing.T) *Store {
 		t.Fatalf("db.DB: %v", err)
 	}
 	t.Cleanup(func() { _ = sqlDB.Close() })
-	if err := runMigrations(db); err != nil {
+	if err = runMigrations(db); err != nil {
 		t.Fatalf("runMigrations: %v", err)
 	}
 	return NewTestStore(db)

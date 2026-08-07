@@ -24,7 +24,7 @@ func setupTestStore(t *testing.T) *Store {
 	// Enable foreign keys for SQLite
 	db.Exec("PRAGMA foreign_keys = ON")
 
-	if err := runMigrations(db); err != nil {
+	if err = runMigrations(db); err != nil {
 		t.Fatalf("runMigrations: %v", err)
 	}
 

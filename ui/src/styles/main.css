@@ -11,7 +11,9 @@ body {
   color: #e8edf2;
   /* Integer-pixel line-height: a fractional one (16px × 1.4 = 22.4px) makes
      output line spacing wobble by 1px as glyphs snap to whole pixels (#4). */
-  font: var(--app-font-size, 16px)/var(--app-line-height, 22px) "Fira Code", monospace;
+  font:
+    var(--app-font-size, 16px)/var(--app-line-height, 22px) "Fira Code",
+    monospace;
 }
 
 .app {
@@ -54,7 +56,10 @@ body {
   color: #b8c4d0;
   cursor: pointer;
   font: inherit;
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .panel-tab:hover {
@@ -283,8 +288,12 @@ body {
 }
 
 @keyframes ticker-pulse {
-  from { opacity: 1; }
-  to { opacity: 0.8; }
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.8;
+  }
 }
 
 .secondary-timers {
@@ -307,7 +316,6 @@ body {
   color: #ff899d;
   animation: ticker-pulse 1s infinite alternate;
 }
-
 
 #hotkeys {
   display: flex;
@@ -333,7 +341,10 @@ body {
   color: #b8c4d0;
   font-size: 12px;
   cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease,
+    color 0.15s ease;
 }
 
 .hotkey-chip:hover {
@@ -411,7 +422,9 @@ body {
   line-height: inherit;
   vertical-align: baseline;
   cursor: pointer;
-  transition: background-color 0.15s ease, border-color 0.15s ease;
+  transition:
+    background-color 0.15s ease,
+    border-color 0.15s ease;
 }
 
 .trigger-button:hover {
@@ -536,7 +549,6 @@ body {
 #input::placeholder {
   color: #798694;
 }
-
 
 @media (max-width: 640px) {
   body {
@@ -697,7 +709,6 @@ body {
 
 /* Variable Panel Enhancements */
 
-
 .variable-input {
   font-family: inherit;
 }
@@ -772,7 +783,8 @@ body {
   flex-shrink: 0;
   transition: background 0.15s;
 }
-.col-resize-handle:hover, .col-resize-handle:active {
+.col-resize-handle:hover,
+.col-resize-handle:active {
   background: #3d4f61;
 }
 
@@ -783,7 +795,8 @@ body {
   flex-shrink: 0;
   transition: background 0.15s;
 }
-.row-resize-handle:hover, .row-resize-handle:active {
+.row-resize-handle:hover,
+.row-resize-handle:active {
   background: #3d4f61;
 }
 
@@ -932,7 +945,7 @@ body {
   padding: 4px 0;
   min-width: 120px;
   z-index: 100;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.5);
 }
 
 .dropdown-item {
@@ -977,8 +990,14 @@ body {
 }
 
 @keyframes visual-bell-flash {
-  0% { box-shadow: inset 0 0 0 2px var(--ansi-bright-yellow-fg), 0 0 24px var(--ansi-bright-yellow-fg); }
-  100% { box-shadow: none; }
+  0% {
+    box-shadow:
+      inset 0 0 0 2px var(--ansi-bright-yellow-fg),
+      0 0 24px var(--ansi-bright-yellow-fg);
+  }
+  100% {
+    box-shadow: none;
+  }
 }
 
 .pane-scroll-bottom {
@@ -1052,4 +1071,692 @@ body {
   font-size: 10px;
   padding: 1px 6px;
   border-radius: 10px;
+}
+
+/* ---- Map pane (~map buffer, canvas renderer) ------------------------------ */
+.pane-body_map {
+  flex-direction: column;
+}
+.map-pane {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  /* Containing block for the absolutely-positioned cell menu, so the menu's
+     left/top are measured in the SAME box the placement math clamps against. */
+  position: relative;
+  background:
+    radial-gradient(
+      1200px 700px at 50% 40%,
+      rgba(84, 232, 136, 0.04),
+      transparent 70%
+    ),
+    #090c0a;
+  color: #cfe6d6;
+}
+.map-pane__bar {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 8px;
+  border-bottom: 1px solid #1b2a20;
+  flex-wrap: nowrap;
+  height: 38px;
+  min-height: 38px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.map-pane__zone,
+.map-pane__search {
+  background: #090c0a;
+  color: #cfe6d6;
+  border: 1px solid #1b2a20;
+  border-radius: 5px;
+  padding: 4px 7px;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.map-pane__zone {
+  min-width: 0;
+  max-width: 240px;
+  flex: 1 1 120px;
+  height: 26px;
+}
+.map-pane__search {
+  min-width: 0;
+  width: 100%;
+  height: 28px;
+}
+.map-pane__tool,
+.map-pane__icon,
+.map-pane__zone-command {
+  box-sizing: border-box;
+  height: 26px;
+  background: #0d1712;
+  color: #cfe6d6;
+  border: 1px solid #2c5a3c;
+  border-radius: 5px;
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.map-pane__tool,
+.map-pane__icon {
+  width: 26px;
+  flex: 0 0 26px;
+  position: relative;
+  padding: 0;
+  font-size: 16px;
+  line-height: 1;
+}
+.map-pane__tool.on,
+.map-pane__icon.on {
+  color: #f0b64e;
+  border-color: #f0b64e;
+  background: #2a2111;
+}
+.map-pane__zone-command {
+  padding: 0 8px;
+}
+.map-pane__tool:hover:not(:disabled),
+.map-pane__icon:hover:not(:disabled),
+.map-pane__zone-command:hover:not(:disabled) {
+  border-color: #54e888;
+}
+.map-pane__zone:focus-visible,
+.map-pane__search:focus-visible,
+.map-pane__tool:focus-visible,
+.map-pane__icon:focus-visible,
+.map-pane__zone-command:focus-visible,
+.map-pane__follow:has(input:focus-visible),
+.map-pane__record:focus-visible,
+.map-pane__walk-resume:focus-visible,
+.map-pane__walk-stop:focus-visible,
+.map-pane__search-results button:focus-visible,
+.map-pane__manager-action:focus-visible {
+  outline: 2px solid #54e888;
+  outline-offset: 1px;
+}
+.map-pane__zone-command:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+.map-pane__selection-count {
+  position: absolute;
+  right: -5px;
+  top: -5px;
+  min-width: 14px;
+  height: 14px;
+  line-height: 14px;
+  border-radius: 7px;
+  background: #f0b64e;
+  color: #090c0a;
+  font-size: 11px;
+  text-align: center;
+}
+.map-pane__follow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  box-sizing: border-box;
+  border: 1px solid #2c5a3c;
+  border-radius: 5px;
+  font-size: 11px;
+  color: #7b9585;
+  cursor: pointer;
+  user-select: none;
+}
+.map-pane__follow span { display: none; }
+.map-pane__follow::after { content: "◎"; font-size: 15px; }
+.map-pane__follow input { position: absolute; opacity: 0; }
+.map-pane__follow.on {
+  color: #f0b64e;
+  border-color: #f0b64e;
+  background: #2a2111;
+}
+.map-pane__confidence {
+  font-size: 14px;
+  min-width: 20px;
+  text-align: center;
+}
+/* «Записать комнату» — the one-click twin of the cell menu's record item. Always
+   present; when the write cannot land it goes disabled and its title says why. */
+.map-pane__record {
+  background: #0d1712;
+  color: #cfe6d6;
+  border: 1px solid #2c5a3c;
+  border-radius: 5px;
+  width: 26px;
+  height: 26px;
+  box-sizing: border-box;
+  padding: 0;
+  font: inherit;
+  font-size: 0;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.map-pane__record::before { content: "●"; font-size: 13px; }
+.map-pane__record:hover:not(:disabled) {
+  background: #143222;
+  border-color: #54e888;
+}
+.map-pane__record:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.map-pane__walk-progress {
+  min-width: 0;
+  max-width: 52px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #f0b64e;
+  font-size: 11px;
+  white-space: nowrap;
+}
+.map-pane__walk-stop {
+  background: #241310;
+  color: #ffd0c8;
+  border: 1px solid #854037;
+  border-radius: 5px;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  font: inherit;
+  font-size: 0;
+  cursor: pointer;
+}
+.map-pane__walk-stop::before { content: "■"; font-size: 11px; }
+.map-pane__walk-resume { width: 26px; height: 26px; padding: 0; font-size: 0; }
+.map-pane__walk-resume::before { content: "▶"; font-size: 11px; }
+.map-pane__popover {
+  position: absolute;
+  z-index: 8;
+  max-width: calc(100% - 12px);
+  max-height: min(260px, calc(100% - 52px));
+  overflow: auto;
+  box-sizing: border-box;
+  padding: 7px;
+  background: #0b100d;
+  color: #cfe6d6;
+  border: 1px solid #2f8a52;
+  border-radius: 6px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .6);
+  font-size: 12px;
+  line-height: 16px;
+}
+.map-pane__popover .map-pane__search { font-size: 12px; line-height: 16px; }
+.map-pane__search-results { display: flex; flex-direction: column; gap: 3px; margin-top: 5px; }
+.map-pane__search-results button,
+.map-pane__manager-action,
+.map-pane__manager-popover .map-pane__zone-command {
+  min-height: 27px;
+  background: #0d1712;
+  color: #cfe6d6;
+  border: 1px solid #2c5a3c;
+  border-radius: 4px;
+  text-align: left;
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+}
+.map-pane__manager-popover { display: flex; flex-direction: column; gap: 6px; }
+.map-pane__manager-count { color: #f0b64e; font-size: 11px; line-height: 16px; }
+.map-pane__walk-stop:hover:not(:disabled) {
+  background: #3a1a15;
+  border-color: #ff8879;
+}
+.map-pane__walk-stop:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+.map-pane__stage {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.map-pane__canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+.map-pane__canvas.drag {
+  cursor: grabbing;
+}
+.map-pane__canvas.select {
+  cursor: crosshair;
+}
+.map-pane__floors {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: rgba(9, 14, 11, 0.85);
+  border: 1px solid #1b2a20;
+  border-radius: 7px;
+  padding: 4px;
+}
+.map-pane__floors button {
+  background: #090c0a;
+  color: #7b9585;
+  border: 1px solid #1b2a20;
+  border-radius: 5px;
+  padding: 4px 0;
+  width: 28px;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.map-pane__floors button.on {
+  border-color: #2f8a52;
+  color: #54e888;
+  background: rgba(84, 232, 136, 0.1);
+}
+.map-pane__tip {
+  position: absolute;
+  pointer-events: none;
+  z-index: 5;
+  max-width: 280px;
+  background: rgba(9, 14, 11, 0.96);
+  border: 1px solid #2f8a52;
+  border-radius: 7px;
+  padding: 8px 10px;
+  font-size: 12px;
+  /* Unitless: body's line-height is an absolute px sized for the APP font, and
+     inherits as a length — see the note on .map-cell-menu. */
+  line-height: 1.35;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5);
+  transform: translate(-50%, -115%);
+  transition: opacity 0.1s;
+}
+.map-tip__name {
+  color: #54e888;
+  font-weight: 600;
+  margin-bottom: 3px;
+}
+.map-tip__row {
+  color: #7b9585;
+  font-size: 11px;
+}
+.map-tip__dt {
+  color: #ff5d5d;
+}
+.map-tip__seam {
+  color: #f0b64e;
+}
+.map-pane__status {
+  position: absolute;
+  left: 8px;
+  bottom: 8px;
+  z-index: 4;
+  box-sizing: border-box;
+  max-width: min(70%, calc(100% - 16px));
+  background: rgba(9, 14, 11, 0.85);
+  border: 1px solid #1b2a20;
+  border-radius: 6px;
+  padding: 5px 9px;
+  font-size: 11px;
+  /* Unitless — a long record/undo report wraps and must not overlap itself. */
+  line-height: 1.4;
+  color: #7b9585;
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+}
+.map-pane__status-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.map-pane__status-close {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  margin: -1px -3px -1px 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #9fc4ac;
+  font: inherit;
+  font-size: 14px;
+  line-height: 16px;
+  cursor: pointer;
+}
+.map-pane__status-close:hover,
+.map-pane__status-close:focus-visible {
+  color: #cfe6d6;
+}
+
+.map-zone-dialog-backdrop {
+  position: absolute;
+  z-index: 12;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  padding: 12px;
+  background: rgba(0, 0, 0, .56);
+}
+.map-zone-dialog {
+  width: min(390px, 100%);
+  max-height: 100%;
+  overflow: auto;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  padding: 13px;
+  background: #0b100d;
+  color: #cfe6d6;
+  border: 1px solid #2f8a52;
+  border-radius: 7px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, .64);
+  font-size: 12px;
+  line-height: 1.35;
+}
+.map-zone-dialog::backdrop {
+  background: rgba(0, 0, 0, .56);
+}
+.map-zone-dialog h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.map-zone-dialog__source {
+  color: #f0b64e;
+  overflow-wrap: anywhere;
+}
+.map-zone-dialog label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: #9fc4ac;
+}
+.map-zone-dialog input,
+.map-zone-dialog select {
+  min-width: 0;
+  height: 28px;
+  box-sizing: border-box;
+  background: #090c0a;
+  color: #cfe6d6;
+  border: 1px solid #2c5a3c;
+  border-radius: 4px;
+  padding: 4px 7px;
+  font: inherit;
+}
+.map-zone-dialog__result {
+  min-height: 17px;
+  color: #9fc4ac;
+  overflow-wrap: anywhere;
+}
+.map-zone-dialog__result[data-error="true"] { color: #ff8879; }
+.map-zone-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.map-zone-dialog__actions button {
+  min-width: 62px;
+  height: 28px;
+  background: #0d1712;
+  color: #cfe6d6;
+  border: 1px solid #2c5a3c;
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
+.map-zone-dialog__actions button:last-child:not(:disabled) {
+  color: #54e888;
+  border-color: #2f8a52;
+}
+.map-zone-dialog__actions button:disabled { opacity: .45; cursor: wait; }
+.map-pane__status-close:focus-visible {
+  outline: 1px solid #54e888;
+  outline-offset: 1px;
+}
+
+.map-cell-menu {
+  position: absolute;
+  z-index: 6;
+  /* A menu taller than the pane scrolls rather than dropping items past the
+     clipped edge; the inline max-height set by placeCellMenu bounds it. */
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  /* A narrow split pane can be smaller than the normal menu width. Keep the
+     popup inside it horizontally just as placeCellMenu does vertically. */
+  min-width: min(210px, calc(100% - 12px));
+  max-width: min(280px, calc(100% - 12px));
+  box-sizing: border-box;
+  background: rgba(9, 14, 11, 0.98);
+  border: 1px solid #2f8a52;
+  border-radius: 8px;
+  padding: 6px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  font-size: 12px;
+  /* UNITLESS line-height, deliberately. `body` sets the font shorthand with an
+     ABSOLUTE line-height (var(--app-line-height)) sized for the app font size,
+     and an absolute line-height inherits as a LENGTH. At a small app font size
+     (4px => 6px line box) this menu's own 12px text was laid out on a 6px line
+     box, so wrapped lines overlapped each other and spilled out of the box. A
+     unitless value re-resolves against each descendant's own font-size. */
+  line-height: 1.35;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+/* Menu rows must keep their content height: the container is a flex column with
+   a max-height, and a shrinking row would compress its text instead of letting
+   the container scroll (which is what the placement math assumes). */
+.map-cell-menu > * {
+  flex-shrink: 0;
+}
+.map-cell-menu__header {
+  color: #cfe6d6;
+  font-weight: 600;
+  padding: 3px 6px 4px;
+  border-bottom: 1px solid #1b2a20;
+  /* Long tracker reasons must WRAP and grow the menu, never overflow it. */
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.map-cell-menu__diff {
+  color: #f0b64e;
+  font-size: 11px;
+  padding: 3px 6px;
+}
+.map-cell-menu__preview {
+  color: #9fc4ac;
+  font-size: 11px;
+  padding: 4px 6px;
+  margin: 2px 0;
+  border: 1px dashed #2f8a52;
+  border-radius: 5px;
+  white-space: pre-line;
+}
+.map-cell-menu__section {
+  color: #7b9585;
+  font-size: 11px;
+  padding: 5px 6px 2px;
+  border-top: 1px solid #1b2a20;
+  margin-top: 2px;
+}
+.map-cell-menu__item {
+  background: #090c0a;
+  color: #cfe6d6;
+  border: 1px solid #1b2a20;
+  border-radius: 5px;
+  padding: 6px 9px;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.map-cell-menu__item:hover:not(:disabled) {
+  border-color: #2f8a52;
+}
+.map-cell-menu__item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.map-cell-menu__seams {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.map-cell-menu__seam-row {
+  display: flex;
+  gap: 4px;
+  align-items: stretch;
+}
+.map-cell-menu__seam-item {
+  color: #f0b64e;
+  border-color: #a66d1f;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  flex: 1 1 auto;
+}
+.map-cell-menu__seam-props {
+  flex: 0 0 30px;
+  min-width: 30px;
+  padding: 0;
+  color: #f0b64e;
+  border: 1px solid #a66d1f;
+  background: #171b22;
+  cursor: pointer;
+}
+.map-cell-menu__seam-props:hover,
+.map-cell-menu__seam-props:focus-visible {
+  border-color: #f0b64e;
+}
+.map-cell-menu__seam-item:hover:not(:disabled) {
+  border-color: #f0b64e;
+}
+.map-cell-menu__update {
+  border-color: #f0b64e;
+  color: #f0b64e;
+}
+.map-cell-menu__update:hover:not(:disabled) {
+  border-color: #f0b64e;
+}
+.map-cell-menu__anchor {
+  border-color: #2f8a52;
+  color: #54e888;
+}
+.map-cell-menu__record {
+  border-color: #54e888;
+  color: #54e888;
+}
+.map-cell-menu__undo {
+  border-color: #7b9585;
+  color: #7b9585;
+}
+
+/* The EDGE EDITOR popup. It reuses .map-cell-menu as its container (one popup at
+   a time, same clamping/dismissal) and adds one block per DIRECTION — an edge is
+   two directed facts and both are shown at once. Every rule below sets a UNITLESS
+   line-height for the same reason .map-cell-menu does: `body` sets an absolute
+   px line-height for the APP font, it inherits as a LENGTH, and at a small app
+   font size these 11–12px rows would be laid out on a ~6px line box and overlap
+   themselves. */
+.map-edge-menu__side {
+  border: 1px solid #1b2a20;
+  border-radius: 6px;
+  padding: 4px 5px 6px;
+  margin: 2px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  line-height: 1.35;
+}
+.map-edge-menu__side .map-cell-menu__section {
+  border-top: none;
+  margin-top: 0;
+  padding-top: 1px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+.map-edge-menu__attrs {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.map-edge-menu__toggle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 6px;
+  color: #cfe6d6;
+  font-size: 12px;
+  line-height: 1.35;
+  cursor: pointer;
+}
+.map-edge-menu__prov {
+  color: #7b9585;
+  font-size: 11px;
+  padding: 0 6px;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+/* One free-text attribute of a directed face (traversal phrase, opening command).
+   Stacked label-over-input so a long Russian caption does not squeeze the field. */
+.map-edge-menu__attr {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 6px;
+  color: #7b9585;
+  font-size: 11px;
+  line-height: 1.35;
+}
+.map-edge-menu__attr input {
+  background: #090c0a;
+  color: #cfe6d6;
+  border: 1px solid #1b2a20;
+  border-radius: 4px;
+  padding: 3px 6px;
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+  min-width: 0;
+}
+.map-edge-menu__attr input:focus {
+  border-color: #2c5a3c;
+}
+.map-edge-menu__clear {
+  border-color: #7b9585;
+  color: #7b9585;
+  font-size: 11px;
+  padding: 4px 8px;
+  line-height: 1.35;
+}
+.map-edge-menu__hint {
+  color: #7b9585;
+  font-size: 11px;
+  padding: 4px 6px 2px;
+  border-top: 1px solid #1b2a20;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  line-height: 1.35;
+}
+
+.map-pane__unavailable {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  color: #7b9585;
+  font-size: 12px;
+  padding: 16px;
 }

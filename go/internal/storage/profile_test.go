@@ -22,7 +22,7 @@ func newProfileTestStore(t *testing.T) *Store {
 		t.Fatalf("gorm.Open: %v", err)
 	}
 
-	if err := runMigrations(db); err != nil {
+	if err = runMigrations(db); err != nil {
 		t.Fatalf("runMigrations: %v", err)
 	}
 

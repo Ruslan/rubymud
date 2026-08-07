@@ -1,0 +1,35 @@
+-- map_edges.passable — the hand-drawn NEGATION ("выходы v2", hidden exits).
+--
+-- WHY A NEW FILE AND NOT AN EDIT TO 016. Migrations are keyed by filename in
+-- schema_migrations and are applied at most once: any database that already ran
+-- 016 would never see a changed 016, and would then meet code that selects a
+-- column its table does not have — the store fails to open at all ("table
+-- map_edges has no column named passable"), including `--rematerialize-edges`,
+-- which is the one repair handle that could otherwise have helped. So a shipped
+-- migration is immutable and a schema change is always a new file, even when the
+-- previous one is one commit old.
+--
+-- WHAT IT MEANS. Every edge row says whether it is a way THROUGH:
+--
+--   passable = 1  the default and the only value the derivation ever produces —
+--                 a real traversal, whether parsed from the room's exits, taken
+--                 from the permissive grid fallback, or hand-drawn as a HIDDEN
+--                 EXIT ("there is a way here whatever the exits line says").
+--   passable = 0  only ever hand-drawn: a NEGATION — "there is NO way here
+--                 whatever the exits line says".
+--
+-- WHY A NEGATION IS A ROW AND NOT THE ABSENCE OF ONE. Absence is precisely what
+-- the derivation recomputes from the rooms on every write, so "no edge here"
+-- expressed as no row is erased by the next «обновить комнату». The mechanism
+-- that makes a hand-drawn statement survive already exists — a manual row OWNS
+-- its face (idx_map_edges_grid_unique is per (map_set_id, from-cell, dir), and
+-- dropFacesTakenByManual makes the derivation skip an owned face) — so a negation
+-- is a manual row that the walk refuses to traverse (mapper.worldNeighbors).
+--
+-- Ownership being per FACE rather than per pair is what lets K1->K2 be denied
+-- while K2->K1 stays open (a one-way wall), which is the same directedness
+-- argument the 016 header makes for the table as a whole.
+--
+-- BACKFILL: the DEFAULT covers every existing row, and that is the correct value
+-- for all of them — before this column no row could be anything but a traversal.
+ALTER TABLE map_edges ADD COLUMN passable INTEGER NOT NULL DEFAULT 1;

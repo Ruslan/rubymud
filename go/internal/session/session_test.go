@@ -8,6 +8,7 @@ import (
 	"net"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1081,6 +1082,98 @@ func TestHighlightCarryIsIndependentForCopyBuffer(t *testing.T) {
 	}
 }
 
+// The mapper observes each received network line before trigger routing. A
+// copied buffer is only another presentation of that line, not another mapper
+// input. Keep the replay feed aligned with the live detector without trying to
+// de-duplicate equal text: the same server line may legitimately arrive twice.
+func TestRecentMudLogsExcludesCopiedBufferRowsWithoutDeduplicatingEqualLines(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles: %v", err)
+	}
+	if err := store.CreateTrigger(storage.TriggerRule{
+		ProfileID:    1,
+		Pattern:      `^same server line$`,
+		Enabled:      true,
+		TargetBuffer: "copies",
+		BufferAction: "copy",
+	}); err != nil {
+		t.Fatalf("CreateTrigger(copy): %v", err)
+	}
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	sess := &Session{sessionID: 1, conn: &recordingConn{}, store: store, vm: v, clients: map[int]clientSink{}}
+
+	// Two equal incoming lines are two separate live detector inputs. Each is
+	// copied after its canonical log row has been persisted.
+	sess.processLine("same server line")
+	sess.processLine("same server line")
+
+	entries, err := store.RecentMudLogs(1, 10)
+	if err != nil {
+		t.Fatalf("RecentMudLogs: %v", err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("RecentMudLogs = %+v, want exactly the two canonical inputs", entries)
+	}
+	for i, entry := range entries {
+		if entry.PlainText != "same server line" {
+			t.Errorf("entry %d plain text = %q", i, entry.PlainText)
+		}
+	}
+}
+
+func TestCopiedMudLogRowsKeepCanonicalProvenanceAndButtonOverlays(t *testing.T) {
+	store := newTestStore(t)
+	if err := store.EnsureSessionProfiles(1, "TestSession"); err != nil {
+		t.Fatalf("EnsureSessionProfiles: %v", err)
+	}
+	if err := store.CreateTrigger(storage.TriggerRule{
+		ProfileID:    1,
+		Pattern:      `^copy this button$`,
+		Command:      "open hatch",
+		IsButton:     true,
+		Enabled:      true,
+		TargetBuffer: "copies",
+		BufferAction: "copy",
+	}); err != nil {
+		t.Fatalf("CreateTrigger(copy button): %v", err)
+	}
+	v := vm.New(store, 1)
+	if err := v.Reload(); err != nil {
+		t.Fatalf("Reload: %v", err)
+	}
+	sess := &Session{sessionID: 1, conn: &recordingConn{}, store: store, vm: v, clients: map[int]clientSink{}}
+	sess.processLine("copy this button")
+
+	var records []storage.LogRecord
+	if err := store.DB().Where("session_id = ?", 1).Order("id ASC").Find(&records).Error; err != nil {
+		t.Fatalf("load copied rows: %v", err)
+	}
+	if len(records) != 2 {
+		t.Fatalf("log rows = %+v, want canonical plus copy", records)
+	}
+	canonical, copy := records[0], records[1]
+	if canonical.SourceType != "mud" || canonical.SourceID != "" || canonical.WindowName != "main" {
+		t.Errorf("canonical provenance = %+v, want mud/empty/main", canonical)
+	}
+	if copy.SourceType != "mud" || copy.SourceID != fmt.Sprintf("copy:%d", canonical.ID) || copy.WindowName != "copies" {
+		t.Errorf("copy provenance = %+v, want mud/copy:%d/copies", copy, canonical.ID)
+	}
+
+	for _, id := range []int64{canonical.ID, copy.ID} {
+		var overlays []storage.LogOverlay
+		if err := store.DB().Where("log_entry_id = ?", id).Order("id ASC").Find(&overlays).Error; err != nil {
+			t.Fatalf("load overlays for %d: %v", id, err)
+		}
+		if len(overlays) != 1 || overlays[0].OverlayType != "button" || overlays[0].SourceType != "trigger" || !strings.Contains(overlays[0].PayloadJSON, "open hatch") {
+			t.Errorf("overlays for %d = %+v, want one trigger button", id, overlays)
+		}
+	}
+}
+
 func newTestStore(t *testing.T) *storage.Store {
 	t.Helper()
 
@@ -1112,8 +1205,33 @@ func newTestStore(t *testing.T) *storage.Store {
 }
 
 type recordingConn struct {
-	bytes.Buffer
+	mu      sync.Mutex
+	buf     bytes.Buffer
 	readErr error
+}
+
+func (c *recordingConn) Write(p []byte) (int, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.Write(p)
+}
+
+func (c *recordingConn) String() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.buf.String()
+}
+
+func (c *recordingConn) Bytes() []byte {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]byte(nil), c.buf.Bytes()...)
+}
+
+func (c *recordingConn) Reset() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.buf.Reset()
 }
 
 func (c *recordingConn) Read(_ []byte) (int, error) {

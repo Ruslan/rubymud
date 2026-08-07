@@ -2,11 +2,13 @@ package main
 
 import (
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	// Embed the IANA timezone database into the binary so per-session zones
 	// (e.g. "America/Los_Angeles") resolve even on minimal runtime images that
@@ -20,16 +22,109 @@ import (
 	"rubymud/go/internal/web"
 )
 
+type optionalBool struct {
+	value bool
+	set   bool
+}
+
+func (v *optionalBool) String() string {
+	return strconv.FormatBool(v.value)
+}
+
+func (v *optionalBool) Set(raw string) error {
+	parsed, err := strconv.ParseBool(strings.TrimSpace(raw))
+	if err != nil {
+		return err
+	}
+	v.value = parsed
+	v.set = true
+	return nil
+}
+
+func (v *optionalBool) IsBoolFlag() bool { return true }
+
+type optionalString struct {
+	value string
+	set   bool
+}
+
+// String is used by flag diagnostics and must never disclose a parsed secret.
+func (v *optionalString) String() string { return "" }
+
+func (v *optionalString) Set(raw string) error {
+	v.value = raw
+	v.set = true
+	return nil
+}
+
+func resolveMCPConfig(lookupEnv func(string) (string, bool), cliEnabled optionalBool, cliToken optionalString) (web.MCPConfig, error) {
+	config := web.MCPConfig{}
+	if raw, ok := lookupEnv("MUDHOST_MCP_ENABLED"); ok && !cliEnabled.set {
+		enabled, err := strconv.ParseBool(strings.TrimSpace(raw))
+		if err != nil {
+			return web.MCPConfig{}, fmt.Errorf("parse MUDHOST_MCP_ENABLED: %w", err)
+		}
+		config.Enabled = enabled
+		config.EnabledSet = true
+	}
+	if raw, ok := lookupEnv("MUDHOST_MCP_TOKEN"); ok {
+		config.Token = strings.TrimSpace(raw)
+		config.TokenSet = true
+	}
+	if cliEnabled.set {
+		config.Enabled = cliEnabled.value
+		config.EnabledSet = true
+	}
+	if cliToken.set {
+		config.Token = strings.TrimSpace(cliToken.value)
+		config.TokenSet = true
+	}
+	return config, nil
+}
+
+// runtimeDataDir resolves --db before creating runtime directories. SQLite
+// file: DSNs need their physical target parsed first; memory DSNs intentionally
+// fall back to the current directory for config exports rather than creating a
+// literal directory named "file:".
+func runtimeDataDir(db string) (string, error) {
+	_, physicalPath, err := storage.ResolveSQLitePath(db)
+	if err != nil {
+		return "", err
+	}
+	if physicalPath == "" {
+		return ".", nil
+	}
+	return filepath.Dir(physicalPath), nil
+}
+
 func main() {
 	mudAddr := flag.String("mud", "", "Optional: initial MUD server address in host:port format")
 	listenAddr := flag.String("listen", ":8080", "HTTP listen address")
 	dbPath := flag.String("db", "data/mudhost.db", "SQLite database path")
 	configDirPath := flag.String("config-dir", "", "Directory for exported profile .tt files (default: config/ next to --db)")
 	migrateOnly := flag.Bool("migrate-only", false, "Run migrations and exit")
+	rematerializeEdges := flag.Bool("rematerialize-edges", false,
+		"Rebuild every map set's derived topology (map_edges) from its rooms and exit; hand-drawn edges are kept")
+	var mcpEnabled optionalBool
+	var mcpToken optionalString
+	flag.Var(&mcpEnabled, "mcp", "Enable the MCP endpoint (default: MUDHOST_MCP_ENABLED or false)")
+	flag.Var(&mcpToken, "mcp-token", "Bearer token for MCP (default: MUDHOST_MCP_TOKEN; empty allows loopback-only MCP)")
 	flag.Parse()
 
-	// Ensure data directory exists
-	dataDir := filepath.Dir(*dbPath)
+	mcpConfig, err := resolveMCPConfig(os.LookupEnv, mcpEnabled, mcpToken)
+	if err != nil {
+		log.Fatalf("MCP configuration: %v", err)
+	}
+	if err := web.ValidateMCPConfig(*listenAddr, mcpConfig); err != nil {
+		log.Fatalf("MCP configuration: %v", err)
+	}
+
+	// Ensure data directory exists. Resolve a SQLite URI before taking its
+	// directory; filepath.Dir("file:...") would create the wrong path.
+	dataDir, err := runtimeDataDir(*dbPath)
+	if err != nil {
+		log.Fatalf("resolve database path: %v", err)
+	}
 	if err := os.MkdirAll(dataDir, 0755); err != nil {
 		log.Fatalf("failed to create data directory %s: %v", dataDir, err)
 	}
@@ -52,6 +147,24 @@ func main() {
 
 	if *migrateOnly {
 		log.Println("migrations completed successfully")
+		return
+	}
+
+	// Repair handle for the one guarantee materializing edges gave up: connectivity
+	// used to be re-derived on every index build, so a change to `rooms` healed
+	// itself; now it is stored, and a write that bypassed the Go write-path leaves
+	// it stale forever and undetected. Nothing runs this automatically — scanning
+	// for drift costs a
+	// full derivation per set on every start.
+	if *rematerializeEdges {
+		ids, counts, rerr := store.RematerializeAllMapEdges()
+		if rerr != nil {
+			log.Fatalf("rematerialize map edges: %v", rerr)
+		}
+		for _, id := range ids {
+			log.Printf("map set %d: %d edges", id, counts[id])
+		}
+		log.Printf("rematerialized topology for %d map set(s)", len(ids))
 		return
 	}
 
@@ -79,7 +192,10 @@ func main() {
 		Pass: os.Getenv("MUDHOST_BASIC_AUTH_PASS"),
 	}
 
-	server := web.New(*listenAddr, manager, store, *configDirPath, basicAuth)
+	server, err := web.New(*listenAddr, manager, store, *configDirPath, basicAuth, mcpConfig)
+	if err != nil {
+		log.Fatalf("create web server: %v", err)
+	}
 	if basicAuth.User != "" && basicAuth.Pass != "" {
 		log.Printf("HTTP basic auth enabled for user %q", basicAuth.User)
 	}

@@ -1,7 +1,9 @@
 package storage
 
 import (
+	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -10,6 +12,16 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+type queryCountingLogger struct {
+	logger.Interface
+	queries atomic.Int64
+}
+
+func (l *queryCountingLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	l.queries.Add(1)
+	l.Interface.Trace(ctx, begin, fc, err)
+}
 
 func newLogStoreTestStore(t *testing.T) *Store {
 	t.Helper()
@@ -132,6 +144,32 @@ func TestSearchLogsDetailed_SeparateGroups(t *testing.T) {
 	}
 	if len(groups[1]) != 5 || groups[1][2].PlainText != "Line 10 [MATCH]" {
 		t.Errorf("Group 2 mismatch: size=%d, center=%q", len(groups[1]), groups[1][2].PlainText)
+	}
+}
+
+func TestSearchLogsDetailedForBufferDoesNotQueryPerMatchOrGroup(t *testing.T) {
+	s := newLogStoreTestStore(t)
+	for i := 0; i < 20; i++ {
+		text := fmt.Sprintf("filler %d", i)
+		if i%2 == 0 {
+			text = fmt.Sprintf("needle %d", i)
+		}
+		if _, err := s.AppendLogEntry(1, "chat", text, text); err != nil {
+			t.Fatalf("AppendLogEntry %d: %v", i, err)
+		}
+	}
+
+	counter := &queryCountingLogger{Interface: logger.Default.LogMode(logger.Silent)}
+	s.db = s.db.Session(&gorm.Session{Logger: counter})
+	groups, _, err := s.SearchLogsDetailedForBuffer(1, "chat", "needle", 0, 0)
+	if err != nil {
+		t.Fatalf("SearchLogsDetailedForBuffer: %v", err)
+	}
+	if len(groups) != 10 {
+		t.Fatalf("groups = %d, want 10", len(groups))
+	}
+	if got := counter.queries.Load(); got > 5 {
+		t.Fatalf("search issued %d SQL queries for 10 matches; want a bounded query count", got)
 	}
 }
 

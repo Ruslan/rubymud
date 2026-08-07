@@ -1,0 +1,3 @@
+-- Zone names are NFC-trimmed by the Go preflight in runMigrations. It updates
+-- rooms, edge endpoints/selectors and annotations in this same transaction, and
+-- rejects an ambiguous legacy namespace instead of silently merging it.

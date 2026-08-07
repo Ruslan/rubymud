@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import AliasesSection from './settings/AliasesSection.svelte';
   import SubstitutionsSection from './settings/SubstitutionsSection.svelte';
   import TriggersSection from './settings/TriggersSection.svelte';
@@ -11,7 +11,18 @@
   import VariablesSection from './settings/VariablesSection.svelte';
   import ProfilesSection from './settings/ProfilesSection.svelte';
   import SessionsSection from './settings/SessionsSection.svelte';
+  import MapperProfilesSection from './settings/MapperProfilesSection.svelte';
+  import MapSetsSection from './settings/MapSetsSection.svelte';
   import * as api from './settings/api';
+  import type { MCPSettings, MCPSettingsWriteResponse } from './settings/api';
+  import {
+    copyOfMapperProfile,
+    emptyMapperProfileForm,
+    formToSpec,
+    specToForm,
+  } from './settings/mapperProfileForm';
+  import type { MapperProfileForm } from './settings/mapperProfileForm';
+  import { MapperReplayRequest } from './settings/mapperReplayRequest';
   import { localDateTimeISO } from './settings/logRange';
   import { normalizeAnsiTheme } from './ansi';
   import { duplicateHotkeyShortcutError } from './settings/hotkeyValidation';
@@ -21,6 +32,8 @@
     HistoryEntry,
     Hotkey,
     LogEntry,
+    MapperProfile,
+    MapperReplayResult,
     NamedColor,
     Profile,
     ProfileTimer,
@@ -43,6 +56,12 @@
   let selectedProfileID: number | null = null;
 
   let appSettings: { api_token: string; allow_exec_command: boolean; allow_webfetch_command: boolean } = { api_token: '', allow_exec_command: false, allow_webfetch_command: false };
+  let mcpSettings: MCPSettings = { enabled: false, requested_enabled: false, effective_enabled: false, token_configured: false, externally_managed: false, enabled_externally_managed: false, token_externally_managed: false, listener_exposure: 'loopback' };
+  let mcpOneTimeToken = '';
+  let mcpBusy = false;
+  let mcpRevision = 0;
+  let mcpCopyStatus = '';
+  let mcpTokenInput: HTMLInputElement;
   const wakeLockEnabledStorageKey = 'mudhost.wakeLockEnabled';
   let wakeLockEnabled = true;
 
@@ -61,6 +80,9 @@
     }
   }
 
+  // A one-time credential belongs only to the response view which received it.
+  $: if (currentTab !== 'app' && mcpOneTimeToken) closeMCPToken();
+
   const tabs = [
     { id: 'sessions', label: 'Sessions' },
     { id: 'profiles', label: 'Profiles' },
@@ -73,6 +95,8 @@
     { id: 'hotkeys', label: 'Hotkeys' },
     { id: 'timers', label: 'Tickers' },
     { id: 'groups', label: 'Groups' },
+    { id: 'room_formats', label: 'Room Formats' },
+    { id: 'map_sets', label: 'Map Sets' },
     { id: 'history', label: 'History' },
     { id: 'logs', label: 'Logs' },
     { id: 'app', label: 'App' },
@@ -218,6 +242,22 @@
   // Groups State
   let groups: RuleGroupSummary[] = [];
 
+  // Room Formats State ("mapper profiles" — how a room block is parsed out of
+  // the MUD's output). Unrelated to the `profiles` above.
+  let mapperProfiles: MapperProfile[] = [];
+  let mapperForm: MapperProfileForm = emptyMapperProfileForm();
+  let editingMapperProfileID: number | null = null;
+  let mapperProfileError = '';
+  let mapperProfileValidated = false;
+  let mapperReplaySessionID: number | null = null;
+  let mapperReplayLimit = 1000;
+  const mapperReplayRequest = new MapperReplayRequest();
+  let mapperReplayState = mapperReplayRequest.state();
+
+  function clearMapperReplay() {
+    mapperReplayState = mapperReplayRequest.clear();
+  }
+
   // Profile Files State
   let profileFiles: { filename: string }[] = [];
 
@@ -332,10 +372,14 @@
       namedColorList = colorsData || [];
 
       if (selectedSessionID === null && sessions.length > 0) selectedSessionID = sessions[0]!.id;
+      if (mapperReplaySessionID === null && sessions.length > 0) mapperReplaySessionID = sessions[0]!.id;
       if (selectedProfileID === null && profiles.length > 0) selectedProfileID = profiles[0]!.id;
 
       if (currentTab === 'app') {
-        appSettings = await api.fetchAppSettings();
+        const revision = mcpRevision;
+        const [nextAppSettings, nextMCPSettings] = await Promise.all([api.fetchAppSettings(), api.fetchMCPSettings()]);
+        appSettings = nextAppSettings;
+        if (revision === mcpRevision) mcpSettings = nextMCPSettings;
       } else if (currentTab === 'logs' && selectedSessionID) {
         await fetchLogs();
         // If the URL carried ?q=, run that search once on first load so a shared
@@ -344,6 +388,8 @@
           didAutoSearchFromURL = true;
           await searchLogs();
         }
+      } else if (currentTab === 'room_formats') {
+        mapperProfiles = await api.fetchMapperProfiles() || [];
       } else if (currentTab === 'profiles') {
         profileFiles = await api.fetchProfileFiles() || [];
       } else if (currentTab === 'sessions' && selectedSessionID) {
@@ -392,6 +438,158 @@
       console.error(`Failed to fetch data`, e);
     } finally {
       loading = false;
+    }
+  }
+
+  // --- Room formats ("mapper profiles") ------------------------------------
+  // The BACKEND is the single source of validation truth: every draft is
+  // compile-checked by POST /api/mapper-profiles/validate and whatever message
+  // comes back is shown verbatim. Nothing here reimplements a mapper.Compile
+  // rule — that is how the two would silently diverge.
+
+  // mapperValidateSeq sequences the validate requests. Without it a slow earlier
+  // response can land after a faster later one and paint "Format is valid." over
+  // a form the user has since changed or cleared — the UI claiming the backend
+  // approved something it never saw.
+  let mapperValidateSeq = 0;
+
+  async function validateMapperProfileDraft() {
+    const seq = ++mapperValidateSeq;
+    mapperProfileError = '';
+    mapperProfileValidated = false;
+    clearMapperReplay();
+    if (!mapperForm.name.trim()) return;
+    try {
+      const resp = await api.validateMapperProfile(mapperForm.name.trim(), formToSpec(mapperForm));
+      if (seq !== mapperValidateSeq) return; // superseded — drop it
+      if (!resp.ok) {
+        // A non-2xx (401 after a token rotation, 500) has no JSON body to parse;
+        // parsing it anyway surfaced a raw SyntaxError to the user.
+        mapperProfileError = (await resp.text()) || `Validation failed (HTTP ${resp.status}).`;
+        return;
+      }
+      const out = await resp.json();
+      if (seq !== mapperValidateSeq) return;
+      if (out.ok) {
+        mapperProfileValidated = true;
+      } else {
+        mapperProfileError = out.error || 'Room format is not valid.';
+      }
+    } catch (e) {
+      if (seq !== mapperValidateSeq) return;
+      mapperProfileError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function replayMapperProfileDraft() {
+    if (mapperReplaySessionID === null || mapperReplayState.busy) return;
+    const request = mapperReplayRequest.begin(mapperForm, mapperReplaySessionID, mapperReplayLimit);
+    mapperReplayState = mapperReplayRequest.state();
+    try {
+      const resp = await api.replayMapperProfile(
+        request.name,
+        request.spec,
+        request.sessionID,
+        request.limit,
+      );
+      if (!mapperReplayRequest.isCurrent(request, mapperForm, mapperReplaySessionID, mapperReplayLimit)) return;
+      if (!resp.ok) {
+        const replayError = (await resp.text()) || `Replay failed (HTTP ${resp.status}).`;
+        if (!mapperReplayRequest.isCurrent(request, mapperForm, mapperReplaySessionID, mapperReplayLimit)) return;
+        mapperReplayState = mapperReplayRequest.fail(request, mapperForm, mapperReplaySessionID, mapperReplayLimit, replayError);
+        return;
+      }
+      const result = await resp.json();
+      if (!mapperReplayRequest.isCurrent(request, mapperForm, mapperReplaySessionID, mapperReplayLimit)) return;
+      mapperReplayState = mapperReplayRequest.succeed(request, mapperForm, mapperReplaySessionID, mapperReplayLimit, result);
+    } catch (e) {
+      if (!mapperReplayRequest.isCurrent(request, mapperForm, mapperReplaySessionID, mapperReplayLimit)) return;
+      mapperReplayState = mapperReplayRequest.fail(request, mapperForm, mapperReplaySessionID, mapperReplayLimit, e instanceof Error ? e.message : String(e));
+    } finally {
+      mapperReplayState = mapperReplayRequest.finish(request);
+    }
+  }
+
+  async function saveMapperProfile() {
+    const name = mapperForm.name.trim();
+    if (!name) {
+      mapperProfileError = 'A format name is required.';
+      return;
+    }
+    mapperProfileError = '';
+    mapperProfileValidated = false;
+    clearMapperReplay();
+    // Any in-flight validate is now stale; its response must not repaint over the
+    // save's result.
+    mapperValidateSeq++;
+    const spec = formToSpec(mapperForm);
+    try {
+      const resp = editingMapperProfileID === null
+        ? await api.createMapperProfile(name, spec)
+        : await api.saveMapperProfile(editingMapperProfileID, name, spec);
+      if (!resp.ok) {
+        // The body is mapper.Compile's message (or the name-conflict / version
+        // -conflict message) — shown verbatim, the backend is the validation truth.
+        mapperProfileError = (await resp.text()) || `Could not save the room format (HTTP ${resp.status}).`;
+        return;
+      }
+      cancelMapperProfileEdit();
+      await fetchData();
+    } catch (e) {
+      mapperProfileError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  // mapperFormDirty: is there an in-progress draft worth protecting? A named
+  // form is the cheap proxy the other editors use (they compare ids); this
+  // section has a single shared editor, so the name is the signal.
+  $: mapperFormDirty = mapperForm.name.trim() !== '';
+
+  function startMapperProfileEdit(profile: MapperProfile) {
+    // A builtin is not a row — copy it instead. A contributed Go detector is not
+    // even that: it has no spec, so there is nothing for the editor to open.
+    if (profile.builtin || !profile.spec) return;
+    // Matches the eight neighbouring editors: never destroy a draft silently.
+    if (editingMapperProfileID !== profile.id && mapperFormDirty
+        && !confirm('Discard unsaved room format changes?')) return;
+    mapperProfileError = '';
+    mapperProfileValidated = false;
+    clearMapperReplay();
+    editingMapperProfileID = profile.id;
+    mapperForm = specToForm(profile.spec, profile.name);
+  }
+
+  // copyMapperProfile is the ONLY way to base a format on the builtin, which has
+  // no row to edit: it pre-fills the create form from the source's spec.
+  function copyMapperProfile(profile: MapperProfile) {
+    if (mapperFormDirty && !confirm('Discard unsaved room format changes?')) return;
+    mapperProfileError = '';
+    mapperProfileValidated = false;
+    clearMapperReplay();
+    editingMapperProfileID = null;
+    mapperForm = copyOfMapperProfile(profile);
+  }
+
+  function cancelMapperProfileEdit() {
+    editingMapperProfileID = null;
+    mapperForm = emptyMapperProfileForm();
+    mapperProfileError = '';
+    mapperProfileValidated = false;
+    clearMapperReplay();
+  }
+
+  async function deleteMapperProfileRow(id: number) {
+    if (!confirm('Delete this room format? Sessions using it will fall back to the builtin.')) return;
+    try {
+      const resp = await api.deleteMapperProfile(id);
+      if (!resp.ok) {
+        mapperProfileError = (await resp.text()) || `Could not delete the room format (HTTP ${resp.status}).`;
+        return;
+      }
+      if (editingMapperProfileID === id) cancelMapperProfileEdit();
+      await fetchData();
+    } catch (e) {
+      mapperProfileError = e instanceof Error ? e.message : String(e);
     }
   }
 
@@ -1113,6 +1311,100 @@
     formError = '';
   }
 
+  async function saveMCPEnabled(enabled: boolean) {
+    if (mcpBusy) return;
+    const revision = ++mcpRevision;
+    mcpBusy = true;
+    mcpCopyStatus = '';
+    try {
+      const res = await api.saveMCPSettingsRequest(enabled);
+      if (!res.ok) {
+        formError = await res.text() || 'Failed to update MCP settings.';
+        await refreshMCPSettings(revision);
+        return;
+      }
+      await acceptMCPWrite(await res.json() as MCPSettingsWriteResponse, revision);
+      formError = '';
+    } catch {
+      formError = 'The update response was lost. Check the current status; rotate the credential if no token was received.';
+      await refreshMCPSettings(revision);
+    } finally {
+      if (revision === mcpRevision) mcpBusy = false;
+    }
+  }
+
+  async function rotateMCPToken() {
+    if (mcpBusy) return;
+    const revision = ++mcpRevision;
+    mcpBusy = true;
+    mcpCopyStatus = '';
+    try {
+      const res = await api.rotateMCPTokenRequest();
+      if (!res.ok) {
+        formError = await res.text() || 'Failed to rotate MCP credential.';
+        await refreshMCPSettings(revision);
+        return;
+      }
+      await acceptMCPWrite(await res.json() as MCPSettingsWriteResponse, revision);
+      formError = '';
+    } catch {
+      formError = 'The rotation response was lost. The credential may have changed; rotate it again to receive a usable token.';
+      await refreshMCPSettings(revision);
+    } finally {
+      if (revision === mcpRevision) mcpBusy = false;
+    }
+  }
+
+  async function refreshMCPSettings(revision: number) {
+    try {
+      const current = await api.fetchMCPSettings();
+      if (revision === mcpRevision) mcpSettings = current;
+    } catch {
+      // Keep the write error, which has the actionable recovery path.
+    }
+  }
+
+  async function acceptMCPWrite(result: MCPSettingsWriteResponse, revision: number) {
+    if (revision !== mcpRevision) return;
+    const { token = '', ...settings } = result;
+    mcpSettings = settings;
+    mcpOneTimeToken = token;
+    if (token) {
+      await tick();
+      mcpTokenInput?.focus();
+      mcpTokenInput?.select();
+    }
+  }
+
+  async function copyMCPToken() {
+    const token = mcpOneTimeToken;
+    try {
+      await navigator.clipboard.writeText(token);
+      if (token === mcpOneTimeToken) mcpCopyStatus = 'Copied.';
+    } catch {
+      if (token === mcpOneTimeToken) {
+        mcpCopyStatus = 'Copy failed. Select the credential and copy it manually.';
+        mcpTokenInput?.focus();
+        mcpTokenInput?.select();
+      }
+    }
+  }
+
+  function closeMCPToken() {
+    mcpOneTimeToken = '';
+    mcpCopyStatus = '';
+  }
+
+  function openMCPDialog(node: HTMLDialogElement) {
+    if (typeof node.showModal === 'function') node.showModal();
+    else node.setAttribute('open', '');
+    return {
+      destroy() {
+        if (node.open && typeof node.close === 'function') node.close();
+      }
+    };
+  }
+
   function previewSubstitution(rule: Substitute): string {
     if (!rule.pattern.trim()) return subPreviewText;
     try {
@@ -1358,6 +1650,32 @@
         {toggleGroup}
       />
 
+    {:else if currentTab === 'room_formats'}
+      <MapperProfilesSection
+        {mapperProfiles}
+        {sessions}
+        bind:mapperForm
+        {editingMapperProfileID}
+        {mapperProfileError}
+        {mapperProfileValidated}
+        bind:mapperReplaySessionID
+        bind:mapperReplayLimit
+        mapperReplayResult={mapperReplayState.result}
+        mapperReplayError={mapperReplayState.error}
+        mapperReplayBusy={mapperReplayState.busy}
+        {replayMapperProfileDraft}
+        replayMapperProfileChanged={clearMapperReplay}
+        {saveMapperProfile}
+        {validateMapperProfileDraft}
+        {startMapperProfileEdit}
+        {copyMapperProfile}
+        {cancelMapperProfileEdit}
+        {deleteMapperProfileRow}
+      />
+
+    {:else if currentTab === 'map_sets'}
+      <MapSetsSection />
+
     {:else if currentTab === 'profiles'}
       <ProfilesSection
         {formError}
@@ -1594,6 +1912,7 @@
 
     {:else if currentTab === 'app'}
         <header class="content-header"><h2>App Settings</h2><p class="description">Global application configuration.</p></header>
+        {#if formError}<div class="form-error" role="alert">{formError}</div>{/if}
         <div class="editor-box">
             <h3>Wake Lock</h3>
             <p class="description">Keep the screen awake while the main client tab or installed app is visible. Local to this browser/PWA.</p>
@@ -1623,6 +1942,36 @@
                 <button class="btn-link btn-danger" on:click={rotateAPIToken}>Rotate Token</button>
             </div>
         </div>
+        <div class="editor-box integration-settings">
+            <h3>Integration: MCP</h3>
+            <div class="integration-row">
+                <label class="checkbox-label" title={mcpSettings.enabled_externally_managed ? mcpSettings.externally_managed_reason : ''}>
+                    <input type="checkbox" checked={mcpSettings.requested_enabled} disabled={mcpBusy || mcpSettings.enabled_externally_managed} on:change={(event) => saveMCPEnabled((event.currentTarget as HTMLInputElement).checked)} />
+                    Enabled
+                </label>
+                <span class:status-active={mcpSettings.effective_enabled} class="integration-status">{mcpSettings.effective_enabled ? 'Active' : 'Inactive'}</span>
+                <span class="integration-status">{mcpSettings.listener_exposure}</span>
+                <span class:status-active={mcpSettings.token_configured} class="integration-status">{mcpSettings.token_configured ? 'Credential configured' : 'No credential'}</span>
+            </div>
+            {#if mcpSettings.externally_managed_reason}
+              <p class="integration-note">{mcpSettings.externally_managed_reason}</p>
+            {/if}
+            <div class="form-row">
+                <button class="btn-secondary" disabled={mcpBusy || mcpSettings.token_externally_managed} title={mcpSettings.token_externally_managed ? mcpSettings.externally_managed_reason : ''} on:click={rotateMCPToken}>{mcpBusy ? 'Saving...' : mcpSettings.token_configured ? 'Rotate credential' : 'Generate credential'}</button>
+            </div>
+        </div>
+        {#if mcpOneTimeToken}
+          <dialog class="token-dialog" use:openMCPDialog aria-labelledby="mcp-token-title" on:cancel={(event) => { event.preventDefault(); closeMCPToken(); }}>
+            <h3 id="mcp-token-title">MCP credential</h3>
+            <input bind:this={mcpTokenInput} type="text" readonly value={mcpOneTimeToken} aria-label="MCP credential" />
+            <p>This credential cannot be retrieved again. Closing this dialog removes it from the page.</p>
+            <p class="copy-status" aria-live="polite">{mcpCopyStatus}</p>
+            <div class="form-row">
+              <button class="btn-primary" on:click={copyMCPToken}>Copy</button>
+              <button class="btn-secondary" on:click={closeMCPToken}>Close</button>
+            </div>
+          </dialog>
+        {/if}
     {/if}
   </section>
 </main>
@@ -1677,6 +2026,18 @@
   .load-more-btn { width: 100%; padding: 8px; background: #1a1d21; border: 1px dashed #30363d; color: #3498db; cursor: pointer; border-radius: 4px; margin: 4px 0; font-size: 0.8rem; }
   .load-more-btn:hover { background: #24292f; }
   .btn-primary:disabled { background: #2980b9; opacity: 0.5; cursor: not-allowed; }
+  .integration-settings { display: flex; flex-direction: column; gap: 12px; }
+  .integration-settings h3 { margin: 0; }
+  .integration-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+  .integration-status { color: #9ba3af; font-size: 0.82rem; border-left: 1px solid #30363d; padding-left: 10px; }
+  .status-active { color: #56d364; }
+  .integration-note { color: #9ba3af; font-size: 0.85rem; margin: 0; }
+  .token-dialog { box-sizing: border-box; width: min(520px, calc(100vw - 36px)); max-height: calc(100vh - 36px); overflow: auto; background: #1a1d21; border: 1px solid #30363d; border-radius: 8px; padding: 20px; }
+  .token-dialog::backdrop { background: rgba(0, 0, 0, 0.64); }
+  .token-dialog h3 { margin: 0 0 14px; }
+  .token-dialog input { width: 100%; box-sizing: border-box; font-family: monospace; }
+  .token-dialog p { color: #9ba3af; font-size: 0.85rem; }
+  .token-dialog .copy-status { min-height: 1.2em; color: #e8edf2; }
 
   .log-container { display: flex; flex-direction: column; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; overflow: hidden; }
   .log-line { display: flex; justify-content: space-between; padding: 1px 12px; min-height: 1.2em; line-height: 1.2; font-family: monospace; border-left: 4px solid transparent; }

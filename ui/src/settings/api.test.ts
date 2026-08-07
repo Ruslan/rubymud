@@ -1,5 +1,30 @@
 import { describe, expect, it, vi, afterEach } from 'vitest';
-import { buildLogDownloadURL, fetchSessionHistory, saveAppSettingsRequest, toggleProfileGroup } from './api';
+import {
+  buildLogDownloadURL,
+  createMapperProfile,
+  deleteMapperProfile,
+  fetchMapperProfiles,
+  fetchMCPSettings,
+  fetchSessionHistory,
+  saveAppSettingsRequest,
+  rotateMCPTokenRequest,
+  saveMCPSettingsRequest,
+  saveSessionMapperProfile,
+  toggleProfileGroup,
+  replayMapperProfile,
+  validateMapperProfile,
+  importMapSet,
+  deleteMapSet,
+} from './api';
+import type { MapperSpec } from './types';
+
+const sampleSpec: MapperSpec = {
+  name: 'x',
+  exits: { guard: '[ Exits:', pattern: '^\\[ Exits:(.*)\\]$', none_token: 'none' },
+  block: { stops: ['blank', 'max_lines'], max_lines: 32 },
+  strip: { mode: 'greedy', glyphs: '[]' },
+  header: { rule: 'first' },
+};
 
 describe('settings api', () => {
   afterEach(() => {
@@ -19,6 +44,66 @@ describe('settings api', () => {
         'X-Session-Token': '',
       },
       body: JSON.stringify({ api_token: 'keep', allow_exec_command: true, allow_webfetch_command: false }),
+    });
+  });
+
+  it('updates and rotates MCP settings through authenticated admin endpoints', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await saveMCPSettingsRequest(true);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/mcp/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': '' },
+      body: JSON.stringify({ enabled: true }),
+    });
+
+    await rotateMCPTokenRequest();
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/mcp/settings/token', {
+      method: 'POST',
+      headers: { 'X-Session-Token': '' },
+    });
+  });
+
+  it('reads the exact MCP status shape without a credential field', async () => {
+    const payload = {
+      enabled: false,
+      requested_enabled: true,
+      effective_enabled: false,
+      token_configured: false,
+      externally_managed: true,
+      externally_managed_reason: 'MCP is inactive.',
+      enabled_externally_managed: true,
+      token_externally_managed: false,
+      listener_exposure: 'network' as const,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(payload), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchMCPSettings()).resolves.toEqual(payload);
+    expect(fetchMock).toHaveBeenCalledWith('/api/mcp/settings', {
+      headers: { 'X-Session-Token': '' },
+    });
+    expect(payload).not.toHaveProperty('token');
+  });
+
+  it('uploads archives as multipart and deletes map sets through authenticated endpoints', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+    const file = new File(['zip'], 'world.zip', { type: 'application/zip' });
+
+    await importMapSet(file);
+    const [uploadURL, uploadRequest] = fetchMock.mock.calls[0]!;
+    expect(uploadURL).toBe('/api/map-sets/import');
+    expect(uploadRequest.method).toBe('POST');
+    expect(uploadRequest.headers).toEqual({ 'X-Session-Token': '' });
+    expect(uploadRequest.body).toBeInstanceOf(FormData);
+    expect((uploadRequest.body as FormData).get('archive')).toBe(file);
+
+    await deleteMapSet(42);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/map-sets/42', {
+      method: 'DELETE',
+      headers: { 'X-Session-Token': '' },
     });
   });
 
@@ -62,6 +147,101 @@ describe('settings api', () => {
       headers: {
         'X-Session-Token': '',
       },
+    });
+  });
+
+  // --- room formats ("mapper profiles") ------------------------------------
+  // These hit /api/mapper-profiles, NOT /api/profiles (alias/trigger layering).
+
+  it('lists room formats from the mapper-profiles endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('[]', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await fetchMapperProfiles();
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/mapper-profiles', {
+      headers: { 'X-Session-Token': '' },
+    });
+  });
+
+  it('creates a room format with the name alongside the spec', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await createMapperProfile('tortilla', sampleSpec);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/mapper-profiles', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': '' },
+      body: JSON.stringify({ name: 'tortilla', spec: sampleSpec }),
+    });
+  });
+
+  it('validates a draft room format without writing it', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{"ok":true,"error":""}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await validateMapperProfile('draft', sampleSpec);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/mapper-profiles/validate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': '' },
+      body: JSON.stringify({ name: 'draft', spec: sampleSpec }),
+    });
+  });
+
+  it('replays a draft room format against recent session output', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{"ok":true,"samples":[]}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await replayMapperProfile('draft', sampleSpec, 7, 1200);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/mapper-profiles/replay', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': '' },
+      body: JSON.stringify({ name: 'draft', spec: sampleSpec, session_id: 7, limit: 1200 }),
+    });
+  });
+
+  it('deletes a room format by id', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await deleteMapperProfile(9);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/mapper-profiles/9', {
+      method: 'DELETE',
+      headers: { 'X-Session-Token': '' },
+    });
+  });
+
+  // The assignment is a REFERENCE, not a row id — that is what lets a
+  // session select a compiled-in detector, which has no row to point at.
+  it('assigns a room format to a session by reference', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await saveSessionMapperProfile(4, 'db:7');
+    expect(fetchMock).toHaveBeenCalledWith('/api/sessions/4/mapper-profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': '' },
+      body: JSON.stringify({ format: 'db:7' }),
+    });
+
+    // A builtin — the case the old integer column could not express at all.
+    await saveSessionMapperProfile(4, 'builtin:diku-en');
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/sessions/4/mapper-profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': '' },
+      body: JSON.stringify({ format: 'builtin:diku-en' }),
+    });
+
+    // '' is the default, stored as NULL.
+    await saveSessionMapperProfile(4, '');
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/sessions/4/mapper-profile', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': '' },
+      body: JSON.stringify({ format: '' }),
     });
   });
 });
