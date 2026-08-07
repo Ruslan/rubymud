@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -18,8 +19,19 @@ type queryCountingLogger struct {
 	queries atomic.Int64
 }
 
+type queryCaptureLogger struct {
+	logger.Interface
+	queries []string
+}
+
 func (l *queryCountingLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
 	l.queries.Add(1)
+	l.Interface.Trace(ctx, begin, fc, err)
+}
+
+func (l *queryCaptureLogger) Trace(ctx context.Context, begin time.Time, fc func() (string, int64), err error) {
+	sql, _ := fc()
+	l.queries = append(l.queries, sql)
 	l.Interface.Trace(ctx, begin, fc, err)
 }
 
@@ -170,6 +182,78 @@ func TestSearchLogsDetailedForBufferDoesNotQueryPerMatchOrGroup(t *testing.T) {
 	}
 	if got := counter.queries.Load(); got > 5 {
 		t.Fatalf("search issued %d SQL queries for 10 matches; want a bounded query count", got)
+	}
+}
+
+func TestRecentLogsPerBufferEnumeratesNamesWithBufferCursorIndex(t *testing.T) {
+	s := newLogStoreTestStore(t)
+	if err := s.db.Exec("CREATE INDEX log_entries_session_window_id_idx ON log_entries(session_id, window_name, id)").Error; err != nil {
+		t.Fatalf("create buffer cursor index: %v", err)
+	}
+
+	appendLog := func(buffer, text string, gag bool) {
+		t.Helper()
+		var overlays []LogOverlay
+		if gag {
+			overlays = []LogOverlay{{OverlayType: "gag", PayloadJSON: `{}`}}
+		}
+		if _, err := s.AppendLogEntryWithOverlays(1, buffer, text, text, overlays); err != nil {
+			t.Fatalf("append %s/%s: %v", buffer, text, err)
+		}
+	}
+	appendLog("alpha", "alpha old", false)
+	appendLog("alpha", "alpha hidden", true)
+	appendLog("alpha", "alpha new", false)
+	appendLog("gag-only", "gag-only hidden", true)
+	appendLog("beta", "beta visible", false)
+
+	capture := &queryCaptureLogger{Interface: logger.Default.LogMode(logger.Silent)}
+	s.db = s.db.Session(&gorm.Session{Logger: capture})
+	got, err := s.RecentLogsPerBuffer(1, 2)
+	if err != nil {
+		t.Fatalf("RecentLogsPerBuffer: %v", err)
+	}
+	if _, ok := got["gag-only"]; ok {
+		t.Fatalf("gag-only buffer returned: %#v", got)
+	}
+	if len(got["alpha"]) != 2 || got["alpha"][0].PlainText != "alpha old" || got["alpha"][1].PlainText != "alpha new" {
+		t.Fatalf("alpha entries = %#v, want the two visible entries in order", got["alpha"])
+	}
+	if len(got["beta"]) != 1 || got["beta"][0].PlainText != "beta visible" {
+		t.Fatalf("beta entries = %#v, want one visible entry", got["beta"])
+	}
+
+	var nameQueries []string
+	for _, query := range capture.queries {
+		upper := strings.ToUpper(query)
+		if strings.Contains(upper, "DISTINCT") || strings.Contains(upper, "WITH RECURSIVE") {
+			nameQueries = append(nameQueries, upper)
+		}
+	}
+	if len(nameQueries) == 0 {
+		t.Fatalf("no buffer-name enumeration query captured: %v", capture.queries)
+	}
+	for _, query := range nameQueries {
+		if strings.Contains(query, "NOT EXISTS") {
+			t.Fatalf("buffer-name enumeration still performs a correlated visible scan: %s", query)
+		}
+	}
+
+	type explainRow struct {
+		Detail string `gorm:"column:detail"`
+	}
+	var plan []explainRow
+	if err := s.db.Raw("EXPLAIN QUERY PLAN "+recentLogBufferNamesSQL, 1, 1).Scan(&plan).Error; err != nil {
+		t.Fatalf("explain buffer-name enumeration: %v", err)
+	}
+	var coveringSeeks int
+	for _, row := range plan {
+		if strings.Contains(row.Detail, "USING COVERING INDEX log_entries_session_window_id_idx") {
+			coveringSeeks++
+		}
+	}
+	if coveringSeeks < 2 {
+		t.Fatalf("buffer-name plan = %#v, want covering-index seeks for anchor and next-key lookup", plan)
 	}
 }
 

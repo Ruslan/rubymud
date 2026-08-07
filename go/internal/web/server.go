@@ -2570,6 +2570,10 @@ func parseClientMessage(payload []byte) clientMessage {
 }
 
 func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.ServerMsg) error) error {
+	restoreStarted := time.Now()
+	var cursorDuration, logsDuration, historyDuration, variablesDuration, hotkeysDuration, writeDuration time.Duration
+
+	cursorStarted := restoreStarted
 	restoreCursor, err := s.store.LatestVisibleLogID(sess.SessionID())
 	if err != nil {
 		return err
@@ -2579,13 +2583,10 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 			return err
 		}
 	}
+	cursorDuration = time.Since(cursorStarted)
 
+	logsStarted := time.Now()
 	logsPerBuffer, err := sess.RecentLogsPerBuffer(500)
-	if err != nil {
-		return err
-	}
-
-	history, err := sess.RecentInputHistory(500)
 	if err != nil {
 		return err
 	}
@@ -2602,11 +2603,21 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 		}
 		buffers[bufName] = entries
 	}
+	logsDuration = time.Since(logsStarted)
 
+	historyStarted := time.Now()
+	history, err := sess.RecentInputHistory(500)
+	if err != nil {
+		return err
+	}
+	historyDuration = time.Since(historyStarted)
+
+	variablesStarted := time.Now()
 	variables, err := sess.CurrentVariables()
 	if err != nil {
 		return err
 	}
+	variablesDuration = time.Since(variablesStarted)
 
 	// Include current timers
 	timers := sess.TimerSnapshots()
@@ -2620,6 +2631,7 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 		RestoreCursor: &restoreCursor,
 	}
 
+	hotkeysStarted := time.Now()
 	profileIDs, _ := s.store.GetOrderedProfileIDs(sess.SessionID())
 	hotkeys, _ := s.store.LoadHotkeysForProfiles(profileIDs)
 	for _, hk := range hotkeys {
@@ -2630,8 +2642,17 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 			MobileOrder: hk.MobileOrder,
 		})
 	}
+	hotkeysDuration = time.Since(hotkeysStarted)
 
-	if err := writeJSON(begin); err != nil {
+	// Measure only the direct writeJSON calls. Snapshot construction and the
+	// in-memory profile/room lookups remain outside this stage.
+	writeJSONMeasured := func(message session.ServerMsg) error {
+		started := time.Now()
+		err := writeJSON(message)
+		writeDuration += time.Since(started)
+		return err
+	}
+	if err := writeJSONMeasured(begin); err != nil {
 		return err
 	}
 
@@ -2646,7 +2667,7 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 	// was the server log. The same loss happens on any page reload. The session
 	// keeps the status in memory, so replaying it at restore covers both.
 	if ref, name, warn := sess.MapperProfileStatus(); name != "" || warn != "" {
-		if err := writeJSON(session.ServerMsg{
+		if err := writeJSONMeasured(session.ServerMsg{
 			Type:               "mapper_profile",
 			MapperFormat:       ref,
 			MapperProfileID:    sess.MapperProfileRowID(),
@@ -2662,14 +2683,14 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 	// position replayed just like the mapper profile above. Build the snapshot
 	// under the session lock, then write it after that lock has been released.
 	if position, ok := sess.RoomPositionSnapshot(); ok {
-		if err := writeJSON(position); err != nil {
+		if err := writeJSONMeasured(position); err != nil {
 			return err
 		}
 	}
 	walk, _ := sess.MapWalkSnapshot()
 	// Always replay an explicit stopped snapshot. A transient browser reconnect
 	// otherwise retains a cached Stop button when a route completed offline.
-	if err := writeJSON(session.ServerMsg{
+	if err := writeJSONMeasured(session.ServerMsg{
 		Type:          "map_walk",
 		WalkActive:    walk.Active,
 		WalkEpoch:     walk.Epoch,
@@ -2684,7 +2705,15 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 		return err
 	}
 
-	return writeJSON(session.ServerMsg{Type: "restore_end"})
+	if err := writeJSONMeasured(session.ServerMsg{Type: "restore_end"}); err != nil {
+		return err
+	}
+
+	if total := time.Since(restoreStarted); total >= 50*time.Millisecond {
+		log.Printf("[latency] ws_restore session=%d total=%s cursor=%s logs=%s history=%s variables=%s hotkeys=%s write=%s", sess.SessionID(), total, cursorDuration, logsDuration, historyDuration, variablesDuration, hotkeysDuration, writeDuration)
+	}
+
+	return nil
 }
 
 func clientLogEntryForSession(sess *session.Session, entry storage.LogEntry) session.ClientLogEntry {

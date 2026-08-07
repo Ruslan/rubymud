@@ -81,6 +81,23 @@ func (s *Store) appendLogEntry(sessionID int64, buffer, rawText, plainText, sour
 
 const visibleLogEntrySQL = "NOT EXISTS (SELECT 1 FROM log_overlays gag WHERE gag.log_entry_id = log_entries.id AND gag.overlay_type = 'gag')"
 
+const recentLogBufferNamesSQL = `WITH RECURSIVE buffers(window_name) AS (
+	SELECT MIN(window_name)
+	FROM log_entries
+	WHERE session_id = ?
+	UNION ALL
+	SELECT (
+		SELECT le.window_name
+		FROM log_entries AS le
+		WHERE le.session_id = ? AND le.window_name > buffers.window_name
+		ORDER BY le.window_name
+		LIMIT 1
+	)
+	FROM buffers
+	WHERE buffers.window_name IS NOT NULL
+)
+SELECT window_name FROM buffers WHERE window_name IS NOT NULL`
+
 func (s *Store) LogEntriesForBuffer(sessionID int64, buffer string, limit int) ([]LogEntry, error) {
 	if buffer == "" {
 		buffer = "main"
@@ -151,7 +168,7 @@ func (s *Store) RecentLogsForBuffer(sessionID int64, buffer string, limit int) (
 
 func (s *Store) RecentLogsPerBuffer(sessionID int64, limit int) (map[string][]LogEntry, error) {
 	var distinctBuffers []string
-	if err := s.db.Model(&LogRecord{}).Where("session_id = ?", sessionID).Where(visibleLogEntrySQL).Distinct("window_name").Pluck("window_name", &distinctBuffers).Error; err != nil {
+	if err := s.db.Raw(recentLogBufferNamesSQL, sessionID, sessionID).Scan(&distinctBuffers).Error; err != nil {
 		return nil, err
 	}
 
@@ -161,7 +178,9 @@ func (s *Store) RecentLogsPerBuffer(sessionID int64, limit int) (map[string][]Lo
 		if err != nil {
 			return nil, err
 		}
-		result[b] = entries
+		if len(entries) > 0 {
+			result[b] = entries
+		}
 	}
 	return result, nil
 }
