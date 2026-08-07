@@ -2002,7 +2002,6 @@
   .log-export__field { display: flex; flex-direction: column; gap: 4px; }
   .log-export__field > span { font-size: 0.75rem; color: #9ba3af; }
   .log-export__field input { flex: none; background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 6px 10px; border-radius: 6px; color-scheme: dark; font: inherit; }
-  .log-export__field input[type="text"] { width: 260px; }
   .log-export__field input[type="datetime-local"] { width: 210px; }
   .log-export__check { display: flex; align-items: center; gap: 6px; font-size: 0.85rem; color: #cbd5e1; cursor: pointer; white-space: nowrap; }
   .log-export__actions { align-items: center; }

@@ -76,6 +76,7 @@ type compiledTrigger struct {
 type compiledHighlight struct {
 	matcher CompiledMatcher
 	ansi    string
+	style   TextStyle
 	rule    storage.HighlightRule
 }
 

@@ -8,7 +8,7 @@ import (
 )
 
 func highlightToANSI(h *storage.HighlightRule) string {
-	ts := highlightRuleToTextStyle(h)
+	ts := effectiveHighlightStyle(highlightRuleToTextStyle(h))
 	codes := ts.ANSICodes()
 	if len(codes) == 0 {
 		return ""

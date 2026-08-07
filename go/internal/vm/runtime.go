@@ -209,9 +209,11 @@ func (v *VM) rebuildCaches() {
 	v.compiledHighlights = make([]compiledHighlight, 0, len(v.highlights))
 	for i := range v.highlights {
 		h := &v.highlights[i]
+		style := effectiveHighlightStyle(highlightRuleToTextStyle(h))
 		ch := compiledHighlight{
 			rule:    *h,
-			ansi:    highlightToANSI(h),
+			ansi:    highlightANSI(style),
+			style:   style,
 			matcher: v.compileMatcherTemplate(h.Pattern, matcherCache),
 		}
 		v.compiledHighlights = append(v.compiledHighlights, ch)
