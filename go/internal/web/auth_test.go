@@ -14,7 +14,10 @@ func setupTestServerWithBasicAuth(t *testing.T, user, pass string) *httptest.Ser
 	s.basicAuth = BasicAuth{User: user, Pass: pass}
 	// Rebuild the router so the basic-auth middleware wired in New() picks up
 	// the credentials injected above.
-	rebuilt := New(":0", s.manager, s.store, t.TempDir(), BasicAuth{User: user, Pass: pass})
+	rebuilt, err := New(":0", s.manager, s.store, t.TempDir(), BasicAuth{User: user, Pass: pass}, MCPConfig{})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	ts := httptest.NewServer(rebuilt.httpServer.Handler)
 	t.Cleanup(ts.Close)
 	return ts

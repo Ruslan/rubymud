@@ -2,6 +2,7 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -34,6 +35,10 @@ func (m *mockConn) Write(b []byte) (n int, err error) {
 func (m *mockConn) Close() error { return nil }
 
 func setupMcpTestServer(t *testing.T) (*Server, *session.Session) {
+	return setupMcpTestServerWithConfig(t, MCPConfig{Enabled: true})
+}
+
+func setupMcpTestServerWithConfig(t *testing.T, mcp MCPConfig) (*Server, *session.Session) {
 	t.Helper()
 
 	dbName := uuid.New().String()
@@ -45,7 +50,12 @@ func setupMcpTestServer(t *testing.T) (*Server, *session.Session) {
 		t.Fatalf("gorm.Open: %v", err)
 	}
 
-	db.AutoMigrate(&storage.AppSetting{}, &storage.SessionRecord{}, &storage.Variable{}, &storage.AliasRule{}, &storage.TriggerRule{}, &storage.HighlightRule{}, &storage.SubstituteRule{}, &storage.Profile{}, &storage.SessionProfile{}, &storage.HotkeyRule{}, &storage.ProfileVariable{}, &storage.LogRecord{}, &storage.LogOverlay{}, &storage.HistoryEntry{})
+	// Build the schema from the real embedded migrations (same DDL as production:
+	// unique indexes, FK cascades, sessions.active_map_set_id) rather than a GORM
+	// AutoMigrate approximation.
+	if err := storage.MigrateForTest(db); err != nil {
+		t.Fatalf("MigrateForTest: %v", err)
+	}
 
 	store := storage.NewTestStore(db)
 	store.CreateProfile("Default", "")
@@ -71,7 +81,10 @@ func setupMcpTestServer(t *testing.T) (*Server, *session.Session) {
 		record.ID: sess,
 	}))
 
-	s := New(":0", manager, store, os.TempDir(), BasicAuth{})
+	s, err := New("127.0.0.1:0", manager, store, os.TempDir(), BasicAuth{}, mcp)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
 	return s, sess
 }
 
@@ -129,6 +142,34 @@ func TestMCPToolsList(t *testing.T) {
 	tools := result["tools"].([]any)
 	if len(tools) < 4 {
 		t.Errorf("expected at least 4 tools, got %d", len(tools))
+	}
+}
+
+func TestMCPRequiredScalarArgumentsRejectMissingOrNull(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	for _, tc := range []struct {
+		tool string
+		args string
+	}{
+		{tool: "mud_get_output_range", args: fmt.Sprintf(`{"session_id":%d}`, sess.SessionID())},
+		{tool: "mud_get_output_range", args: fmt.Sprintf(`{"session_id":%d,"before_id":null}`, sess.SessionID())},
+		{tool: "mud_search", args: fmt.Sprintf(`{"session_id":%d}`, sess.SessionID())},
+		{tool: "mud_search", args: fmt.Sprintf(`{"session_id":%d,"query":null}`, sess.SessionID())},
+		{tool: "mud_send_command", args: fmt.Sprintf(`{"session_id":%d,"sync":0}`, sess.SessionID())},
+		{tool: "mud_send_command", args: fmt.Sprintf(`{"session_id":%d,"command":null,"sync":0}`, sess.SessionID())},
+		{tool: "mud_set_variable", args: fmt.Sprintf(`{"session_id":%d,"value":"x"}`, sess.SessionID())},
+		{tool: "mud_set_variable", args: fmt.Sprintf(`{"session_id":%d,"key":"x","value":null}`, sess.SessionID())},
+	} {
+		t.Run(tc.tool+tc.args, func(t *testing.T) {
+			res, err := s.mcpCallTool(context.Background(), json.RawMessage(fmt.Sprintf(
+				`{"name":%q,"arguments":%s}`, tc.tool, tc.args)), "")
+			if err != nil {
+				t.Fatalf("required argument produced server error: %v", err)
+			}
+			if res.(map[string]any)["isError"] != true {
+				t.Fatalf("missing/null required argument succeeded: %#v", res)
+			}
+		})
 	}
 }
 

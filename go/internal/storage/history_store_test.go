@@ -29,7 +29,7 @@ func TestHistoryStore(t *testing.T) {
 	}
 	defer sqlDB.Close()
 
-	if err := runMigrations(db); err != nil {
+	if err = runMigrations(db); err != nil {
 		t.Fatalf("runMigrations: %v", err)
 	}
 
@@ -94,7 +94,7 @@ func TestAppendHistoryEntryUpsertsByLineAndRefreshesTimestamp(t *testing.T) {
 	}
 	defer sqlDB.Close()
 
-	if err := runMigrations(db); err != nil {
+	if err = runMigrations(db); err != nil {
 		t.Fatalf("runMigrations: %v", err)
 	}
 
@@ -167,7 +167,13 @@ func TestHistoryUniqueLineMigrationDedupesExistingRows(t *testing.T) {
 		"001_init.sql", "002_timers.sql", "003_hotkey_mobile_layout.sql", "004_profile_timers.sql",
 		"005_timer_repeat_mode.sql", "006_mccp_settings.sql", "007_substitute_rules.sql",
 		"008_profile_timer_subscription_removals.sql", "009_session_ansi_theme.sql",
-		"011_session_timezone.sql",
+		// 011/012/013/014/015 ALTER the sessions/map_sets tables, which this fixture
+		// never creates (it exercises only the 010 history-dedup migration), so mark
+		// them applied to skip them. ANY new migration that touches `sessions` must
+		// be added here too, or runMigrations fails with "no such table: sessions".
+		"011_session_timezone.sql", "012_mapper.sql", "013_mapper_editable.sql",
+		"014_mapper_profiles.sql", "015_mapper_format.sql", "021_log_buffer_cursor_index.sql",
+		"025_map_set_topology_revision.sql",
 	} {
 		if err := db.Exec("INSERT INTO schema_migrations (version) VALUES (?)", version).Error; err != nil {
 			t.Fatalf("insert schema migration %s: %v", version, err)
@@ -193,7 +199,7 @@ func TestHistoryUniqueLineMigrationDedupesExistingRows(t *testing.T) {
 		t.Fatalf("insert duplicate history rows: %v", err)
 	}
 
-	if err := runMigrations(db); err != nil {
+	if err = runMigrations(db); err != nil {
 		t.Fatalf("runMigrations: %v", err)
 	}
 
@@ -246,7 +252,7 @@ func TestAppendHistoryEntryConcurrentUpsertsKeepSingleRow(t *testing.T) {
 	defer sqlDB.Close()
 	sqlDB.SetMaxOpenConns(8)
 
-	if err := runMigrations(db); err != nil {
+	if err = runMigrations(db); err != nil {
 		t.Fatalf("runMigrations: %v", err)
 	}
 
@@ -307,7 +313,7 @@ func TestListHistoryPageSearchFiltersAndPaginates(t *testing.T) {
 	}
 	defer sqlDB.Close()
 
-	if err := runMigrations(db); err != nil {
+	if err = runMigrations(db); err != nil {
 		t.Fatalf("runMigrations: %v", err)
 	}
 
@@ -379,7 +385,7 @@ func TestListHistoryPageSearchEscapesGlobSpecialCharacters(t *testing.T) {
 	}
 	defer sqlDB.Close()
 
-	if err := runMigrations(db); err != nil {
+	if err = runMigrations(db); err != nil {
 		t.Fatalf("runMigrations: %v", err)
 	}
 
@@ -451,7 +457,7 @@ func TestListHistoryPageFiltersAndPaginates(t *testing.T) {
 	}
 	defer sqlDB.Close()
 
-	if err := runMigrations(db); err != nil {
+	if err = runMigrations(db); err != nil {
 		t.Fatalf("runMigrations: %v", err)
 	}
 
@@ -523,7 +529,7 @@ func TestListHistoryPageCursorMatchesCreatedAtIDOrder(t *testing.T) {
 	}
 	defer sqlDB.Close()
 
-	if err := runMigrations(db); err != nil {
+	if err = runMigrations(db); err != nil {
 		t.Fatalf("runMigrations: %v", err)
 	}
 

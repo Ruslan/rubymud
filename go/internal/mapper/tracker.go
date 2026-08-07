@@ -1,0 +1,834 @@
+package mapper
+
+import (
+	"sort"
+	"strconv"
+	"strings"
+
+	"rubymud/go/internal/mapimport"
+)
+
+// Confidence is the tracker's freshness/position confidence: green = anchored
+// (room-event matched a resolved
+// cell), yellow = tracker-only (dead-reckoning, no legit resolve), red = lost
+// (mismatch, no anchor).
+type Confidence string
+
+const (
+	Green  Confidence = "green"  // 🟢 anchored
+	Yellow Confidence = "yellow" // 🟡 tracker-only
+	Red    Confidence = "red"    // 🔴 lost
+)
+
+// pendingCap bounds the FIFO pending-moves queue (speedwalks/aliases can enqueue
+// many directions before the first room block). Beyond this we drop the head so
+// the queue can never grow without bound.
+const pendingCap = 64
+
+// Position is the tracker's current best guess. Valid=false means no position at
+// all (start of session / never anchored).
+type Position struct {
+	Valid      bool
+	Coord      Coord
+	Confidence Confidence
+	Reason     string // populated on yellow/red
+
+	// Exit diff, populated when we degrade to yellow by ASSUMING a predicted cell
+	// on a soft/hard mismatch (the room-event did not exactly match the map cell,
+	// but we still know the travel direction). These describe how the live event's
+	// exits differ from the assumed map cell's exits:
+	//   ExitsAddedLive   = +live : dirs the game reports that the map lacks (e.g. a
+	//                      room that grew a U exit over years of new content).
+	//   ExitsRemovedMap  = -map  : dirs the map has that the game no longer reports.
+	// Empty on green/red and when there is no mismatch to describe. Consumers
+	// (mud_where, room_position broadcast, a future map-patch tool) surface these
+	// so accepting "the map is outdated" stays a conscious manual re-anchor.
+	ExitsAddedLive  []string
+	ExitsRemovedMap []string
+
+	// EventDescribesCell reports whether the room-event that produced THIS
+	// position actually describes the cell at Coord. It is read-only reporting —
+	// it takes part in NO reconciliation decision and is deliberately absent from
+	// snapshot(), so it can never affect change detection or the room_position
+	// broadcast cadence.
+	//
+	// The distinction matters to any WRITE that copies the live room text into
+	// the map cell at Coord (the «Записать комнату» autorecord). Valid+Coord alone
+	// are not enough: several branches legitimately hold the LAST-KNOWN coord
+	// while the player has demonstrably moved somewhere else (ambiguous neighbor
+	// match, hint-less pipe event, text veto, true loss). Writing the live text
+	// into Coord in those states would overwrite a good, unrelated room.
+	//
+	// True only where the event resolved TO the cell now at Coord:
+	//   step 1  confirmed dead-reckoned step (🟢 at the predicted cell)
+	//   step 2  neighbor/seam match (🟢 at the matched cell)
+	//   step 3  unique-fingerprint auto-resync (🟢 at the resolved cell)
+	//   step 5a hint agrees, exits diverged (🟡 at the assumed cell)
+	//   step 5c predicted cell absent from the map (🟡 at the dead-reckoned coord)
+	// and after Anchor(), where a human explicitly asserts "I am in this cell".
+	//
+	// False everywhere else: 2-ambiguous, 4 (hint-less), 5b (text veto), 6 (true
+	// loss), and with no index at all.
+	EventDescribesCell bool
+}
+
+// Tracker is the per-session backend position state machine. It is NOT safe for
+// concurrent use; the owning session serializes access (parser feed and move
+// detection both run under the session's coordination). It holds the active
+// set's index and the FIFO pending-moves queue.
+type Tracker struct {
+	idx     *Index
+	pos     Position
+	pending []string // canonical direction letters awaiting confirmation
+}
+
+// NewTracker builds a tracker over an index (may be nil => everything degrades
+// to red / no-op). The initial position is invalid+red (no anchor yet).
+func NewTracker(idx *Index) *Tracker {
+	return &Tracker{idx: idx, pos: Position{Confidence: Red, Reason: "no position yet"}}
+}
+
+// SetIndex swaps the index (active-set change / import). Position is invalidated
+// because coords are only meaningful within one set; the queue is flushed.
+func (t *Tracker) SetIndex(idx *Index) {
+	t.idx = idx
+	t.pos = Position{Confidence: Red, Reason: "index rebuilt — position reset"}
+	t.pending = t.pending[:0]
+}
+
+// SetIndexPreservingPosition swaps the index to a rebuilt one (a topology write
+// changed the graph, so the index must be rebuilt) WITHOUT resetting the tracker
+// to 🔴 when the player has not moved. It captures the current
+// (coord, confidence, pending queue) before the swap and, if that coord STILL
+// EXISTS in the new index, restores the position + confidence + pending queue
+// verbatim. It falls to 🔴 (SetIndex semantics) only when there is no valid
+// position to preserve or the current cell no longer exists in the new index
+// (e.g. it was deleted by the write). This is the topology-write refresh path:
+// adding an exit to the CURRENT room must NOT lose position (same footgun class
+// as the annotation-DT reset — a naive SetIndex would flush pending + go red).
+//
+// A nil new index degrades to SetIndex(nil) (no set — nothing to preserve into).
+func (t *Tracker) SetIndexPreservingPosition(idx *Index) {
+	prevPos := t.pos
+	prevPending := append([]string(nil), t.pending...)
+
+	if idx == nil {
+		t.SetIndex(nil)
+		return
+	}
+	// Only a valid position anchored to a still-existing cell can be preserved.
+	if !prevPos.Valid || idx.Room(prevPos.Coord) == nil {
+		t.SetIndex(idx)
+		return
+	}
+	t.idx = idx
+	t.pos = prevPos
+	t.pending = prevPending
+}
+
+// RelocatePosition changes only the namespace of an exact logical cell. It is
+// used by an atomic zone move before an index rebuild, so confidence and pending
+// movement remain meaningful: coordinates and graph endpoints did not change.
+func (t *Tracker) RelocatePosition(from, to string, x, y, l int) bool {
+	if !t.pos.Valid || t.pos.Coord != (Coord{Zone: from, X: x, Y: y, L: l}) {
+		return false
+	}
+	t.pos.Coord.Zone = to
+	return true
+}
+
+// Index returns the current index (may be nil).
+func (t *Tracker) Index() *Index { return t.idx }
+
+// Position returns a snapshot of the current position.
+func (t *Tracker) Position() Position { return t.pos }
+
+// Invalidate drops a timed-out external movement expectation. It intentionally
+// clears the FIFO so a later room event cannot be reconciled against a command
+// whose outcome was never observed.
+func (t *Tracker) Invalidate(reason string) {
+	t.pos = Position{Confidence: Red, Reason: reason}
+	t.pending = t.pending[:0]
+}
+
+// PendingCount returns the number of unconfirmed moves in the FIFO queue.
+// Orthogonal to confidence: you can be green with pending>0.
+func (t *Tracker) PendingCount() int { return len(t.pending) }
+
+// Pending returns a copy of the pending direction letters.
+func (t *Tracker) Pending() []string {
+	return append([]string(nil), t.pending...)
+}
+
+// CurrentRoom returns the IndexRoom at the current position, or nil.
+func (t *Tracker) CurrentRoom() *IndexRoom {
+	if t.idx == nil || !t.pos.Valid {
+		return nil
+	}
+	return t.idx.Room(t.pos.Coord)
+}
+
+// PushMove enqueues a detected outgoing movement direction (canonical letter).
+// Called from the move-detection point after alias/VM expansion. Directions that
+// are not movement are filtered by the caller (MoveDir).
+func (t *Tracker) PushMove(dir string) {
+	if _, ok := dirDelta[dir]; !ok {
+		return
+	}
+	t.pending = append(t.pending, dir)
+	if len(t.pending) > pendingCap {
+		t.pending = t.pending[len(t.pending)-pendingCap:]
+	}
+}
+
+// Anchor sets the tracker position explicitly (manual re-anchor / mud_anchor_here
+// / mud_set_active default). It resolves to a known room if one exists at the
+// coord; confidence becomes green and the pending queue is flushed.
+func (t *Tracker) Anchor(c Coord) (Position, bool) {
+	if t.idx == nil {
+		t.pos = Position{Valid: true, Coord: c, Confidence: Yellow, Reason: "no active map set index",
+			EventDescribesCell: true}
+		t.pending = t.pending[:0]
+		return t.pos, false
+	}
+	if t.idx.Room(c) == nil {
+		// Anchor to a coord not in the set: keep it but mark yellow.
+		t.pos = Position{Valid: true, Coord: c, Confidence: Yellow, Reason: "anchored to unmapped cell",
+			EventDescribesCell: true}
+		t.pending = t.pending[:0]
+		return t.pos, false
+	}
+	t.pos = Position{Valid: true, Coord: c, Confidence: Green, EventDescribesCell: true}
+	t.pending = t.pending[:0]
+	return t.pos, true
+}
+
+// CancelHead handles a "не можете идти" refusal: pop only the head of the queue
+// (the failed step). Position does not move. Returns true if a head was popped.
+func (t *Tracker) CancelHead() bool {
+	if len(t.pending) == 0 {
+		return false
+	}
+	t.pending = t.pending[1:]
+	return true
+}
+
+// RefusalPhrases are the substrings that signal a blocked move — the move was
+// sent but the MUD rejected it, so the pending FIFO head must be cancelled (no
+// position change). Matched on a stripped line by the session. Kept conservative
+// and specific to avoid false-positives on non-movement lines:
+//   - "не можете идти" — RMUD generic blocked move ("Вы не можете идти ...").
+//   - "дверь закрыта"  — RMUD closed-door block: the door in the walked direction
+//     is shut, so the step did not happen and the queued head must be popped
+//     (otherwise pending_moves leaks and stays stuck at >0 while position holds).
+var RefusalPhrases = []string{"не можете идти", "дверь закрыта", "ворота закрыты"}
+
+// IsRefusal reports whether a stripped line is a movement refusal. Matching is
+// case-insensitive (the closed-door line "Дверь закрыта" is sentence-initial and
+// capitalized); the phrases are lowercase.
+func IsRefusal(stripped string) bool {
+	low := strings.ToLower(stripped)
+	for _, p := range RefusalPhrases {
+		if strings.Contains(low, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// Reconcile applies a parsed room-event to the tracker and returns the resulting
+// position after per-step reconciliation, auto-resync, and edge-case handling. The
+// changed flag reports whether the position/confidence/queue changed (so the
+// session only broadcasts on change).
+func (t *Tracker) Reconcile(ev RoomEvent) (pos Position, changed bool) {
+	before := t.snapshot()
+	t.reconcile(ev)
+	after := t.snapshot()
+	return t.pos, before != after
+}
+
+// snapshot is a comparable summary for change detection.
+type trackerSnap struct {
+	valid      bool
+	coord      Coord
+	conf       Confidence
+	reason     string
+	pendingLen int
+}
+
+func (t *Tracker) snapshot() trackerSnap {
+	return trackerSnap{
+		valid:      t.pos.Valid,
+		coord:      t.pos.Coord,
+		conf:       t.pos.Confidence,
+		reason:     t.pos.Reason,
+		pendingLen: len(t.pending),
+	}
+}
+
+func (t *Tracker) reconcile(ev RoomEvent) {
+	if t.idx == nil {
+		t.pos = Position{Valid: false, Confidence: Red, Reason: "no active map set"}
+		return
+	}
+
+	fp := mapimport.Fingerprint(ev.Hint, ev.Desc, ev.Exits)
+	evExits, _ := mapimport.NormExits(ev.Exits)
+
+	// 1) If we have a valid position and a pending head, try the predicted cell.
+	if t.pos.Valid && len(t.pending) > 0 {
+		dir := t.pending[0]
+		if pred, ok := t.predict(t.pos.Coord, dir); ok {
+			// A single physical step may jump a whole pipe run: the server emits ONE
+			// room-event for the far (real) cell, while the map stores the pipe cells
+			// in between. When the immediate predicted cell is a pipe (untagged /
+			// empty hint) and the EVENT carries a real hint, keep stepping in the same
+			// direction through the pipe run to the first non-pipe cell and reconcile
+			// THAT cell — otherwise the empty-hint pipe cell mismatches the real event
+			// and flaps a false 🔴 for one step. (Hint-less events — walking INTO a
+			// pipe the server does report — are handled separately below at 🟡.)
+			if ev.Hint != "" {
+				if skipped, ok2 := t.skipPipeRun(pred, dir); ok2 {
+					pred = skipped
+				}
+			}
+			if room := t.idx.Room(pred); room != nil && matches(room, ev, evExits) {
+				// confirmed step
+				t.pos = Position{Valid: true, Coord: pred, Confidence: Green, EventDescribesCell: true}
+				t.pending = t.pending[1:]
+				return
+			}
+		}
+	}
+
+	// 2) Following / teleport with an empty queue: search neighbors (incl seams)
+	//    for a cell matching the event.
+	if t.pos.Valid && len(t.pending) == 0 {
+		nb, ambiguous := t.neighborMatch(t.pos.Coord, ev, evExits, true)
+		if nb != nil {
+			t.pos = Position{Valid: true, Coord: nb.Coord, Confidence: Green, EventDescribesCell: true}
+			return
+		}
+		if ambiguous {
+			// Multiple neighbors/seams equally match — do not guess a cell. Hold
+			// the last-known position at 🟡 (dead-reckoning) rather than false-🟢.
+			t.pos = Position{Valid: true, Coord: t.pos.Coord, Confidence: Yellow,
+				Reason: "ambiguous match (multiple candidate cells) — dead-reckoning"}
+			return
+		}
+	}
+
+	// 3) Legit auto-resync by unique fingerprint anywhere in the set — the intended
+	//    RE-LOCALIZATION path when we have NO reliable pending directional context
+	//    (recovering from 🔴/lost, or an empty queue whose neighbor search failed).
+	//    A unique-hint match legitimately green-anchors THERE.
+	//
+	//    CRITICAL GATE (text is a veto, not a SELECTOR during dead-reckoning):
+	//    when we are mid dead-reckoning step (valid position AND a pending
+	//    directional move), we do NOT run whole-zone auto-resync. "Unique in the
+	//    MAP" ≠ "unique in the WORLD" — a stale map can have one of two real twin
+	//    rooms (e.g. NE/SE towers both "Смотровая площадка"), so a unique-hint match
+	//    to a cell that is NOT the predicted neighbor would text-select a false jump
+	//    to a far, non-adjacent cell and green-anchor there (worst outcome). During
+	//    a dead-reckoning step, only the graph-predicted neighbor (step 1) may
+	//    green-anchor; a non-neighbor unique-hint match is a twin/teleport
+	//    suspicion, handled at 🟡/🔴 below — never 🟢.
+	if ev.Hint != "" && !(t.pos.Valid && len(t.pending) > 0) {
+		if r := t.idx.resolveFingerprint(fp); r != nil {
+			t.pos = Position{Valid: true, Coord: r.Coord, Confidence: Green, EventDescribesCell: true}
+			t.pending = t.pending[:0]
+			return
+		}
+	}
+
+	// 4) Pipe corridor / no hint: never flip to red for lack of a hint. Hold
+	//    yellow on dead-reckoning if we have a position; else stay wherever.
+	if ev.Hint == "" {
+		if t.pos.Valid {
+			// Advance dead-reckoning through the pipe if a head is pending.
+			if len(t.pending) > 0 {
+				if pred, ok := t.predict(t.pos.Coord, t.pending[0]); ok {
+					t.pos = Position{Valid: true, Coord: pred, Confidence: Yellow, Reason: "pipe corridor (no hint to reconcile)"}
+					t.pending = t.pending[1:]
+					return
+				}
+			}
+			t.pos.Confidence = Yellow
+			t.pos.Reason = "pipe corridor (no hint to reconcile)"
+			// This branch MUTATES t.pos in place rather than replacing it, so the
+			// previous event's flag must be cleared explicitly: a hint-less event
+			// describes no cell.
+			t.pos.EventDescribesCell = false
+			return
+		}
+		// No position and a pipe: stay yellow-unknown, do not go red.
+		t.pos = Position{Valid: false, Confidence: Yellow, Reason: "pipe corridor, position unknown"}
+		return
+	}
+
+	// 5) We had a position AND a pending directional move, but the room-event did
+	//    not exactly match and no auto-resync fired. Split the mismatch by whether
+	//    the HINT (name) agrees with the assumed cell — "text as veto":
+	//
+	//    (a) hint MATCHES, only the EXITS differ (e.g. a superset SW ⊂ SWU — the
+	//        room grew a U over years): the map is merely outdated. Degrade to 🟡
+	//        by ASSUMING the predicted cell and surface the exit diff (+live/-map).
+	//        We do NOT auto-upgrade to 🟢 — accepting the outdated map must be a
+	//        conscious manual re-anchor (mud_anchor_here).
+	//
+	//    (b) hint CONTRADICTS the assumed cell (the name differs): the server most
+	//        likely teleported us / broke the edge. Holding a 🟡 "assumed" position
+	//        would be a FALSE position an agent could path from. Full-flush to 🔴
+	//        (text veto). Text is a veto, NOT a selector — we never re-anchor to a
+	//        cell by name here; 🔴 waits for the exact-fingerprint auto-resync
+	//        (still requires resolution to exactly one cell) or a manual anchor.
+	if t.pos.Valid && len(t.pending) > 0 {
+		dir := t.pending[0]
+
+		// (0) THE STEP WAS TAKEN THROUGH A FACE THE PLAYER MARKED "NO PASSAGE". The
+		//     tracker keeps refusing to predict through it — the mark is the player's
+		//     own statement and outranks a guess — but it must SAY SO. Falling through
+		//     to the text-veto below produced "lost — hint contradicts assumed cell
+		//     (likely teleport); re-anchor with mud_anchor_here", which names the wrong
+		//     cause (nothing teleported) and the wrong remedy (a re-anchor does not
+		//     clear a mark, and the next step through the same face lands here again).
+		//
+		//     It matters most on unmapped ground: WITHOUT a negation this same step is
+		//     the 🟡 "edge/cell not in map" state that «Записать комнату» draws a new
+		//     room from; WITH one the player would silently lose that ability. The
+		//     reason therefore names the mark and how to drop it.
+		if e := t.deniedFace(t.pos.Coord, dir); e {
+			lost := t.pos.Coord
+			t.pos = Position{Valid: true, Coord: lost, Confidence: Red,
+				Reason: "step " + DirRU(dir) + " crosses a face YOU marked as no-passage — the map cannot follow it. " +
+					"Clear that mark (edge editor in ~map, or mud_room_mark_edge mark=\"auto\") if the passage is real, then re-anchor."}
+			t.pending = t.pending[:0]
+			return
+		}
+
+		assumed := t.pos.Coord
+		if pred, ok := t.predict(t.pos.Coord, dir); ok {
+			assumed = pred
+			if skipped, ok2 := t.skipPipeRun(pred, dir); ok2 {
+				assumed = skipped
+			}
+		}
+		assumedRoom := t.idx.Room(assumed)
+
+		// (c) The predicted neighbor / edge is NOT in the map (unmapped edge or
+		//     off-map cell): we walked a direction the map doesn't record (e.g.
+		//     ascent through a U exit the stale map lacks). Do NOT fall through to
+		//     whole-zone auto-resync (that would text-select a far unique-hint twin
+		//     and false-🟢). Hold 🟡 at the dead-reckoning coord with an
+		//     "edge not in map" reason; wait for a legit resync from a cleared
+		//     state or a manual re-anchor.
+		if assumedRoom == nil {
+			t.pos = Position{
+				Valid:      true,
+				Coord:      assumed,
+				Confidence: Yellow,
+				Reason:     "assumed " + coordStr(assumed) + " by " + DirRU(dir) + " — edge/cell not in map (map may be outdated)",
+				// The event describes the room we just walked into, which IS this
+				// dead-reckoned coord — this is the "draw a new room" case.
+				EventDescribesCell: true,
+			}
+			t.pending = t.pending[1:]
+			return
+		}
+
+		hintAgrees := ev.Hint != "" &&
+			mapimport.NormText(assumedRoom.Hint) == mapimport.NormText(ev.Hint)
+
+		if hintAgrees {
+			// (a) exits diverged, hint matches -> 🟡 assumed cell + diff.
+			added, removed := exitDiff(assumedRoom.EDirs, evExits)
+			reason := "assumed " + coordStr(assumed) + " by " + DirRU(dir) + " (exits diverged — map may be outdated)"
+			if d := formatExitDiff(added, removed); d != "" {
+				reason += "; exits " + d
+			}
+			t.pos = Position{
+				Valid:           true,
+				Coord:           assumed,
+				Confidence:      Yellow,
+				Reason:          reason,
+				ExitsAddedLive:  added,
+				ExitsRemovedMap: removed,
+				// The hint matched the assumed cell, so the event describes it.
+				EventDescribesCell: true,
+			}
+			t.pending = t.pending[1:]
+			return
+		}
+
+		// (b) hint contradicts -> text veto -> 🔴 full-flush; do NOT hold a false
+		//     assumed position. Indicator stays on the last-known room.
+		lost := t.pos.Coord
+		t.pos = Position{Valid: true, Coord: lost, Confidence: Red,
+			Reason: "lost — hint contradicts assumed cell (likely teleport); re-anchor with mud_anchor_here"}
+		t.pending = t.pending[:0]
+		return
+	}
+
+	// 5.5) ADJACENCY FALLBACK. The graph knew of no neighbour matching this event and
+	//    no unique fingerprint resolved it, but the cell next door does match. Take
+	//    it — at 🟡, never 🟢: "I think you are here, the graph does not confirm it."
+	//
+	//    This exists because moving the neighbour search onto the materialized edges
+	//    (see neighborMatch) is a correction the map data does not always deserve:
+	//    629 of the 700 candidate faces it removed were rooms whose `ch` disagrees
+	//    with an empty `edirs`, and losing the position outright on those turned 110
+	//    live (cell, event) pairs into 🔴. A 🔴 costs the player their position,
+	//    stops «Записать комнату» and demands a manual re-anchor; a 🟡 with a
+	//    position costs them nothing but a colour.
+	//
+	//    IT CANNOT REVIVE THE 721cd67 FALSE-GREEN. That bug was whole-zone
+	//    fingerprint selection jumping ~15 cells to a twin during a dead-reckoning
+	//    step. This branch only ever considers cells ADJACENT to where we already
+	//    are, only when the queue is EMPTY (never mid-step), and only yields 🟡 —
+	//    all three of which that bug's fix turned on.
+	//
+	//    It runs AFTER the unique-fingerprint resync above on purpose: a unique
+	//    fingerprint is hard evidence and deserves its 🟢; adjacency is a guess.
+	if t.pos.Valid && len(t.pending) == 0 {
+		nb, ambiguous := t.neighborMatch(t.pos.Coord, ev, evExits, false)
+		if nb != nil {
+			t.pos = Position{Valid: true, Coord: nb.Coord, Confidence: Yellow,
+				Reason:             "assumed " + coordStr(nb.Coord) + " — adjacent and matching, but the map records no way there",
+				EventDescribesCell: true}
+			return
+		}
+		if ambiguous {
+			t.pos = Position{Valid: true, Coord: t.pos.Coord, Confidence: Yellow,
+				Reason: "ambiguous match (multiple adjacent cells) — dead-reckoning"}
+			return
+		}
+	}
+
+	// 6) True loss: we have no directional context (no pending move — teleport/
+	//    following whose neighbor search failed) or no position at all. This is the
+	//    only path that yields 🔴.
+	if t.pos.Valid {
+		lost := t.pos.Coord
+		t.pos = Position{Valid: true, Coord: lost, Confidence: Red, Reason: "lost — no directional context (teleport/following, no match)"}
+		t.pending = t.pending[:0]
+		return
+	}
+	t.pos = Position{Valid: false, Confidence: Red, Reason: "no resolve — unknown position"}
+	t.pending = t.pending[:0]
+}
+
+// deniedFace reports whether the face leaving c in dir carries a hand-drawn
+// negation — the one reason predict() refuses a step that the player can fix, and
+// therefore the one that has to be reported in its own words rather than as a
+// suspected teleport.
+func (t *Tracker) deniedFace(c Coord, dir string) bool {
+	room := t.idx.Room(c)
+	if room == nil {
+		return false
+	}
+	e := room.GridEdge(dir)
+	return e != nil && !e.Passable
+}
+
+// coordStr formats a coord for human-readable reasons: "(x,y,l)".
+func coordStr(c Coord) string {
+	return "(" + strconv.Itoa(c.X) + "," + strconv.Itoa(c.Y) + "," + strconv.Itoa(c.L) + ")"
+}
+
+// predict returns the predicted neighbor coord for a step from c in dir,
+// accounting for seams: if the current room has a seam whose command matches the
+// direction word, the prediction is the seam target (discontinuous coords).
+//
+// It consults the MATERIALIZED edge of the face before falling back to the raw
+// coordinate delta, because since the hand-drawn layer exists the two can
+// disagree, and the edge is the authority the router already uses:
+//
+//   - a face carrying a hand-drawn NEGATION has no prediction at all (ok=false).
+//     The player's mark says this step is impossible; predicting the cell anyway
+//     is how the tracker used to CONFIRM a step onto it and green-anchor on a cell
+//     it had been told was unreachable — a false fix an agent would then path from.
+//   - a face carrying an edge predicts that edge's target. For the grid-adjacent
+//     marks the hand-drawn layer writes that equals the delta, so nothing changes today; it
+//     is what keeps this correct when a jump link (non-adjacent target) arrives.
+//
+// The DELTA FALLBACK IS LOAD-BEARING and deliberately kept: unmapped territory has
+// no edge rows at all, and dead-reckoning into it is exactly what «Записать
+// комнату» writes from (the candidate cell). "No row" must keep meaning "unknown",
+// never "impossible" — only an explicit negation means impossible.
+func (t *Tracker) predict(c Coord, dir string) (Coord, bool) {
+	room := t.idx.Room(c)
+	// Seam check first: a seam command may correspond to this direction.
+	if room != nil {
+		for _, e := range room.seams {
+			if e.Passable && seamDir(e.Command) == dir && e.To != nil {
+				return *e.To, true
+			}
+		}
+	}
+	return t.predictGrid(c, dir)
+}
+
+// predictGrid follows the authoritative directed grid face when one exists,
+// including an exact endpoint in another zone. The coordinate fallback preserves
+// dead-reckoning into unmapped territory. Pipe expansion uses this narrower
+// helper because an arbitrary seam command must not be swallowed into one long
+// corridor step.
+func (t *Tracker) predictGrid(c Coord, dir string) (Coord, bool) {
+	if room := t.idx.Room(c); room != nil {
+		if e := room.GridEdge(dir); e != nil {
+			if !e.Passable {
+				return Coord{}, false
+			}
+			if e.To != nil {
+				return *e.To, true
+			}
+		}
+	}
+	d, ok := dirDelta[dir]
+	if !ok {
+		return Coord{}, false
+	}
+	return Coord{Zone: c.Zone, X: c.X + d.DX, Y: c.Y + d.DY, L: c.L + d.DL}, true
+}
+
+// maxPipeSkip caps how many consecutive pipe cells the dead-reckoning skip will
+// step over, to guard against an unbounded loop on malformed pipe data.
+const maxPipeSkip = 32
+
+// skipPipeRun, given a predicted cell `c` and the travel direction `dir`, walks
+// forward in the same direction through any run of pipe corridors (untagged /
+// empty-hint cells with Pipe=true) and returns the first NON-pipe (real/tagged)
+// cell — the cell the server actually reports after a single physical step that
+// jumps the pipe run. It returns (c,false) when the immediate cell is not a pipe
+// (nothing to skip), and stops at a missing cell or the skip cap. It never
+// crosses a seam (seams are handled by predict), but it may cross a zone boundary
+// through an exact directed grid edge after rooms were split into another zone.
+func (t *Tracker) skipPipeRun(c Coord, dir string) (Coord, bool) {
+	room := t.idx.Room(c)
+	if room == nil || !room.Pipe {
+		return c, false
+	}
+	cur := c
+	for i := 0; i < maxPipeSkip; i++ {
+		next, ok := t.predictGrid(cur, dir)
+		if !ok {
+			return cur, true
+		}
+		nr := t.idx.Room(next)
+		if nr == nil {
+			// Pipe run runs off the map — best we can do is the last pipe cell.
+			return cur, true
+		}
+		cur = next
+		if !nr.Pipe {
+			// Reached the first real cell past the pipe run.
+			return cur, true
+		}
+	}
+	return cur, true
+}
+
+// seamDir maps a seam command ("на восток", "восток", "в") to a canonical dir.
+func seamDir(cmd string) string {
+	if d, ok := MoveDir(cmd); ok {
+		return d
+	}
+	// Multi-word seam command: take the last token (e.g. "на восток" -> "восток").
+	fields := strings.Fields(strings.ToLower(cmd))
+	if len(fields) == 0 {
+		return ""
+	}
+	last := fields[len(fields)-1]
+	return moveWords[last]
+}
+
+// neighborMatch searches all grid neighbors and seam targets of c for a room
+// matching the event while following or teleporting with an empty queue. It collects
+// every matching candidate and returns the match ONLY when it is unique: if more
+// than one neighbor/seam equally matches, it returns nil+ambiguous=true so the
+// caller stays 🟡 rather than green-anchoring to an arbitrary cell. Iteration is
+// over a fixed direction order (N,S,E,W,U,D) so results are deterministic, not
+// dependent on Go map order.
+//
+// WHICH NEIGHBOURS COUNT is decided by the MATERIALIZED edges when graphOnly is
+// set, and by bare grid adjacency when it is not. Both modes exist, and reconcile
+// runs them in that order, because they carry different amounts of evidence:
+//
+//	graphOnly=true   the graph says you can walk there  -> good enough to 🟢
+//	graphOnly=false  the cells are merely adjacent      -> at most 🟡
+//
+// THE GRAPH MODE is the one that green-anchors, so it must read the same source
+// the router does:
+//
+//   - a denied face is not a neighbour, so a cell the player marked unreachable
+//     can no longer be anchored to by a name match;
+//   - a hidden exit IS a neighbour even though no exits line mentions it, so
+//     following someone through a secret passage resolves instead of dropping to 🟡.
+//
+// Switching to it also ended a THIRD re-derivation of connectivity next to the
+// router's and the materializer's, and that has consequences well beyond the
+// hand-drawn layer. MEASURED on the live editable set (8 043 rooms, 19 189 edges),
+// TWO mechanisms drop candidates the old rule offered — 700 faces over 505 rooms:
+//
+//   - `ch` is authoritative over `edirs`: a room with ch bits and an empty edirs
+//     list is explicit, not permissive, so denied directions stay out of the graph.
+//   - bare adjacency is not connectivity when an explicit neighboring face
+//     denies the reverse link.
+//
+// Correcting the rule cost real behaviour: 110 of 17 511 (cell, event) pairs went
+// from a resolved position to 🔴 "no directional context", and 🔴 is not just
+// noise — it halts «Записать комнату» and demands a re-anchor. Hence the ADJACENT
+// mode: when the graph knows of no candidate, reconcile retries on bare adjacency
+// and holds the result at 🟡. The player keeps a position and an honest label ("the
+// graph does not confirm this"), instead of losing the position to a rule change.
+//
+// The adjacent mode still refuses a hand-drawn NEGATION: that is the player's own
+// explicit "there is no way here", not an inference the map failed to record.
+//
+// A cell with no room in the index is never a candidate; when the tracker stands
+// on a cell that is not in the map at all there are no rows to read, so even the
+// graph mode falls back to raw deltas for that one hop.
+func (t *Tracker) neighborMatch(c Coord, ev RoomEvent, evExits []string, graphOnly bool) (match *IndexRoom, ambiguous bool) {
+	room := t.idx.Room(c)
+	var cands []*IndexRoom
+	// grid neighbors, in a fixed direction order.
+	for _, dir := range dirOrder {
+		d := dirDelta[dir]
+		nc := Coord{Zone: c.Zone, X: c.X + d.DX, Y: c.Y + d.DY, L: c.L + d.DL}
+		if room != nil {
+			e := room.GridEdge(dir)
+			switch {
+			case e != nil && !e.Passable:
+				continue // hand-drawn negation — refused in BOTH modes
+			case e == nil:
+				if graphOnly {
+					continue
+				}
+			default:
+				if e.To != nil {
+					nc = *e.To
+				}
+			}
+		}
+		if nb := t.idx.Room(nc); nb != nil && matches(nb, ev, evExits) {
+			cands = appendUniqueRoom(cands, nb)
+		}
+	}
+	// The materialized seam already contains the importer's target resolution.
+	// Dead seams have To=nil and are not graph neighbours.
+	if room != nil {
+		for _, e := range room.seams {
+			if e.Passable && e.To != nil {
+				if tr := t.idx.Room(*e.To); tr != nil && matches(tr, ev, evExits) {
+					cands = appendUniqueRoom(cands, tr)
+				}
+			}
+		}
+	}
+	switch len(cands) {
+	case 0:
+		return nil, false
+	case 1:
+		return cands[0], false
+	default:
+		return nil, true
+	}
+}
+
+// appendUniqueRoom appends r unless an entry with the same Coord is already
+// present (the same cell reachable two ways is one candidate, not two).
+func appendUniqueRoom(list []*IndexRoom, r *IndexRoom) []*IndexRoom {
+	for _, e := range list {
+		if e.Coord == r.Coord {
+			return list
+		}
+	}
+	return append(list, r)
+}
+
+// matches reports whether an IndexRoom matches a room-event by hint + normalized
+// exits, tolerant to door-marker differences (exits compared as canonical dir
+// sets, doors ignored — mapimport.NormExits already strips door markers). An
+// empty event hint is not matched here (pipe path handled separately).
+func matches(room *IndexRoom, ev RoomEvent, evExits []string) bool {
+	if ev.Hint == "" {
+		return false
+	}
+	if !strings.EqualFold(strings.TrimSpace(room.Hint), strings.TrimSpace(ev.Hint)) {
+		return false
+	}
+	return sameDirSet(room.EDirs, evExits)
+}
+
+func sameDirSet(a, b []string) bool {
+	as := append([]string(nil), a...)
+	bs := append([]string(nil), b...)
+	sort.Strings(as)
+	sort.Strings(bs)
+	if len(as) != len(bs) {
+		return false
+	}
+	for i := range as {
+		if as[i] != bs[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// containsDir is a membership test over a direction list. Since migration 018 moved
+// doors onto the edges its only remaining caller is the corpus test's PRE-018
+// doorGrade (edge_corpus_test.go), which reads rooms.doors on purpose: it is the
+// reference the edge-based grade has to reproduce face for face. It stays here, and
+// exported to that test by being in the same package, precisely so that reference
+// cannot quietly become a copy of the thing it checks.
+func containsDir(list []string, dir string) bool {
+	for _, d := range list {
+		if d == dir {
+			return true
+		}
+	}
+	return false
+}
+
+// exitDiff computes the exit-set difference between a live room-event and an
+// assumed map cell, in canonical direction order:
+//
+//	addedLive   = +live : dirs in the event's exits but not the map cell's edirs.
+//	removedMap  = -map  : dirs in the map cell's edirs but not the event's exits.
+//
+// Both are nil when the sets are equal. mapEDirs is the map cell's canonical exit
+// letters; evExits is the event's canonical exit letters (door markers already
+// stripped by NormExits).
+func exitDiff(mapEDirs, evExits []string) (addedLive, removedMap []string) {
+	mapSet := map[string]bool{}
+	for _, d := range mapEDirs {
+		mapSet[d] = true
+	}
+	evSet := map[string]bool{}
+	for _, d := range evExits {
+		evSet[d] = true
+	}
+	for _, d := range dirOrder {
+		if evSet[d] && !mapSet[d] {
+			addedLive = append(addedLive, d)
+		}
+		if mapSet[d] && !evSet[d] {
+			removedMap = append(removedMap, d)
+		}
+	}
+	return addedLive, removedMap
+}
+
+// formatExitDiff renders the exit diff as "+U -D" style tokens for the Reason
+// string; returns "" when there is no diff.
+func formatExitDiff(addedLive, removedMap []string) string {
+	parts := make([]string, 0, len(addedLive)+len(removedMap))
+	for _, d := range addedLive {
+		parts = append(parts, "+"+d)
+	}
+	for _, d := range removedMap {
+		parts = append(parts, "-"+d)
+	}
+	return strings.Join(parts, " ")
+}

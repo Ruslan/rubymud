@@ -139,6 +139,13 @@ func (s *Session) processLine(line string) {
 
 	plainText := stripANSI(processed)
 	parseDuration = time.Since(phaseStartedAt)
+
+	// Mapper room-block detector. Off the DB/critical path: it consumes
+	// the already-stripped plainText (no second ANSI strip), a cheap prefix guard
+	// runs before any regex, and reconciliation/broadcast only fire on a completed
+	// room block.
+	s.observeIncomingLine(plainText, processed)
+
 	var effects []vm.Effect
 	var routing vm.RoutingInfo
 
@@ -210,7 +217,7 @@ func (s *Session) processLine(line string) {
 
 	for _, copyBuffer := range routing.CopyBuffers {
 		dbStartedAt := time.Now()
-		copyID, err := s.store.AppendLogEntryWithOverlays(s.sessionID, copyBuffer, processed, plainText, cloneLogOverlays(overlays))
+		copyID, err := s.store.AppendCopiedMudLogEntryWithOverlays(s.sessionID, copyBuffer, processed, plainText, id, cloneLogOverlays(overlays))
 		dbExtraDuration += time.Since(dbStartedAt)
 		if err == nil {
 			for _, b := range entry.Buttons {

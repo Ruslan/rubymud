@@ -4,6 +4,9 @@ import { resolve } from 'path';
 
 export default defineConfig({
   root: 'src',
+  resolve: {
+    conditions: ['browser'],
+  },
   base: './',
   publicDir: resolve(__dirname, 'public'),
   plugins: [svelte()],

@@ -1,0 +1,16 @@
+-- A zone split temporarily promotes a derived grid face to manual ownership so
+-- rematerialization cannot erase its exact endpoint across namespaces. This is
+-- provenance of the zone-move operation, not a user's hand-drawn assertion.
+-- When both endpoint rooms later return to one zone, storage may demote only
+-- rows carrying this flag whose complete derived semantics match again.
+--
+-- This is intentionally ordered before 026_drop_rooms_automaps.sql. Migration
+-- 026 has a Go data phase that reads/writes MapEdge, so the field must exist for
+-- a database upgrading from the pre-map_edges schema too. Existing databases
+-- that already applied 026 simply run this new migration on their next open.
+--
+-- Existing manual rows deliberately start unguarded. Historical rows cannot
+-- reliably distinguish a user-owned manual face from an old zone boundary, so
+-- this migration is prospective; re-moving a historical boundary applies the
+-- new provenance correctly.
+ALTER TABLE map_edges ADD COLUMN zone_guard INTEGER NOT NULL DEFAULT 0;

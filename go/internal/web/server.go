@@ -2,13 +2,18 @@ package web
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
+	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -31,20 +36,126 @@ const restoreChunkSize = 100
 var webFiles embed.FS
 
 type Server struct {
-	httpServer             *http.Server
-	manager                *session.Manager
-	store                  *storage.Store
-	upgrader               websocket.Upgrader
-	apiToken               string
-	basicAuth              BasicAuth
-	configDir              string
-	restoreAfterCursorHook func(*session.Session) error
+	httpServer                    *http.Server
+	manager                       *session.Manager
+	store                         *storage.Store
+	upgrader                      websocket.Upgrader
+	apiToken                      string
+	basicAuth                     BasicAuth
+	mcp                           MCPConfig
+	mcpRuntime                    *mcpRuntime
+	mcpSessions                   *mcpSessionStore
+	mcpTokenRandom                io.Reader
+	mcpSettingsUnsubscribe        func()
+	configDir                     string
+	roomImagesRoot                string
+	mapSetDeleteMu                sync.Mutex
+	mapSetDeleteAfterLock         func() // test hook: runs while delete holds both locks
+	mapSetDeleteBeforeStoreDelete func() // test hook: runs after image staging
+	restoreAfterCursorHook        func(*session.Session) error
+}
+
+// MCPConfig holds command-line/environment overrides for MCP. Enabled and Token
+// retain their old meanings for callers constructing MCPConfig{Enabled: true};
+// the Set fields distinguish explicit false/empty command-line overrides.
+type MCPConfig struct {
+	Enabled    bool
+	Token      string
+	EnabledSet bool
+	TokenSet   bool
+}
+
+// ValidateMCPConfig preserves validation for legacy callers which supply a
+// complete MCPConfig directly. Explicit CLI/environment state can depend on a
+// persisted digest and is reconciled after storage is loaded by New.
+func ValidateMCPConfig(listenAddr string, config MCPConfig) error {
+	config = config.normalized()
+	if !config.Enabled {
+		return nil
+	}
+	if config.Token != "" {
+		if !validBearerToken(config.Token) {
+			return errors.New("MCP token is not a valid Bearer token")
+		}
+		return nil
+	}
+	// Explicit command-line/environment enabled state is independent of token
+	// ownership and may use a persisted digest, which is loaded by New.
+	if config.EnabledSet {
+		return nil
+	}
+
+	host, _, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return fmt.Errorf("invalid HTTP listen address for tokenless MCP: %w", err)
+	}
+	if isLoopbackHost(host) {
+		return nil
+	}
+	return errors.New("tokenless MCP requires an explicit loopback --listen address")
+}
+
+func validBearerToken(token string) bool {
+	padding := false
+	payload := false
+	for i := 0; i < len(token); i++ {
+		c := token[i]
+		if c == '=' {
+			if !payload {
+				return false
+			}
+			padding = true
+			continue
+		}
+		if padding {
+			return false
+		}
+		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || strings.ContainsRune("-._~+/", rune(c))) {
+			return false
+		}
+		payload = true
+	}
+	return payload
+}
+
+func isLoopbackHost(host string) bool {
+	ip := net.ParseIP(host)
+	if ip != nil {
+		return ip.IsLoopback()
+	}
+	if !strings.EqualFold(host, "localhost") {
+		return false
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return false
+	}
+	for _, ip := range ips {
+		if !ip.IsLoopback() {
+			return false
+		}
+	}
+	return true
+}
+
+// validateMCPListenerAddr closes the DNS/TOCTOU gap left by validating a
+// configured hostname before net.Listen resolves it.
+func validateMCPListenerAddr(addr net.Addr, config MCPConfig) error {
+	config = config.normalized()
+	if !config.Enabled || config.Token != "" {
+		return nil
+	}
+	tcpAddr, ok := addr.(*net.TCPAddr)
+	if !ok || tcpAddr.IP == nil || !tcpAddr.IP.IsLoopback() {
+		return errors.New("tokenless MCP listener did not bind to a loopback address")
+	}
+	return nil
 }
 
 // BasicAuth holds optional HTTP basic auth credentials. When both fields are
-// set, every route except the PWA/static assets needed for installation is
-// gated behind basic auth (issue #6). It is an outer gate layered on top of
-// the existing session-token protection.
+// set, browser routes except public PWA assets are gated behind basic auth
+// (issue #6). MCP has its own Bearer credential because both schemes cannot
+// share one Authorization header.
 type BasicAuth struct {
 	User string
 	Pass string
@@ -73,7 +184,24 @@ type clientMessage struct {
 	ClientCommandID string `json:"client_command_id"`
 }
 
-func New(listenAddr string, manager *session.Manager, store *storage.Store, configDir string, basicAuth BasicAuth) *Server {
+func New(listenAddr string, manager *session.Manager, store *storage.Store, configDir string, basicAuth BasicAuth, mcp MCPConfig) (*Server, error) {
+	mcp = mcp.normalized()
+	// Preserve the established operator-facing startup failure for the legacy
+	// explicit Enabled:true form. Database-owned state is instead reconciled
+	// fail-closed so the Settings UI remains available to repair it.
+	if mcp.Enabled && !mcp.EnabledSet && !mcp.TokenSet && mcp.Token == "" {
+		if err := ValidateMCPConfig(listenAddr, mcp); err != nil {
+			return nil, err
+		}
+	}
+	persistedMCP, err := store.GetMCPSettings()
+	if err != nil {
+		return nil, fmt.Errorf("load MCP settings: %w", err)
+	}
+	runtime, err := newMCPRuntime(listenAddr, persistedMCP, mcp)
+	if err != nil {
+		return nil, err
+	}
 	log.Printf("creating web server on %s", listenAddr)
 
 	apiToken, _ := store.GetSetting("api_token")
@@ -85,27 +213,84 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 	}
 
 	s := &Server{
-		manager:   manager,
-		store:     store,
-		configDir: configDir,
-		apiToken:  apiToken,
-		basicAuth: basicAuth,
+		manager:        manager,
+		store:          store,
+		configDir:      configDir,
+		roomImagesRoot: store.RoomImagesRoot(),
+		apiToken:       apiToken,
+		basicAuth:      basicAuth,
+		mcp:            mcp,
+		mcpRuntime:     runtime,
+		mcpSessions:    newMCPSessionStore(),
+		mcpTokenRandom: rand.Reader,
 		upgrader: websocket.Upgrader{
 			CheckOrigin: func(r *http.Request) bool {
 				return sameOriginRequest(r)
 			},
 		},
 	}
+	s.mcpSettingsUnsubscribe = store.SubscribeMCPSettings(func(settings storage.MCPSettings) {
+		_ = s.applyPersistedMCPSettings(settings)
+	})
+	// Close the read/subscribe race: a write missed before registration is seen
+	// here, while revision ordering makes a concurrent callback win over stale data.
+	currentMCP, err := store.GetMCPSettings()
+	if err != nil {
+		s.mcpSettingsUnsubscribe()
+		return nil, fmt.Errorf("reload MCP settings after subscribe: %w", err)
+	}
+	if err := s.applyPersistedMCPSettings(currentMCP); err != nil {
+		s.mcpSettingsUnsubscribe()
+		return nil, err
+	}
+	if err := s.recoverMapSetImageTombstones(); err != nil {
+		s.mcpSettingsUnsubscribe()
+		return nil, fmt.Errorf("recover map-set image cleanup: %w", err)
+	}
 
 	r := chi.NewRouter()
+	// MCP credentials belong only in Authorization. Reject any query before the
+	// request logger can record a client accidentally putting a secret in the URL.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/mcp" && r.URL.RawQuery != "" {
+				if !s.mcpRuntime.snapshotValue().enabled {
+					http.NotFound(w, r)
+					return
+				}
+				http.Error(w, "MCP endpoint does not accept query parameters", http.StatusBadRequest)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
+
+	// Keep a disabled /mcp indistinguishable from any other missing route, even
+	// when HTTP basic auth is enabled. The catch-all index handler must not turn
+	// this into a successful HTML response.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if (r.URL.Path == "/mcp" && !s.mcpRuntime.snapshotValue().enabled) || strings.HasPrefix(r.URL.Path, "/mcp/") {
+				http.NotFound(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
 
 	// Optional HTTP basic auth: an outer gate in front of the token check.
 	// PWA/static assets stay public so the app can be discovered and installed.
 	if s.basicAuth.enabled() {
 		r.Use(func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				// MCP has an independent Bearer credential. Requiring Basic here
+				// would make the endpoint unusable because both use Authorization.
+				if r.URL.Path == "/mcp" {
+					next.ServeHTTP(w, r)
+					return
+				}
 				if isPublicAsset(r.URL.Path) {
 					next.ServeHTTP(w, r)
 					return
@@ -143,7 +328,7 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 	})
 
 	r.HandleFunc("/ws", s.handleWebSocket)
-	r.Post("/mcp", s.handleMCP)
+	r.Handle("/mcp", http.HandlerFunc(s.handleMCP))
 
 	r.Get("/favicon.ico", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "image/x-icon")
@@ -197,6 +382,34 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 				})
 
 				r.Get("/hotkeys", s.listSessionHotkeys)
+
+				// Mapper: which map set this session uses, and manual re-anchor.
+				r.Get("/active-map-set", s.getActiveMapSet)
+				r.Post("/active-map-set", s.setActiveMapSet)
+				r.Post("/map-anchor", s.anchorMapPosition)
+				r.Post("/map-path", s.mapPath)
+				r.Post("/map-walk", s.mapWalk)
+				r.Post("/map-walk/cancel", s.cancelMapWalk)
+				r.Post("/map-walk/resume", s.resumeMapWalk)
+				r.Post("/map-cell-patch", s.mapCellPatch)
+				r.Get("/map-live-room", s.mapLiveRoom)
+				r.Post("/map-record-room", s.mapRecordRoom)
+				r.Post("/map-mark-edge", s.mapMarkEdge)
+				r.Post("/map-edge-attrs", s.mapEdgeAttrs)
+				r.Post("/map-portals", s.mapPortal)
+				r.Patch("/map-portals", s.mapPortal)
+				r.Delete("/map-portals", s.mapPortal)
+				r.Post("/map-zones/preview", s.mapZoneMove)
+				r.Post("/map-zones/apply", s.mapZoneMove)
+				r.Post("/map-zones/rename", s.mapZoneMove)
+				r.Post("/map-zones/rename/preview", s.mapZoneMove)
+				r.Post("/map-zones/rename/apply", s.mapZoneMove)
+				r.Post("/map-undo", s.mapUndo)
+
+				// Which ROOM FORMAT (mapper profile) this session parses with.
+				// Unrelated to /sessions/{id}/profiles above (alias/trigger layering).
+				r.Get("/mapper-profile", s.getSessionMapperProfile)
+				r.Post("/mapper-profile", s.setSessionMapperProfile)
 			})
 		})
 
@@ -277,10 +490,36 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 
 		r.Get("/colors", s.listColors)
 
+		r.Route("/map-sets", func(r chi.Router) {
+			r.Get("/", s.listMapSets)
+			r.Post("/import", s.importMapSet)
+			r.Get("/{id}/zones", s.listMapSetZones)
+			r.Delete("/{id}", s.deleteMapSet)
+		})
+		r.Get("/rooms", s.listRooms)
+
+		// Room-format profiles. NOTE the name: these describe how to PARSE a room
+		// block, and have nothing to do with /api/profiles (alias/trigger layering).
+		r.Route("/mapper-profiles", func(r chi.Router) {
+			r.Get("/", s.listMapperProfiles)
+			r.Post("/", s.createMapperProfile)
+			// Literal actions are registered before /{id} so chi cannot route them as ids.
+			r.Post("/validate", s.validateMapperProfileSpec)
+			r.Post("/replay", s.replayMapperProfileSpec)
+			r.Put("/{id}", s.updateMapperProfile)
+			r.Delete("/{id}", s.deleteMapperProfile)
+		})
+
 		r.Route("/app", func(r chi.Router) {
 			r.Get("/settings", s.getAppSettings)
 			r.Put("/settings", s.updateAppSettings)
 			r.Post("/settings/rotate-api-token", s.rotateAPIToken)
+		})
+		r.Route("/mcp", func(r chi.Router) {
+			r.Get("/settings", s.getMCPSettings)
+			r.Post("/settings", s.updateMCPSettings)
+			r.Patch("/settings", s.updateMCPSettings)
+			r.Post("/settings/token", s.rotateMCPToken)
 		})
 	})
 
@@ -290,12 +529,39 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 		Addr:    listenAddr,
 		Handler: r,
 	}
+	s.httpServer.RegisterOnShutdown(func() {
+		s.mcpSettingsUnsubscribe()
+		s.mcpSessions.clear()
+	})
 
-	return s
+	return s, nil
 }
 
 func (s *Server) ListenAndServe() error {
-	return s.httpServer.ListenAndServe()
+	listener, err := net.Listen("tcp", s.httpServer.Addr)
+	if err != nil {
+		return err
+	}
+	gate := s.mcpRuntime.snapshotValue()
+	listenerConfig := MCPConfig{Enabled: gate.enabled}
+	if gate.hasToken {
+		listenerConfig.Token = "configured"
+	}
+	if err := validateMCPListenerAddr(listener.Addr(), listenerConfig); err != nil {
+		_ = listener.Close()
+		return err
+	}
+	err = s.httpServer.Serve(listener)
+	s.mcpSettingsUnsubscribe()
+	s.mcpSessions.clear()
+	return err
+}
+
+// Close releases ephemeral MCP continuity state along with the HTTP listener.
+func (s *Server) Close() error {
+	s.mcpSettingsUnsubscribe()
+	s.mcpSessions.clear()
+	return s.httpServer.Close()
 }
 
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
@@ -403,6 +669,179 @@ type appSettingsJSON struct {
 	APIToken             string `json:"api_token"`
 	AllowExecCommand     bool   `json:"allow_exec_command"`
 	AllowWebFetchCommand bool   `json:"allow_webfetch_command"`
+}
+
+type mcpSettingsJSON struct {
+	Enabled                  bool   `json:"enabled"`
+	RequestedEnabled         bool   `json:"requested_enabled"`
+	EffectiveEnabled         bool   `json:"effective_enabled"`
+	TokenConfigured          bool   `json:"token_configured"`
+	ExternallyManaged        bool   `json:"externally_managed"`
+	ExternallyManagedReason  string `json:"externally_managed_reason,omitempty"`
+	EnabledExternallyManaged bool   `json:"enabled_externally_managed"`
+	TokenExternallyManaged   bool   `json:"token_externally_managed"`
+	ListenerExposure         string `json:"listener_exposure"`
+	Token                    string `json:"token,omitempty"`
+}
+
+type mcpSettingsUpdateJSON struct {
+	Enabled *bool `json:"enabled"`
+}
+
+func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.mcpRuntime.status())
+}
+
+func newMCPToken(random io.Reader) (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := io.ReadFull(random, bytes); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(bytes), nil
+}
+
+func (s *Server) generateMCPToken(excludedDigest string) (string, error) {
+	for range 4 {
+		token, err := newMCPToken(s.mcpTokenRandom)
+		if err != nil {
+			return "", err
+		}
+		if mcpDigest(token) != excludedDigest {
+			return token, nil
+		}
+	}
+	return "", errors.New("could not generate a distinct MCP credential")
+}
+
+func mcpDigest(token string) string {
+	digest := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(digest[:])
+}
+
+func (s *Server) applyPersistedMCPSettings(settings storage.MCPSettings) error {
+	changed, err := s.mcpRuntime.replacePersisted(settings)
+	if err != nil {
+		return err
+	}
+	if changed {
+		s.mcpSessions.invalidate()
+	}
+	return nil
+}
+
+const mcpAdminBodyLimit = 4096
+
+func validateMCPAdminOrigin(r *http.Request) bool {
+	values := r.Header.Values("Origin")
+	return len(values) == 0 || (len(values) == 1 && sameOriginRequest(r))
+}
+
+func decodeMCPSettingsUpdate(w http.ResponseWriter, r *http.Request, update *mcpSettingsUpdateJSON) (int, error) {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		return http.StatusUnsupportedMediaType, errors.New("Content-Type must be application/json")
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, mcpAdminBodyLimit)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(update); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return http.StatusRequestEntityTooLarge, errors.New("request body is too large")
+		}
+		return http.StatusBadRequest, errors.New("invalid MCP settings payload")
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return http.StatusRequestEntityTooLarge, errors.New("request body is too large")
+		}
+		return http.StatusBadRequest, errors.New("request body must contain one JSON object")
+	}
+	if update.Enabled == nil {
+		return http.StatusBadRequest, errors.New("enabled is required")
+	}
+	return 0, nil
+}
+
+func (s *Server) updateMCPSettings(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if !validateMCPAdminOrigin(r) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	var update mcpSettingsUpdateJSON
+	if status, err := decodeMCPSettingsUpdate(w, r, &update); err != nil {
+		http.Error(w, err.Error(), status)
+		return
+	}
+	if s.mcpRuntime.enabledExternallyManaged() {
+		http.Error(w, "MCP enabled state is managed by startup configuration", http.StatusConflict)
+		return
+	}
+	status := s.mcpRuntime.status()
+	if *update.Enabled && !status.TokenConfigured && status.ListenerExposure != "loopback" && s.mcpRuntime.tokenExternallyManaged() {
+		http.Error(w, "MCP credential is managed by startup configuration and is required for this listener", http.StatusConflict)
+		return
+	}
+
+	oneTimeToken := ""
+	candidateDigest := ""
+	if *update.Enabled && !status.TokenConfigured && status.ListenerExposure != "loopback" {
+		var err error
+		oneTimeToken, err = s.generateMCPToken("")
+		if err != nil {
+			http.Error(w, "could not generate MCP credential", http.StatusInternalServerError)
+			return
+		}
+		candidateDigest = mcpDigest(oneTimeToken)
+	}
+	_, candidateUsed, err := s.store.UpdateMCPEnabled(*update.Enabled, candidateDigest)
+	if err != nil {
+		http.Error(w, "could not save MCP settings", http.StatusInternalServerError)
+		return
+	}
+	if !candidateUsed {
+		oneTimeToken = ""
+	}
+	response := s.mcpRuntime.status()
+	response.Token = oneTimeToken
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(response)
+}
+
+func (s *Server) rotateMCPToken(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if !validateMCPAdminOrigin(r) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, 1)
+	if body, err := io.ReadAll(r.Body); err != nil || len(body) != 0 {
+		http.Error(w, "request body must be empty", http.StatusBadRequest)
+		return
+	}
+	if s.mcpRuntime.tokenExternallyManaged() {
+		http.Error(w, "MCP credential is managed by startup configuration", http.StatusConflict)
+		return
+	}
+	persistedBefore := s.mcpRuntime.persistedValue()
+	token, err := s.generateMCPToken(persistedBefore.TokenDigest)
+	if err != nil {
+		http.Error(w, "could not generate MCP credential", http.StatusInternalServerError)
+		return
+	}
+	_, err = s.store.RotateMCPTokenDigest(mcpDigest(token))
+	if err != nil {
+		http.Error(w, "could not save MCP settings", http.StatusInternalServerError)
+		return
+	}
+	response := s.mcpRuntime.status()
+	response.Token = token
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 func parseSettingBool(value string) bool {
@@ -1992,10 +2431,9 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 	if currentSess != nil {
 		currentSess.ApplyClientTimezone(clientTZ)
-		if err := s.sendRestoreState(currentSess, writeJSON); err != nil {
-			log.Printf("websocket restore state failed: %v", err)
-			return
-		}
+		// Attach before taking restore snapshots. A route completion that races
+		// restore is then delivered to this client; UI generation checks discard
+		// any older active snapshot rather than leaving a phantom Stop button.
 		clientID = currentSess.AttachClient(ws.RemoteAddr().String(), func(msg session.ServerMsg) error {
 			if err := writeJSON(msg); err != nil {
 				_ = ws.Close()
@@ -2003,6 +2441,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 			return nil
 		})
+		if err := s.sendRestoreState(currentSess, writeJSON); err != nil {
+			log.Printf("websocket restore state failed: %v", err)
+			return
+		}
 	}
 
 	for {
@@ -2024,10 +2466,6 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 						log.Printf("websocket status send failed: %v", err)
 						return
 					}
-					if err := s.sendRestoreState(sess, writeJSON); err != nil {
-						log.Printf("websocket restore state failed: %v", err)
-						return
-					}
 					clientID = sess.AttachClient(ws.RemoteAddr().String(), func(msg session.ServerMsg) error {
 						if err := writeJSON(msg); err != nil {
 							_ = ws.Close()
@@ -2035,6 +2473,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 						}
 						return nil
 					})
+					if err := s.sendRestoreState(sess, writeJSON); err != nil {
+						log.Printf("websocket restore state failed: %v", err)
+						return
+					}
 				} else if err := writeJSON(session.ServerMsg{Type: "status", Status: "disconnected"}); err != nil {
 					log.Printf("websocket status send failed: %v", err)
 					return
@@ -2075,6 +2517,19 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 			commands, err := currentSess.SendCommandWithTrace(command, source)
 			if err != nil {
+				if trace, nonfatal := mapWalkBarrierTrace(message.ClientCommandID, commands, session.IsMapWalkManualBarrier(err)); nonfatal {
+					// This is an expected pacing response, not a broken MUD
+					// transport. Resolve the client command explicitly with any
+					// already-sent alias prefix, then retain the socket for the
+					// stopping map-walk event.
+					if trace != nil {
+						if err := writeJSON(*trace); err != nil {
+							log.Printf("websocket command trace rejection failed: %v", err)
+							return
+						}
+					}
+					continue
+				}
 				log.Printf("send command failed: %v", err)
 				return
 			}
@@ -2086,6 +2541,18 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// mapWalkBarrierTrace preserves the already-sent prefix of a multi-command
+// input while telling the websocket loop that the movement barrier is nonfatal.
+func mapWalkBarrierTrace(clientCommandID string, commands []string, barrier bool) (*session.ServerMsg, bool) {
+	if !barrier {
+		return nil, false
+	}
+	if clientCommandID == "" {
+		return nil, true
+	}
+	return &session.ServerMsg{Type: "command_trace", ClientCommandID: clientCommandID, Commands: commands}, true
 }
 
 func parseClientMessage(payload []byte) clientMessage {
@@ -2165,6 +2632,55 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 	}
 
 	if err := writeJSON(begin); err != nil {
+		return err
+	}
+
+	// Room-format status, sent on EVERY restore (connect and reload).
+	//
+	// It has to be here, not only broadcast at resolve time, because the resolve
+	// almost never has an audience: `make run` passes --mud, so Manager.Connect —
+	// and therefore LoadMapperProfile — runs BEFORE the HTTP server listens, with
+	// zero clients attached. broadcastMsg and BroadcastEcho both drop on an empty
+	// client map, and the echo is not persisted to the log store, so on the
+	// owner's actual startup path the only surviving notice of a broken profile
+	// was the server log. The same loss happens on any page reload. The session
+	// keeps the status in memory, so replaying it at restore covers both.
+	if ref, name, warn := sess.MapperProfileStatus(); name != "" || warn != "" {
+		if err := writeJSON(session.ServerMsg{
+			Type:               "mapper_profile",
+			MapperFormat:       ref,
+			MapperProfileID:    sess.MapperProfileRowID(),
+			MapperProfileName:  name,
+			MapperProfileError: warn,
+			MapperDoorOpen:     sess.MapperDoorOpenTemplate(),
+		}); err != nil {
+			return err
+		}
+	}
+
+	// The tracker itself is in-memory, so a page reload needs its current
+	// position replayed just like the mapper profile above. Build the snapshot
+	// under the session lock, then write it after that lock has been released.
+	if position, ok := sess.RoomPositionSnapshot(); ok {
+		if err := writeJSON(position); err != nil {
+			return err
+		}
+	}
+	walk, _ := sess.MapWalkSnapshot()
+	// Always replay an explicit stopped snapshot. A transient browser reconnect
+	// otherwise retains a cached Stop button when a route completed offline.
+	if err := writeJSON(session.ServerMsg{
+		Type:          "map_walk",
+		WalkActive:    walk.Active,
+		WalkEpoch:     walk.Epoch,
+		WalkJobID:     walk.JobID,
+		WalkCurrent:   walk.Current,
+		WalkTotal:     walk.Total,
+		WalkReason:    walk.Reason,
+		WalkState:     walk.State,
+		WalkCanResume: walk.CanResume,
+		WalkRevision:  walk.Revision,
+	}); err != nil {
 		return err
 	}
 

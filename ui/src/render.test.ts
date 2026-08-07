@@ -144,7 +144,8 @@ describe('renderer buffer catalog', () => {
     renderer.clearOutput();
     renderer.setAvailableBuffers(['kills']);
 
-    expect(paneSelectOptions()).toEqual(['kills', 'main']);
+    // The reserved `~map` buffer is always mountable (sorts last after letters).
+    expect(paneSelectOptions()).toEqual(['kills', 'main', '~map']);
   });
 
   it('keeps the selected pane buffer visible when restore does not list it', () => {
@@ -160,7 +161,7 @@ describe('renderer buffer catalog', () => {
 
     const select = document.querySelector<HTMLSelectElement>('.pane-select');
     expect(select?.value).toBe('kills');
-    expect(paneSelectOptions()).toEqual(['kills', 'main']);
+    expect(paneSelectOptions()).toEqual(['kills', 'main', '~map']);
   });
 });
 
@@ -977,5 +978,52 @@ describe('renderer variables panel', () => {
     renderer.renderVariables([{ name: 'target', value: 'new', default_value: '', declared: true, has_value: true, uses_default: false }]);
 
     expect(document.querySelector<HTMLInputElement>('[data-var-key="target"]')?.value).toBe('unsaved');
+  });
+});
+
+describe('map pane (~map buffer) mount + coexistence', () => {
+  it('degrades gracefully when the canvas 2d context is unavailable (jsdom) and does NOT take down text panes', () => {
+    // jsdom's <canvas>.getContext('2d') returns null, so the MapPaneController
+    // constructor throws — exactly the HIGH-1 scenario. Mount a mixed layout
+    // (one text `main` pane + one `~map` pane) and assert: no throw, the map
+    // pane shows the "Map unavailable" fallback, AND the text pane still renders.
+    localStorage.setItem('pane-layout', JSON.stringify({
+      columns: [{
+        id: 'col-1',
+        panes: [
+          { id: 'pane-main', buffer: 'main' },
+          { id: 'pane-map', buffer: '~map' },
+        ],
+        rowSizes: [50, 50],
+      }],
+      colSizes: [100],
+    }));
+
+    const renderer = createTestRenderer();
+    expect(() => renderer.loadLayout()).not.toThrow();
+
+    // Both panes exist; the map pane shows the graceful fallback.
+    expect(document.querySelectorAll('.pane').length).toBe(2);
+    expect(document.querySelector('.map-pane__unavailable')?.textContent).toBe('Map unavailable');
+
+    // The text pane is fully functional: appended output lands in its live output.
+    renderer.appendEntries([{ id: 1, text: 'hello world', buffer: 'main' }]);
+    const mainOutput = document.querySelector('#output-pane-main');
+    expect(mainOutput?.textContent).toContain('hello world');
+  });
+
+  it('does not throw when a position broadcast arrives with a degraded map pane present', () => {
+    localStorage.setItem('pane-layout', JSON.stringify({
+      columns: [{ id: 'col-1', panes: [{ id: 'pane-map', buffer: '~map' }], rowSizes: [100] }],
+      colSizes: [100],
+    }));
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+
+    expect(() =>
+      renderer.handleRoomPosition({
+        valid: true, zone: 'Z', x: 0, y: 0, l: 0, confidence: 'green', pendingMoves: 0,
+      }),
+    ).not.toThrow();
   });
 });

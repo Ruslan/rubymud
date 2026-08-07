@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"rubymud/go/internal/mapper"
 	"rubymud/go/internal/storage"
 	"rubymud/go/internal/vm"
 )
@@ -22,6 +23,11 @@ type clientSink struct {
 	name string
 	send func(msg ServerMsg) error
 }
+
+// nextLiveWalkEpoch distinguishes successive live transports for the same
+// persisted session row. Browser reconnects to the same transport retain the
+// epoch; disconnect/connect creates a new Session and therefore a new epoch.
+var nextLiveWalkEpoch atomic.Int64
 
 type delayTask struct {
 	id      string
@@ -69,6 +75,79 @@ type Session struct {
 
 	lastCommandAt time.Time
 	ansiCarry     map[string]string
+
+	// Mapper position tracker. mapDetector detects room blocks in the
+	// incoming line pipeline; mapTracker holds the dead-reckoning state machine
+	// over the active set's in-memory index. Both are guarded by mapMu (never the
+	// hot-path s.mu). Nil until the active set is loaded.
+	//
+	// mapDetector is a mapper.RoomDetector INTERFACE, not the concrete accumulator.
+	// The room-format detector interface lets a session parse either with a
+	// declarative regex spec or with a contributed Go detector. Past this field
+	// nothing upstream can tell the difference.
+	//
+	// lastRoom is the most recent completed room block the parser produced (the
+	// "live room" the player is standing in). It is retained so a human write
+	// ("record this room into the map") can use the game's own
+	// text instead of asking the user to retype it. Guarded by mapMu; lastRoomOK
+	// distinguishes "no room seen yet" from an empty event.
+	//
+	// mapFormatRef/mapProfileID/mapProfileName/mapProfileErr describe WHICH room
+	// format mapDetector came from — the sessions.mapper_format reference it
+	// resolved from, the mapper_profiles row id when it is a db: reference (0
+	// otherwise), the display name, and, when the assignment could not be honoured,
+	// why the session fell back to the default. Resolved once per detector
+	// (re)build in LoadMapperProfile, never per line. Guarded by mapMu alongside
+	// mapDetector so the detector and its provenance can never disagree.
+	//
+	// mapProfileMu serializes LoadMapperProfile's resolve+swap so two concurrent
+	// admin edits cannot interleave and leave the session running the OLDER
+	// profile. It is deliberately NOT mapMu: resolution reads the DB, and mapMu
+	// must not be held across a DB read (a concurrent MCP mud_where would block on
+	// it). Lock order is always mapProfileMu -> mapMu, never the reverse.
+	//
+	// mapDetectorFellBack / mapDetectorDisabled are the crash latches. The first is
+	// set once a panicking detector has been swapped for the default; if the
+	// default then panics too, the second drops the detector entirely and the hot
+	// path returns early, so a permanently-panicking detector costs ONE stack dump
+	// rather than one per incoming line. Both are cleared by an explicit
+	// LoadMapperProfile. mapDetectorDisabled is also set when no detector could be
+	// built at all, so a nil detector never reaches the hot path.
+	mapProfileMu        sync.Mutex
+	mapMu               sync.Mutex
+	mapDetector         mapper.RoomDetector
+	mapDetectorFellBack bool
+	mapDetectorDisabled bool
+	mapTracker          *mapper.Tracker
+	lastRoom            mapper.RoomEvent
+	lastRoomOK          bool
+	mapFormatRef        string
+	mapProfileID        int64
+	mapProfileName      string
+	mapProfileErr       string
+
+	// mapWalk is a server-owned, confirmation-paced route. It deliberately has a
+	// separate lock from mapMu: path/tracker reads stay short and no network write
+	// or client broadcast happens while either lock is held.
+	mapWalkMu sync.Mutex
+	// mapWalkIOMu gates parser reconciliation while a physical route command is
+	// being written. It is intentionally separate from lifecycle mutexes: Close
+	// can close a stuck transport without waiting for this gate.
+	mapWalkIOMu sync.RWMutex
+	mapWalk     *mapWalkJob
+	// manualMoveReserved occupies the same physical-hop slot while a user
+	// command is between barrier admission and tracker FIFO publication.
+	manualMoveReserved bool
+	nextWalk           uint64
+	nextWalkRequest    uint64
+	mapWalkEpoch       int64
+	// Test-only interleaving hook. Nil in production.
+	mapWalkBeforeTimeoutInvalidate func()
+	// Test-only hook after a manual FIFO has been published but before its stale
+	// paused snapshot is broadcast. Nil in production.
+	mapWalkBeforeManualPausedBroadcast func()
+	// Test-only hook after dispatch claims the job and before any route write.
+	mapWalkBeforeDispatchWrite func()
 }
 
 func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM, initCmds string, mccpOn bool) (*Session, error) {
@@ -79,20 +158,21 @@ func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM, initCm
 	}
 
 	s := &Session{
-		sessionID: sessionID,
-		mudAddr:   mudAddr,
-		conn:      conn,
-		store:     store,
-		vm:        v,
-		clients:   make(map[int]clientSink),
-		timers:    make(map[string]*Timer),
-		delays:    make(map[string]*delayTask),
-		cmdQueue:  make(chan cmdItem, 100),
-		done:      make(chan struct{}),
-		readSrc:   conn,
-		initCmds:  initCmds,
-		mccpOn:    mccpOn,
-		ansiCarry: make(map[string]string),
+		sessionID:    sessionID,
+		mapWalkEpoch: nextLiveWalkEpoch.Add(1),
+		mudAddr:      mudAddr,
+		conn:         conn,
+		store:        store,
+		vm:           v,
+		clients:      make(map[int]clientSink),
+		timers:       make(map[string]*Timer),
+		delays:       make(map[string]*delayTask),
+		cmdQueue:     make(chan cmdItem, 100),
+		done:         make(chan struct{}),
+		readSrc:      conn,
+		initCmds:     initCmds,
+		mccpOn:       mccpOn,
+		ansiCarry:    make(map[string]string),
 	}
 
 	s.restoreTimers()
@@ -956,6 +1036,9 @@ func (s *Session) BroadcastResult(res vm.Result) {
 }
 
 func (s *Session) Close() error {
+	// A closed transport can never confirm its outstanding hop. Stop the timer
+	// before notifying clients so reconnect/restore cannot replay a stale route.
+	s.invalidateMapWalk("session disconnected")
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()

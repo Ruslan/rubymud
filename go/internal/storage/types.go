@@ -1,9 +1,35 @@
 package storage
 
-import "gorm.io/gorm"
+import (
+	"sync"
+
+	"gorm.io/gorm"
+)
 
 type Store struct {
-	db *gorm.DB
+	db     *gorm.DB
+	dbPath string
+
+	mcpListenersMu sync.Mutex
+	mcpListeners   map[*mcpSettingsListener]struct{}
+
+	// journal is the shared, in-memory per-map-set topology undo journal.
+	// Lazily created via WriteJournal(); guarded by journalMu so concurrent
+	// sessions don't race the lazy init.
+	journalMu sync.Mutex
+	journal   *WriteJournal
+
+	// topoLocks are the per-map-set mutexes serializing the topology write-path
+	// (fork decision + apply + journal) so concurrent sessions can't double-fork a
+	// frozen set. Guarded by topoMu for the lazy per-key create.
+	topoMu    sync.Mutex
+	topoLocks map[int64]*sync.Mutex
+}
+
+type mcpSettingsListener struct {
+	mu     sync.Mutex
+	active bool
+	notify func(MCPSettings)
 }
 
 func NewTestStore(db *gorm.DB) *Store {

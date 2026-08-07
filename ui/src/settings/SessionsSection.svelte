@@ -1,7 +1,19 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import './settings-section.css';
   import { inlineEditKeys } from './inline-edit-keys';
   import type { Profile, Session, SessionProfile } from './types';
+  import {
+    fetchMapSets,
+    fetchActiveMapSet,
+    saveActiveMapSet,
+    fetchMapperProfiles,
+    fetchSessionMapperProfile,
+    saveSessionMapperProfile,
+  } from './api';
+  import { mapperProfileLabel, mapperProvenanceNote } from './mapperProfileForm';
+  import { mapperProfileRef } from './types';
+  import type { MapperProfile } from './types';
 
   export let formError = '';
   export let sessions: Session[] = [];
@@ -72,6 +84,138 @@
       // Re-enabling follow adopts the current browser zone immediately.
       timezone: follow && browserTimezone ? browserTimezone : editingSessionDraft.timezone,
     };
+  }
+
+  // --- Map set selector ------------------------------------------------------
+  // The active map set is a session column managed outside the session record
+  // (see /api/sessions/{id}/active-map-set), so it has its own small state here.
+  let mapSets: Array<{ id: number; name: string; zone_count: number; room_count: number }> = [];
+  let activeMapSetID: number | null = null;
+  let mapSetLoadedFor: number | null = null;
+  let mapSetSaving = false;
+  let mapSetError = '';
+
+  async function loadMapSetState(sessionID: number) {
+    mapSetError = '';
+    try {
+      const [sets, active] = await Promise.all([fetchMapSets(), fetchActiveMapSet(sessionID)]);
+      mapSets = sets || [];
+      activeMapSetID = active?.active_map_set_id ?? null;
+      mapSetLoadedFor = sessionID;
+    } catch (err) {
+      mapSetError = err instanceof Error ? err.message : String(err);
+    }
+  }
+
+  // Load whenever the viewed session changes.
+  $: if (currentSession && currentSession.id !== mapSetLoadedFor) {
+    void loadMapSetState(currentSession.id);
+  }
+
+  onMount(() => {
+    const refresh = () => {
+      if (currentSession) {
+        mapSetLoadedFor = null;
+        void loadMapSetState(currentSession.id);
+      }
+    };
+    window.addEventListener('map-sets-changed', refresh);
+    return () => window.removeEventListener('map-sets-changed', refresh);
+  });
+
+  async function onMapSetChange(sessionID: number, value: string) {
+    const next = value === '' ? null : Number(value);
+    mapSetSaving = true;
+    mapSetError = '';
+    try {
+      const resp = await saveActiveMapSet(sessionID, next);
+      if (!resp.ok) throw new Error(await resp.text());
+      activeMapSetID = next;
+    } catch (err) {
+      mapSetError = err instanceof Error ? err.message : String(err);
+    } finally {
+      mapSetSaving = false;
+    }
+  }
+
+  // --- Room format selector --------------------------------------------------
+  // Like the map set above, `mapper_profile_id` is a session column managed
+  // outside the session record, so it carries its own small state here. Applying
+  // it is LIVE: the backend rebuilds the running session's room-block parser
+  // without a reconnect, and without touching the tracker's position.
+  //
+  // `activeError` is what a broken stored format looks like from here: the
+  // session fell back to the builtin and this is the reason why.
+  let mapperProfiles: MapperProfile[] = [];
+  // The STORED reference: '' = NULL = the default builtin. The reference replaced
+  // the row id because an id could not name a compiled-in detector.
+  let mapperFormat = '';
+  let mapperActiveName = '';
+  let mapperActiveError = '';
+  let mapperLoadedFor: number | null = null;
+  let mapperSaving = false;
+  let mapperError = '';
+
+  async function loadMapperProfileState(sessionID: number) {
+    mapperError = '';
+    try {
+      const [list, current] = await Promise.all([
+        fetchMapperProfiles(),
+        fetchSessionMapperProfile(sessionID),
+      ]);
+      mapperProfiles = list || [];
+      mapperFormat = current?.mapper_format ?? '';
+      mapperActiveName = current?.active_name ?? '';
+      mapperActiveError = current?.error ?? '';
+    } catch (err) {
+      mapperError = err instanceof Error ? err.message : String(err);
+    } finally {
+      // Marked in `finally`, NOT only on success. The reactive statement below
+      // re-fires on every one of the sessions tab's 1.5s polls, so leaving this
+      // unset after a failure turns a single broken response into two GETs a
+      // second, forever. The error stays on screen; the user can switch sessions
+      // to retry.
+      //
+      // (The map-set block above has this same bug at loadMapSetState — it is
+      // pre-existing and left alone deliberately, not an oversight.)
+      mapperLoadedFor = sessionID;
+    }
+  }
+
+  // Load whenever the viewed session changes. The `loadedFor` guard is what keeps
+  // this state alive through the sessions tab's 1.5s poll.
+  $: if (currentSession && currentSession.id !== mapperLoadedFor) {
+    void loadMapperProfileState(currentSession.id);
+  }
+
+  // Derived selector state. `builtinFormats` are the compiled-in detectors (the
+  // backend already orders them default-first); `storedFormats` are the user's
+  // own rows. `selectedFormat` drives the provenance/description note under the
+  // select, including the "cannot be copied" note for a Go detector.
+  $: builtinFormats = mapperProfiles.filter((p) => p.builtin);
+  $: storedFormats = mapperProfiles.filter((p) => !p.builtin);
+  $: defaultFormatLabel = builtinFormats[0] ? mapperProfileLabel(builtinFormats[0]) : 'rmud (builtin)';
+  $: selectedFormat =
+    mapperProfiles.find((p) => mapperProfileRef(p) === mapperFormat) ??
+    (mapperFormat === '' ? builtinFormats[0] : undefined);
+
+  async function onMapperProfileChange(sessionID: number, value: string) {
+    // The value IS the reference: '' (the default, stored NULL), 'builtin:<key>'
+    // or 'db:<id>'. No translation — the same string the backend stores.
+    mapperSaving = true;
+    mapperError = '';
+    try {
+      const resp = await saveSessionMapperProfile(sessionID, value);
+      if (!resp.ok) throw new Error(await resp.text());
+      const out = await resp.json();
+      mapperFormat = value;
+      mapperActiveName = out?.active_name ?? '';
+      mapperActiveError = out?.error ?? '';
+    } catch (err) {
+      mapperError = err instanceof Error ? err.message : String(err);
+    } finally {
+      mapperSaving = false;
+    }
   }
 </script>
 
@@ -213,6 +357,88 @@
       </select>
       <button class="btn-primary" disabled={!sessionProfileToAddID} on:click={() => { if (sessionProfileToAddID) addProfileToSession(sessionProfileToAddID); sessionProfileToAddID = undefined; }}>Add</button>
   </div>
+
+  <h3 style="margin-top: 40px; border-bottom: 1px solid #2d333b; padding-bottom: 8px;">Map Set for {currentSession.name}</h3>
+  <p class="description">Choose the world map this session follows. The <code>~map</code> buffer renders it and tracks the player's position.</p>
+  <div class="form-row" style="max-width: 400px">
+    <select
+      style="flex: 1; background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px; border-radius: 6px;"
+      disabled={mapSetSaving}
+      value={activeMapSetID === null ? '' : String(activeMapSetID)}
+      on:change={(e) => currentSession && onMapSetChange(currentSession.id, (e.currentTarget as HTMLSelectElement).value)}
+    >
+      <option value="">(none)</option>
+      {#each mapSets as ms}
+        <option value={String(ms.id)}>{ms.name} — {ms.zone_count} zones, {ms.room_count} rooms</option>
+      {/each}
+    </select>
+  </div>
+  {#if mapSets.length === 0}
+    <p class="description">No map sets imported yet.</p>
+  {/if}
+  {#if mapSetError}
+    <p class="description" style="color: #e74c3c;">Map set error: {mapSetError}</p>
+  {/if}
+
+  <h3 style="margin-top: 40px; border-bottom: 1px solid #2d333b; padding-bottom: 8px;">Room Format for {currentSession.name}</h3>
+  <p class="description">
+    How this session's output is parsed into rooms. Manage the formats on the
+    <a href="#room_formats">Room Formats</a> tab. Changing this applies to a running
+    session immediately.
+  </p>
+  <div class="form-row" style="max-width: 400px">
+    <select
+      style="flex: 1; background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px; border-radius: 6px;"
+      disabled={mapperSaving}
+      value={mapperFormat}
+      on:change={(e) => currentSession && onMapperProfileChange(currentSession.id, (e.currentTarget as HTMLSelectElement).value)}
+      aria-label="Room format"
+    >
+      <!-- Grouped so a user can see at a glance which formats ship with rubymud
+           and which they wrote.
+           The '' option and the builtin:rmud option below LOOK identical and
+           behave identically today, but they store different values: '' is NULL,
+           which FOLLOWS the default, while builtin:rmud PINS this session to rmud
+           even if the default ever changes. Two controls that differ only in a
+           consequence nobody can see is a trap, so the difference is spelled out
+           in both labels rather than left implicit. -->
+      <option value="">Default — follow whichever format ships as the default (currently {defaultFormatLabel})</option>
+      <optgroup label="Built in — pinned to this exact format">
+        {#each builtinFormats as mp}
+          <option value={mapperProfileRef(mp)}>
+            {mapperProfileLabel(mp)} — {mp.provenance ?? ''} — {mapperProfileRef(mp)}
+          </option>
+        {/each}
+      </optgroup>
+      {#if storedFormats.length}
+        <optgroup label="Your formats">
+          {#each storedFormats as mp}
+            <option value={mapperProfileRef(mp)}>{mapperProfileLabel(mp)} — {mapperProfileRef(mp)}</option>
+          {/each}
+        </optgroup>
+      {/if}
+    </select>
+  </div>
+  {#if selectedFormat}
+    <p class="description">{mapperProvenanceNote(selectedFormat)}</p>
+    {#if selectedFormat.description}
+      <p class="description">{selectedFormat.description}</p>
+    {/if}
+    {#if selectedFormat.go_detector}
+      <p class="description">
+        This is a Go detector compiled into rubymud. It is read-only and cannot be
+        copied into an editable format — there is no regex spec behind it.
+      </p>
+    {/if}
+  {/if}
+  {#if mapperActiveError}
+    <p class="description" style="color: #e74c3c;">Room format not applied: {mapperActiveError}</p>
+  {:else if mapperActiveName}
+    <p class="description">Currently using: <code>{mapperActiveName}</code></p>
+  {/if}
+  {#if mapperError}
+    <p class="description" style="color: #e74c3c;">Room format error: {mapperError}</p>
+  {/if}
 {/if}
 </section>
 

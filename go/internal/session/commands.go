@@ -1,16 +1,33 @@
 package session
 
 import (
+	"errors"
 	"log"
 	"strings"
 	"time"
 
+	"rubymud/go/internal/mapper"
 	"rubymud/go/internal/storage"
 	"rubymud/go/internal/vm"
 )
 
+var errMapWalkManualBarrier = errors.New("map walk is stopping; retry movement after confirmation")
+
+// IsMapWalkManualBarrier distinguishes the expected movement drain response
+// from a transport failure. WebSocket callers keep the connection alive so the
+// client can receive the subsequent stopped map-walk event and retry.
+func IsMapWalkManualBarrier(err error) bool {
+	return errors.Is(err, errMapWalkManualBarrier)
+}
+
 func (s *Session) sendTriggerCommand(cmd string, entryID int64, buffer string) error {
 	log.Printf("trigger sending command: %q (entry=%d, buffer=%s)", cmd, entryID, buffer)
+	dir, manualMove := mapper.MoveDir(cmd)
+	if manualMove {
+		if err := s.reserveManualMapMove(); err != nil {
+			return err
+		}
+	}
 	if err := s.store.AppendHistoryEntry(s.sessionID, "trigger", cmd); err != nil {
 		log.Printf("append history entry failed: %v", err)
 	}
@@ -21,7 +38,17 @@ func (s *Session) sendTriggerCommand(cmd string, entryID int64, buffer string) e
 	// Broadcast hint to clients immediately with correct context
 	s.broadcastCommandHint(cmd, entryID, buffer)
 
+	if manualMove {
+		return s.commitManualMapMove(cmd, dir)
+	}
 	_, err := s.conn.Write([]byte(cmd + "\n"))
+	if err == nil {
+		// Mapper: detect a movement direction only after the command actually
+		// reached the MUD, covering trigger/alias/speedwalk-sent moves (already
+		// alias/VM-expanded). Queuing before a failed write would leave an unsent
+		// direction in the FIFO and mis-reconcile the next room event.
+		s.observeOutgoingMove(cmd)
+	}
 	return err
 }
 
@@ -43,7 +70,8 @@ func (s *Session) SendCommandWithTrace(command string, source string) ([]string,
 		return nil, err
 	}
 
-	if source == "input" && originalCommand != "" {
+	directManualMove := false
+	if _, directManualMove = mapper.MoveDir(originalCommand); source == "input" && originalCommand != "" && !directManualMove {
 		if err := s.store.AppendHistoryEntry(s.sessionID, "input", originalCommand); err != nil {
 			log.Printf("append history entry failed: %v", err)
 		}
@@ -95,12 +123,25 @@ func (s *Session) SendCommandWithTrace(command string, source string) ([]string,
 			continue
 		}
 
+		dir, manualMove := mapper.MoveDir(cmd)
+		if manualMove {
+			if err := s.reserveManualMapMove(); err != nil {
+				return canonicalCommands, err
+			}
+		}
+
 		historyKind := source
 		if source == "input" {
 			historyKind = "expanded"
 		}
 
 		log.Printf("sending command to MUD: %q (source=%s)", cmd, source)
+		if directManualMove {
+			if err := s.store.AppendHistoryEntry(s.sessionID, "input", originalCommand); err != nil {
+				log.Printf("append history entry failed: %v", err)
+			}
+			directManualMove = false
+		}
 		if err := s.store.AppendHistoryEntry(s.sessionID, historyKind, cmd); err != nil {
 			log.Printf("append history entry failed: %v", err)
 		}
@@ -113,9 +154,20 @@ func (s *Session) SendCommandWithTrace(command string, source string) ([]string,
 				log.Printf("append command hint failed: %v", err)
 			}
 		}
+		if manualMove {
+			if err := s.commitManualMapMove(cmd, dir); err != nil {
+				return canonicalCommands, err
+			}
+			canonicalCommands = append(canonicalCommands, cmd)
+			continue
+		}
 		if _, err := s.conn.Write([]byte(cmd + "\n")); err != nil {
 			return canonicalCommands, err
 		}
+		// Mapper: detect a movement direction after a SUCCESSFUL write (after
+		// alias/VM expansion). Pushing before the write would leave an unsent
+		// direction in the FIFO on a mid-speedwalk write error.
+		s.observeOutgoingMove(cmd)
 		canonicalCommands = append(canonicalCommands, cmd)
 		s.mu.Lock()
 		s.lastCommandAt = time.Now()
@@ -126,6 +178,99 @@ func (s *Session) SendCommandWithTrace(command string, source string) ([]string,
 		s.BroadcastVariables()
 	}
 	return canonicalCommands, nil
+}
+
+// reserveManualMapMove claims the physical-hop slot before any history or UI
+// side effects. A rejected movement therefore never appears as an optimistic
+// command. It does no blocking I/O under mapWalkMu.
+func (s *Session) reserveManualMapMove() error {
+	s.mapWalkMu.Lock()
+	var stopped *MapWalkState
+	if s.manualMoveReserved {
+		s.mapWalkMu.Unlock()
+		return errMapWalkManualBarrier
+	}
+	if s.mapWalk != nil {
+		job := s.mapWalk
+		if job.paused {
+			s.manualMoveReserved = true
+			s.mapWalkMu.Unlock()
+			return nil
+		}
+		job.stopping = true
+		job.stopReason = "manual movement requested; waiting for route hop"
+		job.desired = nil
+		if job.inFlight || job.dispatching || job.planning {
+			st := s.mapWalkStateLocked("")
+			s.mapWalkMu.Unlock()
+			s.broadcastMapWalk(st)
+			return errMapWalkManualBarrier
+		}
+		if job.timer != nil {
+			job.timer.Stop()
+		}
+		s.mapWalk = nil
+		st := MapWalkState{JobID: job.id, Current: job.current, Total: len(job.steps), Reason: "manual movement requested", State: "stopped"}
+		stopped = &st
+	}
+	s.manualMoveReserved = true
+	s.mapWalkMu.Unlock()
+	if stopped != nil {
+		s.broadcastMapWalk(*stopped)
+	}
+	return nil
+}
+
+// commitManualMapMove writes and publishes the reserved manual hop without
+// holding lifecycle mutexes. The parser I/O gate gives it the same no-gap FIFO
+// publication guarantee as map-walk dispatch.
+func (s *Session) commitManualMapMove(cmd, dir string) error {
+	s.mapWalkIOMu.Lock()
+	n, err := s.conn.Write([]byte(cmd + "\n"))
+	if err == nil {
+		s.mapMu.Lock()
+		if s.mapTracker != nil {
+			s.mapTracker.PushMove(dir)
+		}
+		s.mapMu.Unlock()
+	}
+	s.mapWalkMu.Lock()
+	s.manualMoveReserved = false
+	var positionMsg ServerMsg
+	if err != nil && n > 0 {
+		s.mapMu.Lock()
+		if s.mapTracker != nil {
+			s.mapTracker.Invalidate("manual movement command outcome unknown")
+			positionMsg = s.roomPositionMsgLocked()
+		}
+		s.mapMu.Unlock()
+	}
+	var paused *MapWalkState
+	if s.mapWalk != nil && s.mapWalk.paused {
+		if err != nil && n > 0 {
+			s.mapWalk.pauseReason = "manual movement command outcome unknown — re-anchor before continuing"
+		}
+		st := s.mapWalkStateLocked("")
+		paused = &st
+	}
+	s.mapWalkMu.Unlock()
+	s.mapWalkIOMu.Unlock()
+	if s.mapWalkBeforeManualPausedBroadcast != nil {
+		s.mapWalkBeforeManualPausedBroadcast()
+	}
+	if paused != nil {
+		s.broadcastMapWalk(*paused)
+	}
+	if positionMsg.Type != "" {
+		s.broadcastMsg(positionMsg)
+	}
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.lastCommandAt = time.Now()
+	s.mu.Unlock()
+	return nil
 }
 
 func hasVariableChange(results []vm.Result) bool {

@@ -28,7 +28,7 @@ func TestRecentLogsLoadsButtonOverlays(t *testing.T) {
 	defer sqlDB.Close()
 
 	// Apply canonical migrations
-	if err := runMigrations(db); err != nil {
+	if err = runMigrations(db); err != nil {
 		t.Fatalf("runMigrations: %v", err)
 	}
 
@@ -60,5 +60,40 @@ func TestRecentLogsLoadsButtonOverlays(t *testing.T) {
 	}
 	if entries[0].Buttons[0].Label != "loot" || entries[0].Buttons[0].Command != "get all corpse" {
 		t.Fatalf("button overlay = %+v, want loot/get all corpse", entries[0].Buttons[0])
+	}
+}
+
+func TestMigrationsCreateBufferCursorIndex(t *testing.T) {
+	dbName := uuid.New().String()
+	dsn := fmt.Sprintf("file:%s?mode=memory&cache=shared", dbName)
+	db, err := gorm.Open(sqlite.Open(dsn), &gorm.Config{Logger: logger.Default.LogMode(logger.Silent)})
+	if err != nil {
+		t.Fatalf("gorm.Open: %v", err)
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		t.Fatalf("db.DB: %v", err)
+	}
+	t.Cleanup(func() { _ = sqlDB.Close() })
+	if err := runMigrations(db); err != nil {
+		t.Fatalf("runMigrations: %v", err)
+	}
+
+	type indexColumn struct {
+		SeqNo int    `gorm:"column:seqno"`
+		Name  string `gorm:"column:name"`
+	}
+	var columns []indexColumn
+	if err := db.Raw("PRAGMA index_info('log_entries_session_window_id_idx')").Scan(&columns).Error; err != nil {
+		t.Fatalf("PRAGMA index_info: %v", err)
+	}
+	want := []string{"session_id", "window_name", "id"}
+	if len(columns) != len(want) {
+		t.Fatalf("buffer cursor index columns = %#v, want %v", columns, want)
+	}
+	for i, name := range want {
+		if columns[i].Name != name {
+			t.Fatalf("buffer cursor index column %d = %q, want %q", i, columns[i].Name, name)
+		}
 	}
 }

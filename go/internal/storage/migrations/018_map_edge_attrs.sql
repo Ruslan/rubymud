@@ -1,0 +1,95 @@
+-- map_edges attributes — directed traversal phrases, door/lock/open commands,
+-- and the BFS no-route veto. Five columns on the DIRECTED row, because all five
+-- statements are about the side you approach the passage from, which is the
+-- argument migration 016 already makes for the table being directed at all.
+--
+-- WHY A NEW FILE AND NOT AN EDIT TO 016/017: migrations are keyed by FILENAME in
+-- schema_migrations and applied at most once, so a database that already ran 017
+-- would never see a changed 017 and would then meet code selecting columns its
+-- table does not have — the store fails to open at all, including
+-- `--rematerialize-edges`, the one repair handle. 017's header says the same; this
+-- is the second time it applies.
+--
+--   phrase    The command that TAKES this passage, instead of the direction. Free
+--             text ("двигать ящик"), because that is what the MUD accepts and it is
+--             not derivable from anything: the room's exits line says "d", the way
+--             through is "двигать ящик". One-sided by nature — the same hole is
+--             "двигать ящик" going down and "лезть ковёр" coming back up — which is
+--             precisely why it is a column on the directed row and not on a pair.
+--             When set, the route emits it in place of the direction letter.
+--
+--   door      A door stands on THIS face. Unlike the four columns around it this
+--             one IS derivable — from rooms.doors, which the importer fills from the
+--             parentheses in the exits line — and the derivation sets it on every
+--             parsed row (storage.deriveGridEdge). That is the migration of
+--             rooms.doors ONTO the edges: after it, mapper.doorGrade asks the edge
+--             instead of the room, and the two-sided reading it had (confirmed on
+--             the walked face, presumed on the target's reverse face) becomes two
+--             lookups of the same column on the two directed rows of the passage.
+--             rooms.doors is NOT dropped here — it is the derivation's input and only
+--             becomes redundant if the parse ever moves; removing it is its own step.
+--
+--   locked    That door is locked BY DEFAULT from this side. A door is routinely
+--             locked one way and freely openable the other, so this cannot live on a
+--             passage. It does not stop a route (the player may hold the key) — it is
+--             reported on the hop, so "the walk stopped here" has a reason.
+--
+--   open_cmd  The command that opens the door FROM THIS SIDE. Free text for the same
+--             reason as `phrase`: hard-coding "откр две <dir>" would nail the markup
+--             to RMUD's Russian verbs, and the markup has to be able to describe a
+--             lever, a password or an English MUD. Empty means "no per-edge command
+--             recorded", and the route falls back to the mapper's default template
+--             (mapper.DefaultDoorOpen) — which is what the 305 imported doors use,
+--             none of which carries a command.
+--
+--   no_route  "Passable, but do not plan a route through me." A THIRD state of a
+--             face, not to be confused with the two 017 introduced:
+--               passable=0  there is no way — the tracker refuses the step and the
+--                           BFS does not see an edge at all;
+--               no_route=1  there IS a way and walking it is fine — the tracker
+--                           accepts the step exactly as before — but the router must
+--                           not choose it. "You can get through here, just do not
+--                           send me this way": a DT-like or dubious transition.
+--             It is a property of the directed TRANSITION, which is what separates it
+--             from rooms.is_dt (a property of a room, already refused as a target).
+--             Because a veto is invisible in a "no route" answer, FindPath re-runs
+--             the search ignoring the vetoes and says so when that is the only thing
+--             standing in the way — otherwise the player hunts for a hole in the map
+--             that does not exist.
+--
+-- DEFAULTS ARE THE PRE-MIGRATION MEANING for every existing row, so the ALTERs
+-- backfill themselves: before this column set, no edge carried a phrase, a lock, an
+-- open command or a veto. `door` is the exception — its correct value comes from
+-- rooms.doors, and it is NOT computed in SQL here: the derivation rule lives in Go
+-- (storage.DeriveEdges) on purpose, and restating it in a migration would create the
+-- second implementation that materialization exists to remove. Instead Open
+-- rematerializes every set's derived rows once, right after this migration is
+-- applied (storage.Open / runMigrations reporting what it ran), which runs the ONE
+-- rule and therefore cannot disagree with it.
+ALTER TABLE map_edges ADD COLUMN phrase   TEXT    NOT NULL DEFAULT '';
+ALTER TABLE map_edges ADD COLUMN door     INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE map_edges ADD COLUMN locked   INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE map_edges ADD COLUMN open_cmd TEXT    NOT NULL DEFAULT '';
+ALTER TABLE map_edges ADD COLUMN no_route INTEGER NOT NULL DEFAULT 0;
+
+-- "Which rows of this set say anything at all." PARTIAL, and its WHERE is repeated
+-- verbatim by storage.attachEdgeAttrs so SQLite can use it.
+--
+-- Two reads carry this layer and both are on paths that must not get slower: the
+-- index build (storage.ListMapEdges — whole set, ~19k rows, on every reconnect and
+-- after every topology write) and the zone fetch (storage.ListSlimRooms — ~1k rows,
+-- on every rooms_changed, i.e. after every map write). These five columns are set on
+-- a FEW HUNDRED rows of a set (308 doors and nothing else, before anyone marks a
+-- thing), so carrying them as five more columns on those scans charges the whole map
+-- for data that is almost always the default — the driver marshals every column of
+-- every row either way. MEASURED on the owner's set: +19% on the index read.
+--
+-- So both readers take them in a SECOND, FILTERED query instead, and this index is
+-- what keeps that query from being another full scan. Its WHERE is repeated verbatim
+-- by storage.attachEdgeAttrs and by ListSlimRooms so SQLite can use it; the
+-- from_zone column in the key lets the zone fetch narrow to its own rows. The result
+-- is that the price of the attribute layer tracks the amount of MARKUP rather than
+-- the size of the map — the same argument, and the same shape, as idx_map_edges_from
+-- versus the whole-set manual-face query.
+CREATE INDEX IF NOT EXISTS idx_map_edges_attrs ON map_edges (map_set_id, from_zone, id)
+    WHERE door = 1 OR locked = 1 OR no_route = 1 OR phrase <> '' OR open_cmd <> '';

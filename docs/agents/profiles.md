@@ -2,6 +2,12 @@
 
 Use this when you need to understand how configuration rules (aliases, triggers, variables, timers) are resolved across multiple profiles.
 
+## Not to be confused with: mapper profiles (room formats)
+
+`mapper_profiles` is a **different entity** that merely shares the word. It describes one server's ROOM TEXT FORMAT for the mapper (exits regex, block boundaries, left-column strip, header rule) and is **not layered**: a session selects exactly one via `sessions.mapper_format`, the same deliberate exception the mapper's `active_map_set_id` makes. The rationale is identical — a room format is a property of the MUD you are connected to, not of the user's alias/trigger stack, so there is nothing sensible to merge across layers. See `go/internal/mapper/profile.go` and `docs/agents/sqlite.md`.
+
+Everything below is about the layered configuration profiles only.
+
 ## Layering Logic
 
 A session in `rubymud` can have multiple active profiles. This is a "layered" system where rules from higher-priority profiles can override or augment rules from lower-priority ones.

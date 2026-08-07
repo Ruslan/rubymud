@@ -1,4 +1,17 @@
-# Feature Request — MCP Improvements
+# Feature Request — MCP Improvements (Done)
+
+## Completion Note
+
+Completed in the final MCP slice. The current implementation provides the
+disabled-by-default endpoint, CLI/environment configuration, independent bearer
+authentication with tokenless-loopback enforcement, Origin rejection,
+per-opaque-MCP-session/MUD-session/buffer ephemeral continuity, buffer-aware
+text tools, and the stable user/developer contract at `docs/mcp.md`. Runtime
+configuration is deliberately CLI/environment-only, not a Settings UI feature.
+Coverage lives with the MCP handler and its focused tests in `go/internal/web/`.
+
+The remainder of this file is the original request retained as historical
+planning context; its proposed wording should not override the current contract.
 
 ## Context
 
@@ -36,14 +49,16 @@ Required outcomes:
 1. document the `/mcp` endpoint and transport model
 2. document all currently shipped MCP tools
 3. document real parameters, defaults, and response shapes
-4. document how Claude Code / Claude Desktop or other MCP clients should connect
+4. document how a generic Streamable HTTP MCP client should connect
 5. clearly distinguish stable current behavior from future/planned behavior
 
 Suggested target:
 
 - `docs/mcp.md`
 
-The old `docs/dev/version-0.0.6.4-mcp.md` should remain as historical planning context, not as the main current spec.
+The initial implementation record is retained as
+[`version-0.0.6.4-fact.md`](version-0.0.6.4-fact.md), not as the main current
+spec.
 
 ### 2. MCP Enable / Disable Setting
 
