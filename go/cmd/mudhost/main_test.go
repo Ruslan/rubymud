@@ -7,8 +7,19 @@ import (
 	"strings"
 	"testing"
 
+	"rubymud/go/internal/buildinfo"
 	"rubymud/go/internal/web"
 )
+
+func TestVersionLineUsesBuildMetadata(t *testing.T) {
+	previous := buildinfo.Version
+	buildinfo.Version = "v9.8.7-test"
+	t.Cleanup(func() { buildinfo.Version = previous })
+
+	if got := versionLine(); got != "mudhost v9.8.7-test" {
+		t.Fatalf("versionLine() = %q", got)
+	}
+}
 
 func testEnv(values map[string]string) func(string) (string, bool) {
 	return func(key string) (string, bool) {

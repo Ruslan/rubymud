@@ -17,6 +17,7 @@ import (
 	// of depending on the container having a tzdata package installed.
 	_ "time/tzdata"
 
+	"rubymud/go/internal/buildinfo"
 	"rubymud/go/internal/session"
 	"rubymud/go/internal/storage"
 	"rubymud/go/internal/web"
@@ -98,6 +99,7 @@ func runtimeDataDir(db string) (string, error) {
 }
 
 func main() {
+	showVersion := flag.Bool("version", false, "Print version and exit")
 	mudAddr := flag.String("mud", "", "Optional: initial MUD server address in host:port format")
 	listenAddr := flag.String("listen", ":8080", "HTTP listen address")
 	dbPath := flag.String("db", "data/mudhost.db", "SQLite database path")
@@ -110,6 +112,10 @@ func main() {
 	flag.Var(&mcpEnabled, "mcp", "Enable the MCP endpoint (default: MUDHOST_MCP_ENABLED or false)")
 	flag.Var(&mcpToken, "mcp-token", "Bearer token for MCP (default: MUDHOST_MCP_TOKEN; empty allows loopback-only MCP)")
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(versionLine())
+		return
+	}
 
 	mcpConfig, err := resolveMCPConfig(os.LookupEnv, mcpEnabled, mcpToken)
 	if err != nil {
@@ -204,6 +210,10 @@ func main() {
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("web server failed: %v", err)
 	}
+}
+
+func versionLine() string {
+	return "mudhost " + buildinfo.Version
 }
 
 func listenURL(addr string) string {

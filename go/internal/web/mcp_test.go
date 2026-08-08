@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"rubymud/go/internal/buildinfo"
 	"rubymud/go/internal/session"
 	"rubymud/go/internal/storage"
 	"rubymud/go/internal/vm"
@@ -119,8 +120,12 @@ func TestMCPInitialize(t *testing.T) {
 	}
 
 	result := res.Result.(map[string]any)
-	if result["serverInfo"].(map[string]any)["name"] != "mudhost-mcp" {
+	serverInfo := result["serverInfo"].(map[string]any)
+	if serverInfo["name"] != "mudhost-mcp" {
 		t.Errorf("unexpected server name: %v", result["serverInfo"])
+	}
+	if serverInfo["version"] != buildinfo.Version {
+		t.Errorf("server version = %v, want build version %q", serverInfo["version"], buildinfo.Version)
 	}
 }
 

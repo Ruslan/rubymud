@@ -34,17 +34,19 @@ jobs:
         run: |
           mkdir -p dist
 
+          LDFLAGS="-X rubymud/go/internal/buildinfo.Version=${GITHUB_REF_NAME}"
+
           GOOS=windows GOARCH=amd64 \
-            go build -o dist/mudhost.exe ./cmd/mudhost
+            go build -ldflags "${LDFLAGS}" -o dist/mudhost.exe ./cmd/mudhost
 
           GOOS=darwin GOARCH=amd64 \
-            go build -o dist/mudhost-mac-intel ./cmd/mudhost
+            go build -ldflags "${LDFLAGS}" -o dist/mudhost-mac-intel ./cmd/mudhost
 
           GOOS=darwin GOARCH=arm64 \
-            go build -o dist/mudhost-mac-arm ./cmd/mudhost
+            go build -ldflags "${LDFLAGS}" -o dist/mudhost-mac-arm ./cmd/mudhost
 
           GOOS=linux GOARCH=amd64 \
-            go build -o dist/mudhost-linux-amd64 ./cmd/mudhost
+            go build -ldflags "${LDFLAGS}" -o dist/mudhost-linux-amd64 ./cmd/mudhost
         working-directory: go
 
       - name: Create release

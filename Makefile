@@ -5,6 +5,8 @@ BIN_NAME := mudhost
 MUD ?= 127.0.0.1:4000
 LISTEN ?= :8080
 DB_PATH ?= data/mudhost.db
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || printf 'dev')
+GO_LDFLAGS ?= -X rubymud/go/internal/buildinfo.Version=$(VERSION)
 
 .PHONY: help run build go-build test tidy db-init db-schema ui docker-build docker-run smoke-tzdata
 
@@ -51,7 +53,7 @@ build: ui
 
 go-build:
 	mkdir -p "$(BIN_DIR)"
-	cd "$(GO_DIR)" && go build -o "../$(BIN_DIR)/$(BIN_NAME)" ./cmd/mudhost
+	cd "$(GO_DIR)" && go build -ldflags "$(GO_LDFLAGS)" -o "../$(BIN_DIR)/$(BIN_NAME)" ./cmd/mudhost
 
 test:
 	cd "$(GO_DIR)" && go test ./...

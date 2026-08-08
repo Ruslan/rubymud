@@ -16,6 +16,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"rubymud/go/internal/buildinfo"
 	"rubymud/go/internal/storage"
 )
 
@@ -147,7 +148,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		res = map[string]any{
 			"protocolVersion": negotiateMCPProtocolVersion(params.ProtocolVersion),
 			"capabilities":    map[string]any{"tools": map[string]any{}},
-			"serverInfo":      map[string]any{"name": "mudhost-mcp", "version": "0.0.6.4"},
+			"serverInfo":      map[string]any{"name": "mudhost-mcp", "version": buildinfo.Version},
 		}
 	case "tools/list":
 		res = s.mcpListTools()

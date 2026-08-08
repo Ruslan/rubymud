@@ -1,5 +1,7 @@
 FROM node:24-alpine AS builder
 
+ARG VERSION=dev
+
 RUN apk add --no-cache go make
 
 WORKDIR /build
@@ -17,7 +19,7 @@ RUN cd go && go mod download
 # Copy source code and build
 COPY ui ./ui
 COPY go ./go
-RUN CGO_ENABLED=0 make build
+RUN CGO_ENABLED=0 make build VERSION="${VERSION}"
 
 FROM alpine:latest
 
