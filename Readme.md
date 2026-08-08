@@ -183,3 +183,7 @@ cd go && go run ./cmd/mudhost
 ```
 
 Compiled binaries are written to `bin/`, not next to the source package.
+
+## License
+
+RubyMUD is licensed under the [Apache License 2.0](LICENSE).
