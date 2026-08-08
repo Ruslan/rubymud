@@ -19,13 +19,27 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
+      - name: Install UI dependencies
+        run: npm ci
+        working-directory: ui
+
+      - name: Run UI tests
+        run: npm test
+        working-directory: ui
+
       - name: Build UI
-        run: cd ui && npm ci && npm run build
+        run: npm run build
+        working-directory: ui
 
       - uses: actions/setup-go@v5
         with:
           go-version-file: go/go.mod
           cache-dependency-path: go/go.sum
 
-      - name: Run tests
-        run: cd go && go test ./...
+      - name: Run Go tests
+        run: go test ./...
+        working-directory: go
+
+      - name: Vet Go
+        run: go vet ./...
+        working-directory: go
