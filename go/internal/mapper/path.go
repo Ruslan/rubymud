@@ -113,7 +113,8 @@ func (q *pathQueue) Pop() any {
 }
 
 // dirWordRU renders a canonical direction letter as the Russian word RMUD takes as
-// the argument of an open command. Mirrors the UI's dirName (ui/src/map/edgeEditor.ts).
+// the argument of an open command. Mirrors the command substitution in
+// ui/src/map/edgeEditor.ts:renderDefaultOpen.
 // It is reachable ONLY through a profile template that asks for "{dir}", so no
 // Russian reaches a mud that did not request it.
 var dirWordRU = map[string]string{
@@ -386,8 +387,8 @@ func (idx *Index) FindPath(start Coord, goal func(*IndexRoom) bool) PathResult {
 	}
 	if alt, _ := idx.findPath(start, goal, true); alt.Reachable {
 		res.VetoedOnly = true
-		res.Reason = "маршрут есть, но только через грани с пометкой «не водить сюда» — " +
-			"снимите пометку в редакторе ребра, если туда всё-таки можно"
+		res.Reason = "a route exists only through edges marked \"avoid in routes\" — " +
+			"clear the mark in the edge editor if the passage is usable"
 	}
 	return res
 }

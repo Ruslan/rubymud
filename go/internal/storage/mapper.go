@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode"
 
+	"golang.org/x/text/unicode/norm"
 	"gorm.io/gorm"
 
 	"rubymud/go/internal/mapimport"
@@ -502,6 +503,70 @@ type SlimCrossZoneGrid struct {
 	ToX      int    `json:"x"`
 	ToY      int    `json:"y"`
 	ToL      int    `json:"l"`
+}
+
+// MapRoomSearchResult is the intentionally small cross-zone search payload.
+// Opening a result loads its full zone through ListSlimRooms as usual.
+type MapRoomSearchResult struct {
+	Zone string `json:"z"`
+	Hint string `json:"h"`
+	X    int    `json:"x"`
+	Y    int    `json:"y"`
+	L    int    `json:"l"`
+}
+
+// SearchMapRooms scans only the five columns needed by the map search. SQLite's
+// built-in lower() is ASCII-only, so matching is folded in Go for room names in
+// any script. The current zone is returned first without excluding other zones.
+func (s *Store) SearchMapRooms(mapSetID int64, query, preferredZone string, limit int) ([]MapRoomSearchResult, error) {
+	needle := strings.ToLower(norm.NFC.String(strings.TrimSpace(query)))
+	if needle == "" || limit <= 0 {
+		return []MapRoomSearchResult{}, nil
+	}
+	if limit > 100 {
+		limit = 100
+	}
+
+	rows, err := s.db.Raw(`SELECT zone, hint, x, y, l
+		FROM rooms
+		WHERE map_set_id = ? AND hint <> ''
+		ORDER BY id`, mapSetID).Rows()
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	preferred := make([]MapRoomSearchResult, 0, limit)
+	other := make([]MapRoomSearchResult, 0, limit)
+	for rows.Next() {
+		var hit MapRoomSearchResult
+		if err := rows.Scan(&hit.Zone, &hit.Hint, &hit.X, &hit.Y, &hit.L); err != nil {
+			return nil, err
+		}
+		haystack := strings.ToLower(norm.NFC.String(hit.Hint))
+		if !strings.Contains(haystack, needle) {
+			continue
+		}
+		if hit.Zone == preferredZone {
+			if len(preferred) < limit {
+				preferred = append(preferred, hit)
+			}
+		} else if len(other) < limit {
+			other = append(other, hit)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	results := make([]MapRoomSearchResult, 0, limit)
+	results = append(results, preferred...)
+	remaining := limit - len(results)
+	if remaining > 0 && len(other) > remaining {
+		other = other[:remaining]
+	}
+	results = append(results, other...)
+	return results, nil
 }
 
 // SlimEdgeAttr is one face's attribute set on the wire, with the defaults omitted

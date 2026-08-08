@@ -64,7 +64,7 @@ describe("edge face state", () => {
     expect(faceState(fb, "N")).toBe("fallback");
     expect(passableNow(faceState(fb, "N"))).toBe(true);
     expect(provenanceLabel("fallback")).not.toBe(provenanceLabel("derived"));
-    expect(provenanceLabel("fallback")).toContain("смежности");
+    expect(provenanceLabel("fallback")).toContain("adjacency");
     // It is deniable and un-deniable exactly like a parsed edge.
     expect(markFor("fallback", false)).toBe("blocked");
     expect(markFor("fallback", true)).toBeNull();
@@ -79,9 +79,9 @@ describe("edge face state", () => {
     );
     expect(seen.size).toBe(5);
     // The two hand-drawn states must be recognisable as hand-drawn.
-    expect(provenanceLabel("open")).toContain("вручную");
-    expect(provenanceLabel("blocked")).toContain("вручную");
-    expect(provenanceLabel("derived")).toContain("текста");
+    expect(provenanceLabel("open")).toContain("manually");
+    expect(provenanceLabel("blocked")).toContain("manually");
+    expect(provenanceLabel("derived")).toContain("room text");
   });
 });
 

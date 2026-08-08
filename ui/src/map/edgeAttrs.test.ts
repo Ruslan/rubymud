@@ -149,7 +149,7 @@ describe("attrsSummary", () => {
   });
 
   it("keeps a non-default weight concise", () => {
-    expect(attrsSummary({ ...emptyEdgeAttrs, weight: 0.5 }, "N", DEFAULT_OPEN)).toBe("вес 0.5");
+    expect(attrsSummary({ ...emptyEdgeAttrs, weight: 0.5 }, "N", DEFAULT_OPEN)).toBe("weight 0.5");
   });
 
   it("names the phrase the route will send instead of the direction", () => {
@@ -159,7 +159,7 @@ describe("attrsSummary", () => {
       DEFAULT_OPEN,
     );
     expect(s).toContain("двигать ящик");
-    expect(s).toContain("вместо направления");
+    expect(s).toContain("instead of the direction");
   });
 
   it("shows the DEFAULT opening command for a door with none of its own", () => {
@@ -183,13 +183,13 @@ describe("attrsSummary", () => {
       "N",
       DEFAULT_OPEN,
     );
-    expect(s).toContain("двери на грани нет");
+    expect(s).toContain("this edge has no door");
   });
 
   it("says a veto still lets you walk — that is what separates it from a negation", () => {
     const s = attrsSummary({ ...emptyEdgeAttrs, noRoute: true }, "N", DEFAULT_OPEN);
-    expect(s).toContain("маршруты сюда не строятся");
-    expect(s).toContain("пройти можно");
+    expect(s).toContain("routes avoid this edge");
+    expect(s).toContain("manual movement still works");
   });
 
   it("reports a lock as needing a key rather than as a wall", () => {
@@ -198,7 +198,7 @@ describe("attrsSummary", () => {
       "N",
       DEFAULT_OPEN,
     );
-    expect(s).toContain("ключ");
+    expect(s).toContain("a key is required");
   });
 });
 
@@ -248,7 +248,7 @@ describe("attrsSummary without a room-format door verb", () => {
   it("says the route will NOT open the door, rather than promising an empty command", () => {
     const s = attrsSummary({ ...emptyEdgeAttrs, door: true }, "N", "");
     expect(s).not.toContain("«»");
-    expect(s).toContain("маршрут дверь не откроет");
+    expect(s).toContain("the route will not open the door");
   });
 
   it("still promises the edge's OWN command, which works on any mud", () => {

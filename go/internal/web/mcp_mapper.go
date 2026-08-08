@@ -493,7 +493,7 @@ func formatPath(targetDesc string, res mapper.PathResult) (string, bool) {
 		case mapper.DoorConfirmed:
 			tag += "  [DOOR" + doorOpenNote(st.OpenAction) + "]"
 		case mapper.DoorPresumed:
-			tag += "  [дверь? presumed" + doorOpenNote(st.OpenAction) + "]"
+			tag += "  [door? presumed" + doorOpenNote(st.OpenAction) + "]"
 		}
 		if st.Locked {
 			tag += "  [LOCKED by default from this side — key needed]"

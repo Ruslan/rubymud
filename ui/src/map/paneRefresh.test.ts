@@ -231,10 +231,10 @@ describe("map pane corpus refresh", () => {
 
     const menu = pane.root.querySelector<HTMLElement>(".map-edge-menu")!;
     const checks = [...menu.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')];
-    expect(checks.find((input) => input.parentElement?.textContent?.includes("дверь"))?.checked).toBe(true);
-    expect(checks.find((input) => input.parentElement?.textContent?.includes("заперта"))?.checked).toBe(true);
+    expect(checks.find((input) => input.parentElement?.textContent?.includes("door"))?.checked).toBe(true);
+    expect(checks.find((input) => input.parentElement?.textContent?.includes("locked"))?.checked).toBe(true);
     expect([...menu.querySelectorAll<HTMLInputElement>('input[type="text"]')]
-      .find((input) => input.parentElement?.textContent?.includes("команда открытия"))?.value).toBe("open portal");
+      .find((input) => input.parentElement?.textContent?.includes("opening command"))?.value).toBe("open portal");
   });
 
   it("rolls a pending seam failure back to attrs received during refresh", async () => {
@@ -253,7 +253,7 @@ describe("map pane corpus refresh", () => {
     });
     internal.openSeamMenu(internal.zoneCache.get("B")![0]!, seam, 100, 100);
     const door = [...pane.root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-      .find((input) => input.parentElement?.textContent?.includes("дверь"))!;
+      .find((input) => input.parentElement?.textContent?.includes("door"))!;
     door.click();
     await vi.waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url.includes("map-edge-attrs"))).toBe(true));
 
@@ -265,7 +265,7 @@ describe("map pane corpus refresh", () => {
 
     await vi.waitFor(() => {
       const phrase = [...pane.root.querySelectorAll<HTMLInputElement>('input[type="text"]')]
-        .find((input) => input.parentElement?.textContent?.includes("фраза перехода"));
+        .find((input) => input.parentElement?.textContent?.includes("traversal phrase"));
       expect(phrase?.value).toBe("remote");
     });
   });
@@ -289,9 +289,9 @@ describe("map pane corpus refresh", () => {
 
     const first = pane.root.querySelector<HTMLElement>(".map-edge-menu__side")!;
     expect([...first.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-      .find((input) => input.parentElement?.textContent?.includes("дверь"))?.checked).toBe(true);
+      .find((input) => input.parentElement?.textContent?.includes("door"))?.checked).toBe(true);
     expect([...first.querySelectorAll<HTMLInputElement>('input[type="text"]')]
-      .find((input) => input.parentElement?.textContent?.includes("команда открытия"))?.value).toBe("open east");
+      .find((input) => input.parentElement?.textContent?.includes("opening command"))?.value).toBe("open east");
   });
 
   it("closes the grid attrs editor when refresh removes its directed passage", async () => {
@@ -328,7 +328,7 @@ describe("map pane corpus refresh", () => {
 
     const menu = pane.root.querySelector<HTMLElement>(".map-edge-menu")!;
     [...menu.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-      .find((input) => input.parentElement?.textContent?.includes("дверь"))!
+      .find((input) => input.parentElement?.textContent?.includes("door"))!
       .click();
     await vi.waitFor(() => expect(fetchMock.mock.calls.some(([url]) => url.includes("map-edge-attrs"))).toBe(true));
 

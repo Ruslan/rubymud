@@ -79,8 +79,8 @@ describe("map pane status", () => {
       ".map-pane__status-close",
     );
     expect(close?.type).toBe("button");
-    expect(close?.getAttribute("aria-label")).toBe("Закрыть сообщение");
-    expect(close?.title).toBe("Закрыть сообщение");
+    expect(close?.getAttribute("aria-label")).toBe("Dismiss message");
+    expect(close?.title).toBe("Dismiss message");
     close?.focus();
     expect(document.activeElement).toBe(close);
     close?.click();
@@ -139,7 +139,7 @@ describe("map pane status", () => {
       jsonRes({ reachable: true, directions: ["N"], summary: "1 step", locked: 1 }),
     );
     await internals.routeToCell(room, room, "insert");
-    expect(status(pane).textContent).toContain("нужен ключ");
+    expect(status(pane).textContent).toContain("a key is required");
     await vi.advanceTimersByTimeAsync(20_000);
     expect(status(pane).style.display).not.toBe("none");
   });

@@ -25,7 +25,7 @@ type GridAttrEditor = {
 
 function weightInput(value: number, commit: (value: number) => void): HTMLInputElement {
   const pane = Object.create(MapPaneController.prototype) as WeightInputFactory;
-  return pane.attrNumber("Вес маршрута", value, commit).querySelector("input")!;
+  return pane.attrNumber("Route weight", value, commit).querySelector("input")!;
 }
 
 describe("edge routing weight input", () => {
@@ -109,15 +109,15 @@ describe("edge routing weight input", () => {
     pane.appendEdgeAttrControls(host, side);
 
     [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-      .find((input) => input.parentElement?.textContent?.includes("дверь"))!
+      .find((input) => input.parentElement?.textContent?.includes("door"))!
       .click();
 
     await vi.waitFor(() => expect(pane.writeEdgeAttrs).toHaveBeenCalledWith(side, { door: true }));
     const door = [...host.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-      .find((input) => input.parentElement?.textContent?.includes("дверь"));
+      .find((input) => input.parentElement?.textContent?.includes("door"));
     expect(door?.checked).toBe(true);
     expect([...host.querySelectorAll<HTMLInputElement>('input[type="text"]')]
-      .find((input) => input.parentElement?.textContent?.includes("команда открытия")))
+      .find((input) => input.parentElement?.textContent?.includes("opening command")))
       .toBeDefined();
     host.remove();
   });

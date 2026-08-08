@@ -49,6 +49,7 @@ import {
 import type {
   Confidence,
   LiveRoom,
+  MapRoomSearchResult,
   PlayerPosition,
   SlimRoom,
   SeamTarget,
@@ -119,32 +120,32 @@ function describeAttrPatch(
 ): string {
   if (patch.phrase !== undefined) {
     return patch.phrase
-      ? `проход берётся фразой «${patch.phrase}» вместо направления`
-      : "фраза перехода снята — грань снова берётся направлением";
+      ? `passage uses '${patch.phrase}' instead of the direction`
+      : "traversal phrase removed — the edge uses its direction again";
   }
   if (patch.door !== undefined) {
     return patch.door
-      ? "дверь отмечена — маршрут пошлёт открытие перед шагом"
-      : "дверь снята";
+      ? "door marked — the route sends an opening command before the step"
+      : "door mark removed";
   }
   if (patch.locked !== undefined) {
     return patch.locked
-      ? "дверь помечена запертой по умолчанию с этой стороны"
-      : "пометка «заперта» снята";
+      ? "door marked locked by default from this side"
+      : "locked mark removed";
   }
   if (patch.open_cmd !== undefined) {
-    if (patch.open_cmd) return `команда открытия: «${patch.open_cmd}»`;
+    if (patch.open_cmd) return `opening command: '${patch.open_cmd}'`;
     return doorOpen
-      ? `команда открытия сброшена — маршрут пошлёт «${renderDefaultOpen(doorOpen, dir)}»`
-      : "команда открытия сброшена — формат комнат этого мада двери открывать не умеет," +
-        " маршрут ничего не пошлёт";
+      ? `opening command reset — the route sends '${renderDefaultOpen(doorOpen, dir)}'`
+      : "opening command reset — this MUD's room format does not open doors," +
+        " so the route sends nothing";
   }
   if (patch.no_route !== undefined) {
     return patch.no_route
-      ? "маршруты сюда строиться не будут (пройти по-прежнему можно)"
-      : "маршруты сюда снова разрешены";
+      ? "routes will avoid this edge (manual movement still works)"
+      : "routing through this edge is allowed again";
   }
-  return "атрибут ребра записан";
+  return "edge attribute saved";
 }
 
 interface MapPaneConfig {
@@ -211,6 +212,9 @@ export class MapPaneController {
   private searchOpener: HTMLElement | null = null;
   private managerOpener: HTMLElement | null = null;
   private searchResults: HTMLElement | null = null;
+  private searchTimer: ReturnType<typeof window.setTimeout> | null = null;
+  private searchRequest: AbortController | null = null;
+  private searchGeneration = 0;
   private popoverListeners = new AbortController();
   private tip: HTMLElement;
   private followToggle: HTMLInputElement;
@@ -424,8 +428,8 @@ export class MapPaneController {
     closeStatus.type = "button";
     closeStatus.className = "map-pane__status-close";
     closeStatus.textContent = "×";
-    closeStatus.setAttribute("aria-label", "Закрыть сообщение");
-    closeStatus.title = "Закрыть сообщение";
+    closeStatus.setAttribute("aria-label", "Dismiss message");
+    closeStatus.title = "Dismiss message";
     closeStatus.addEventListener("click", () => this.dismissStatus());
     this.statusLine.appendChild(closeStatus);
     this.statusLine.style.display = "none";
@@ -830,6 +834,7 @@ export class MapPaneController {
 
   private closeSearchPopover(returnFocus = true): void {
     if (!this.searchPopover) return;
+    this.cancelMapSearch();
     this.searchPopover.remove();
     this.searchPopover = null;
     this.searchResults = null;
@@ -1265,7 +1270,7 @@ export class MapPaneController {
     }
     const hop = next.total > 0 ? Math.min(next.current + 1, next.total) : 0;
     if (next.state === "paused") {
-      this.walkProgress.textContent = `Автоход ${next.current}/${next.total}: ${next.reason ?? "paused"}`;
+      this.walkProgress.textContent = `Walk ${next.current}/${next.total}: ${next.reason ?? "paused"}`;
     } else {
       this.walkProgress.textContent = next.state === "stopping"
         ? `Stopping ${next.current}/${next.total}`
@@ -1491,7 +1496,7 @@ export class MapPaneController {
       diff.textContent = formatExitDiff(pos);
       menu.appendChild(diff);
       const updateBtn = this.menuButton(
-        "Обновить клетку из живого стейта",
+        "Update cell from live state",
         () => void this.patchCellFromLive(pos!),
       );
       updateBtn.classList.add("map-cell-menu__update");
@@ -1500,11 +1505,11 @@ export class MapPaneController {
 
     if (room) {
       this.appendSeamItems(menu, room);
-      const portal = this.menuButton("Добавить направленный портал", () =>
+      const portal = this.menuButton("Add directed portal", () =>
         this.openPortalMenu(room, null, clientX, clientY),
       );
       portal.classList.add("map-cell-menu__portal-add");
-      portal.title = "Создать переход в точную клетку этой или другой зоны";
+      portal.title = "Create a transition to an exact cell in this or another zone";
       menu.appendChild(portal);
     }
 
@@ -1520,7 +1525,7 @@ export class MapPaneController {
     const recReason =
       rec.reason ||
       (preview === null
-        ? "живая комната ещё не получена — нечего показать"
+        ? "no live room received yet — nothing to preview"
         : "");
     // Confirm-before-you-write: show the live name + the exits that will be
     // recorded, and for an update the diff against what the cell holds now.
@@ -1531,12 +1536,12 @@ export class MapPaneController {
       if (pv) {
         const box = document.createElement("div");
         box.className = "map-cell-menu__preview";
-        const lines = [`Будет записано: ${pv.hint}`];
-        lines.push(`выходы: ${pv.exits.join(" ") || "нет"}`);
+        const lines = [`Will record: ${pv.hint}`];
+        lines.push(`exits: ${pv.exits.join(" ") || "none"}`);
         const diff: string[] = [];
         if (pv.added.length > 0) diff.push(`+${pv.added.join("+")}`);
         if (pv.removed.length > 0) diff.push(`−${pv.removed.join("−")}`);
-        if (diff.length > 0) lines.push(`изменения: ${diff.join(" / ")}`);
+        if (diff.length > 0) lines.push(`changes: ${diff.join(" / ")}`);
         box.textContent = lines.join("\n");
         menu.appendChild(box);
       }
@@ -1572,14 +1577,14 @@ export class MapPaneController {
     // (this surface is experimental — every write must be reversible from here).
     if (room) {
       const anchorBtn = this.menuButton(
-        "Я здесь",
+        "I'm here",
         () => void this.anchorHere(room),
       );
       anchorBtn.classList.add("map-cell-menu__anchor");
       menu.appendChild(anchorBtn);
     }
     const undoBtn = this.menuButton(
-      "Отменить последнее изменение карты",
+      "Undo last map change",
       () => void this.undoMapWrite(),
     );
     undoBtn.classList.add("map-cell-menu__undo");
@@ -1608,23 +1613,23 @@ export class MapPaneController {
       const row = document.createElement("div");
       row.className = "map-cell-menu__seam-row";
       const button = this.menuButton(
-        `${seam.command || "переход"} → ${seam.zone}`,
+        `${seam.command || "transition"} → ${seam.zone}`,
         () => void this.jumpSeam(seam, room),
       );
       button.classList.add("map-cell-menu__seam-item");
       button.disabled = !seam.passable || seam.to == null;
       button.title = button.disabled
-        ? (!seam.passable ? "Переход заблокирован" : "Целевая комната не разрешена")
-        : `Целевая метка: ${seam.tag}`;
+        ? (!seam.passable ? "Transition is blocked" : "Target room is unresolved")
+        : `Target tag: ${seam.tag}`;
       row.appendChild(button);
       const props = document.createElement("button");
       props.type = "button";
       props.className = "map-cell-menu__seam-props";
       props.textContent = "⚙";
-      props.setAttribute("aria-label", `Свойства перехода ${seam.command || "переход"} в ${seam.zone}`);
-      props.title = "Свойства перехода";
+      props.setAttribute("aria-label", `Transition properties for ${seam.command || "transition"} to ${seam.zone}`);
+      props.title = "Transition properties";
       props.disabled = seam.tag == null || seam.zone === "";
-      if (props.disabled) props.title = "Неполный legacy-селектор: исправьте точную цель портала";
+      if (props.disabled) props.title = "Incomplete legacy selector: repair the exact portal target";
       props.addEventListener("click", (event) => {
         const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
         this.openSeamMenu(room, seam, rect.left, rect.bottom);
@@ -1634,8 +1639,8 @@ export class MapPaneController {
         const repair = document.createElement("button");
         repair.type = "button";
         repair.className = "map-cell-menu__portal-repair";
-        repair.textContent = "Исправить цель";
-        repair.title = "Назначить точную целевую клетку и превратить legacy-переход в портал";
+        repair.textContent = "Repair target";
+        repair.title = "Assign an exact target cell and convert the legacy transition into a portal";
         repair.addEventListener("click", (event) => {
           const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
           this.openPortalMenu(room, seam, rect.left, rect.bottom);
@@ -1664,14 +1669,14 @@ export class MapPaneController {
     menu.setAttribute("role", "menu");
     const header = document.createElement("div");
     header.className = "map-cell-menu__header";
-    header.textContent = seam ? `Переход: ${seam.command || "переход"} → ${seam.zone}` : "Новый направленный портал";
+    header.textContent = seam ? `Transition: ${seam.command || "transition"} → ${seam.zone}` : "New directed portal";
     menu.appendChild(header);
 
     const box = document.createElement("div");
     box.className = "map-edge-menu__side";
     const title = document.createElement("div");
     title.className = "map-cell-menu__section";
-    title.textContent = `из «${room.h || "клетка"}» (${room.z} ${room.x},${room.y},${room.l})`;
+    title.textContent = `from '${room.h || "cell"}' (${room.z} ${room.x},${room.y},${room.l})`;
     box.appendChild(title);
     const attrs = this.appendDirectedAttrControls(box, seam ? seamAttrs(room, seam) : { weight: 1, phrase: "", door: false, locked: false, openCmd: "", noRoute: false }, seamDirection(seam?.command ?? ""), (patch) =>
       seam
@@ -1683,7 +1688,7 @@ export class MapPaneController {
     const command = document.createElement("input");
     command.type = "text";
     command.value = seam?.command ?? "";
-    command.placeholder = "Команда перехода";
+    command.placeholder = "Transition command";
     command.className = "map-edge-menu__input";
     details.appendChild(command);
 
@@ -1701,7 +1706,7 @@ export class MapPaneController {
     const targetSearch = document.createElement("input");
     targetSearch.type = "search";
     targetSearch.className = "map-edge-menu__input";
-    targetSearch.placeholder = "Поиск по названию или координатам";
+    targetSearch.placeholder = "Search by name or coordinates";
     details.appendChild(targetSearch);
     const targetRoom = document.createElement("select");
     targetRoom.className = "map-edge-menu__input";
@@ -1719,7 +1724,7 @@ export class MapPaneController {
         if (needle && !searchable.includes(needle)) continue;
         const option = document.createElement("option");
         option.value = `${candidate.x},${candidate.y},${candidate.l}`;
-        option.textContent = `${candidate.h || "клетка"} (${candidate.x},${candidate.y},${candidate.l})`;
+        option.textContent = `${candidate.h || "cell"} (${candidate.x},${candidate.y},${candidate.l})`;
         if (candidate.x === Number(x.value) && candidate.y === Number(y.value) && candidate.l === Number(l.value)) option.selected = true;
         targetRoom.appendChild(option);
       }
@@ -1738,7 +1743,7 @@ export class MapPaneController {
         renderTargets();
       } catch (err) {
         if (controller.signal.aborted || request !== targetRequest || this.cellMenu !== menu) return;
-        this.setStatus(`Не удалось загрузить целевую зону: ${err instanceof Error ? err.message : String(err)}`, { sticky: true });
+        this.setStatus(`Failed to load target zone: ${err instanceof Error ? err.message : String(err)}`, { sticky: true });
       }
     };
     targetSearch.addEventListener("input", renderTargets);
@@ -1747,13 +1752,13 @@ export class MapPaneController {
     details.append(targetRoom, x, y, l);
     void populateTargets();
 
-    const save = this.menuButton(seam ? "Сохранить портал" : "Создать портал", () => void this.writePortal(room, seam, {
+    const save = this.menuButton(seam ? "Save portal" : "Create portal", () => void this.writePortal(room, seam, {
       command: command.value, target: { zone: zone.value, x: Number(x.value), y: Number(y.value), l: Number(l.value) },
     }));
     details.appendChild(save);
     if (seam) {
-      const remove = this.menuButton("Удалить портал", () => {
-        if (window.confirm("Удалить этот направленный портал?")) void this.deletePortal(room, seam);
+      const remove = this.menuButton("Delete portal", () => {
+        if (window.confirm("Delete this directed portal?")) void this.deletePortal(room, seam);
       });
       remove.classList.add("map-edge-menu__delete");
       details.appendChild(remove);
@@ -1791,21 +1796,21 @@ export class MapPaneController {
     if (marks.length === 0) return;
     const header = document.createElement("div");
     header.className = "map-cell-menu__section";
-    header.textContent = "Ручная разметка вверх/вниз";
+    header.textContent = "Manual up/down marks";
     menu.appendChild(header);
     for (const mk of marks) {
       const label = document.createElement("div");
       label.className = "map-edge-menu__prov";
       label.textContent = `${dirName(mk.dir)}: ${provenanceLabel(mk.state)}`;
       menu.appendChild(label);
-      const btn = this.menuButton(`Снять пометку (${dirName(mk.dir)})`, () =>
+      const btn = this.menuButton(`Clear mark (${dirName(mk.dir)})`, () =>
         void this.writeEdgeMark(
           {
             from: cell,
             to: { z: cell.z, x: cell.x, y: cell.y, l: cell.l + (mk.dir === "U" ? 1 : -1) },
             dir: mk.dir,
-            fromLabel: room.h || "клетка",
-            toLabel: mk.dir === "U" ? "этаж выше" : "этаж ниже",
+            fromLabel: room.h || "cell",
+            toLabel: mk.dir === "U" ? "floor above" : "floor below",
             state: mk.state,
             passable: mk.state === "open",
             provenance: provenanceLabel(mk.state),
@@ -1827,24 +1832,24 @@ export class MapPaneController {
   ): void {
     const goHeader = document.createElement("div");
     goHeader.className = "map-cell-menu__section";
-    goHeader.textContent = `Идти сюда: ${room.h || "клетка"}`;
+    goHeader.textContent = `Go here: ${room.h || "cell"}`;
     menu.appendChild(goHeader);
 
     const routable = canRoute(pos) && !isCurrentCell(pos, cell);
     const insertBtn = this.menuButton(
-      "Вставить путь в чат",
+      "Insert route into chat",
       () => void this.routeToCell(cell, room, "insert"),
     );
     const sendBtn = this.menuButton(
-      "Начать маршрут",
+      "Start route",
       () => void this.routeToCell(cell, room, "send"),
     );
     if (!routable) {
       insertBtn.disabled = true;
       sendBtn.disabled = true;
       const why = isCurrentCell(pos, cell)
-        ? "вы уже здесь"
-        : "нет позиции — сначала «Я здесь»";
+        ? "you are already here"
+        : "no position — use 'I'm here' first";
       insertBtn.title = why;
       sendBtn.title = why;
     }
@@ -1892,7 +1897,7 @@ export class MapPaneController {
 
     const header = document.createElement("div");
     header.className = "map-cell-menu__header";
-    header.textContent = `Ребро: ${model.sides[0].fromLabel} ↔ ${model.sides[0].toLabel}`;
+    header.textContent = `Edge: ${model.sides[0].fromLabel} ↔ ${model.sides[0].toLabel}`;
     menu.appendChild(header);
 
     const blocks: EdgeSideBlock[] = [];
@@ -1905,8 +1910,8 @@ export class MapPaneController {
     const hint = document.createElement("div");
     hint.className = "map-edge-menu__hint";
     hint.textContent =
-      "Пометка живёт на ребре, а не в выходах комнаты: «Записать комнату» её не сотрёт. " +
-      "«Отменить последнее изменение карты» в меню клетки вернёт как было.";
+      "This mark belongs to the edge, not the room exits: recording the room will not erase it. " +
+      "Use 'Undo last map change' in the cell menu to restore the previous state.";
     menu.appendChild(hint);
 
     this.placeCellMenu(menu, clientX, clientY);
@@ -1948,7 +1953,7 @@ export class MapPaneController {
 
     const title = document.createElement("div");
     title.className = "map-cell-menu__section";
-    title.textContent = `из «${side.fromLabel}» в «${side.toLabel}» (${dirName(side.dir)})`;
+    title.textContent = `from '${side.fromLabel}' to '${side.toLabel}' (${dirName(side.dir)})`;
     box.appendChild(title);
 
     const label = document.createElement("label");
@@ -1963,7 +1968,7 @@ export class MapPaneController {
     });
     label.appendChild(box_);
     const text = document.createElement("span");
-    text.textContent = "есть проход";
+    text.textContent = "passage exists";
     label.appendChild(text);
     box.appendChild(label);
 
@@ -1979,7 +1984,7 @@ export class MapPaneController {
     // Only offered when a hand-drawn row is what decides the face: "let the room's
     // own exits decide again" is meaningless where nothing was drawn by hand.
     if (canClear(side.state)) {
-      const clearBtn = this.menuButton("Снять ручную пометку", () =>
+      const clearBtn = this.menuButton("Clear manual mark", () =>
         void this.writeEdgeMark(side, "auto"),
       );
       clearBtn.classList.add("map-edge-menu__clear");
@@ -2058,23 +2063,23 @@ export class MapPaneController {
       }
       controls.replaceChildren();
       const attrs = state.attrs;
-      controls.appendChild(this.attrNumber("Вес маршрута", attrs.weight, (v) => submit({ weight: v }), "weight"));
+      controls.appendChild(this.attrNumber("Route weight", attrs.weight, (v) => submit({ weight: v }), "weight"));
       controls.appendChild(this.attrText(
-        "фраза перехода", attrs.phrase, "например: двигать ящик", (v) => submit({ phrase: v }), "phrase",
+        "traversal phrase", attrs.phrase, "for example: move crate", (v) => submit({ phrase: v }), "phrase",
       ));
-      controls.appendChild(this.attrCheck("дверь", attrs.door, (v) => submit({ door: v }), "door"));
+      controls.appendChild(this.attrCheck("door", attrs.door, (v) => submit({ door: v }), "door"));
       // The lock and opening command are meaningful only with a door, so an
       // optimistic door toggle reveals them in the same popup before its write settles.
       if (attrs.door) {
         controls.appendChild(this.attrCheck(
-          "заперта по умолчанию", attrs.locked, (v) => submit({ locked: v }), "locked",
+          "locked by default", attrs.locked, (v) => submit({ locked: v }), "locked",
         ));
         controls.appendChild(this.attrText(
-          "команда открытия", attrs.openCmd, this.openCmdPlaceholder(dir), (v) => submit({ open_cmd: v }), "open_cmd",
+          "opening command", attrs.openCmd, this.openCmdPlaceholder(dir), (v) => submit({ open_cmd: v }), "open_cmd",
         ));
       }
       controls.appendChild(this.attrCheck(
-        "не водить сюда (маршруты в обход)", attrs.noRoute, (v) => submit({ no_route: v }), "no_route",
+        "avoid in routes", attrs.noRoute, (v) => submit({ no_route: v }), "no_route",
       ));
 
       const summary = attrsSummary(attrs, dir, this.doorOpen);
@@ -2188,7 +2193,7 @@ export class MapPaneController {
     const fire = (): void => {
       const next = Number(input.value);
       if (!Number.isFinite(next) || next <= 0) {
-        input.setCustomValidity("Вес должен быть больше нуля");
+        input.setCustomValidity("Weight must be greater than zero");
         input.reportValidity();
         return;
       }
@@ -2214,10 +2219,10 @@ export class MapPaneController {
   // such command, and the placeholder says that rather than inviting the operator to
   // expect one.
   private openCmdPlaceholder(dir: string): string {
-    if (!dir) return "укажите команду открытия";
+    if (!dir) return "enter an opening command";
     return this.doorOpen
       ? renderDefaultOpen(this.doorOpen, dir)
-      : "формат комнат двери не открывает — без команды маршрут ничего не пошлёт";
+      : "the room format does not open doors — without a command the route sends nothing";
   }
 
   private attrCheck(
@@ -2273,14 +2278,14 @@ export class MapPaneController {
         const data: { ok?: boolean; reason?: string; forked_to?: number } =
           await res.json();
         if (!data.ok) {
-          if (isLatest()) this.setStatus(`Не удалось записать атрибут ребра: ${data.reason ?? "?"}`, {
+          if (isLatest()) this.setStatus(`Failed to save edge attribute: ${data.reason ?? "?"}`, {
             sticky: true,
           });
           return false;
         }
         let status = `${side.fromLabel} → ${side.toLabel}: ${describeAttrPatch(patch, side.dir, this.doorOpen)}`;
-        if (data.forked_to != null) status += " (набор карт форкнут в копию)";
-        if (isLatest()) this.setStatus(`${status} · «Отменить» в меню клетки вернёт как было`, {
+        if (data.forked_to != null) status += " (map set forked to an editable copy)";
+        if (isLatest()) this.setStatus(`${status} · use Undo in the cell menu to restore it`, {
           sticky: true,
         });
         return true;
@@ -2309,10 +2314,10 @@ export class MapPaneController {
       if (!res.ok) throw new Error(await res.text());
       const data: { ok?: boolean; reason?: string; forked_to?: number } = await res.json();
       if (!data.ok) {
-        if (isLatest()) this.setStatus(`Портал не сохранён: ${data.reason ?? "?"}`, { sticky: true });
+        if (isLatest()) this.setStatus(`Portal was not saved: ${data.reason ?? "?"}`, { sticky: true });
         return;
       }
-      if (isLatest()) this.setStatus(`${seam ? "Портал обновлён" : "Портал создан"}${data.forked_to != null ? " (набор карт форкнут в копию)" : ""}`, { sticky: true });
+      if (isLatest()) this.setStatus(`${seam ? "Portal updated" : "Portal created"}${data.forked_to != null ? " (map set forked to an editable copy)" : ""}`, { sticky: true });
     } catch (err) {
       if (isLatest()) this.setStatus(`Portal write failed: ${err instanceof Error ? err.message : String(err)}`, { sticky: true });
     }
@@ -2330,10 +2335,10 @@ export class MapPaneController {
       if (!res.ok) throw new Error(await res.text());
       const data: { ok?: boolean; reason?: string } = await res.json();
       if (!data.ok) {
-        if (isLatest()) this.setStatus(`Портал не удалён: ${data.reason ?? "?"}`, { sticky: true });
+        if (isLatest()) this.setStatus(`Portal was not deleted: ${data.reason ?? "?"}`, { sticky: true });
         return;
       }
-      if (isLatest()) this.setStatus("Портал удалён", { sticky: true });
+      if (isLatest()) this.setStatus("Portal deleted", { sticky: true });
     } catch (err) {
       if (isLatest()) this.setStatus(`Portal delete failed: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -2357,12 +2362,12 @@ export class MapPaneController {
         if (!res.ok) throw new Error(await res.text());
         const data: { ok?: boolean; reason?: string; forked_to?: number } = await res.json();
         if (!data.ok) {
-          if (isLatest()) this.setStatus(`Не удалось записать атрибут портала: ${data.reason ?? "?"}`, { sticky: true });
+          if (isLatest()) this.setStatus(`Failed to save portal attribute: ${data.reason ?? "?"}`, { sticky: true });
           return false;
         }
-        let status = `${room.h || "клетка"} → ${seam.zone}: ${describeAttrPatch(patch, seamDirection(seam.command), this.doorOpen)}`;
-        if (data.forked_to != null) status += " (набор карт форкнут в копию)";
-        if (isLatest()) this.setStatus(`${status} · «Отменить» в меню клетки вернёт как было`, { sticky: true });
+        let status = `${room.h || "cell"} → ${seam.zone}: ${describeAttrPatch(patch, seamDirection(seam.command), this.doorOpen)}`;
+        if (data.forked_to != null) status += " (map set forked to an editable copy)";
+        if (isLatest()) this.setStatus(`${status} · use Undo in the cell menu to restore it`, { sticky: true });
         return true;
       } catch (err) {
         if (isLatest()) this.setStatus(`Portal attribute failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -2399,12 +2404,12 @@ export class MapPaneController {
         if (!res.ok) throw new Error(await res.text());
         const data: { ok?: boolean; reason?: string; forked_to?: number } = await res.json();
         if (!data.ok) {
-          if (isLatest()) this.setStatus(`Не удалось записать атрибут перехода: ${data.reason ?? "?"}`, { sticky: true });
+          if (isLatest()) this.setStatus(`Failed to save transition attribute: ${data.reason ?? "?"}`, { sticky: true });
           return false;
         }
-        let status = `${room.h || "клетка"} → ${seam.zone}: ${describeAttrPatch(patch, seamDirection(seam.command), this.doorOpen)}`;
-        if (data.forked_to != null) status += " (набор карт форкнут в копию)";
-        if (isLatest()) this.setStatus(`${status} · «Отменить» в меню клетки вернёт как было`, { sticky: true });
+        let status = `${room.h || "cell"} → ${seam.zone}: ${describeAttrPatch(patch, seamDirection(seam.command), this.doorOpen)}`;
+        if (data.forked_to != null) status += " (map set forked to an editable copy)";
+        if (isLatest()) this.setStatus(`${status} · use Undo in the cell menu to restore it`, { sticky: true });
         return true;
       } catch (err) {
         if (isLatest()) this.setStatus(`Seam attribute failed: ${err instanceof Error ? err.message : String(err)}`);
@@ -2465,21 +2470,21 @@ export class MapPaneController {
       const data: { ok?: boolean; reason?: string; forked_to?: number } =
         await res.json();
       if (!data.ok) {
-        this.setStatus(`Не удалось разметить ребро: ${data.reason ?? "?"}`, {
+        this.setStatus(`Failed to mark edge: ${data.reason ?? "?"}`, {
           sticky: true,
         });
         return;
       }
       const what =
         mark === "open"
-          ? "скрытый проход размечен"
+          ? "hidden passage marked"
           : mark === "blocked"
-            ? "проход отрицён"
-            : "ручная пометка снята — грань снова решает текст комнаты" +
-              " (если он о проходе молчит, прохода не будет)";
+            ? "passage blocked"
+            : "manual mark cleared — the room text decides the edge again" +
+              " (if it says nothing about the passage, no passage will exist)";
       let status = `${side.fromLabel} → ${side.toLabel}: ${what}`;
-      if (data.forked_to != null) status += " (набор карт форкнут в копию)";
-      this.setStatus(`${status} · «Отменить» в меню клетки вернёт как было`, {
+      if (data.forked_to != null) status += " (map set forked to an editable copy)";
+      this.setStatus(`${status} · use Undo in the cell menu to restore it`, {
         sticky: true,
       });
     } catch (err) {
@@ -2599,7 +2604,7 @@ export class MapPaneController {
           if (!state.reason) this.setStatus("Unable to start route");
           return;
         }
-        this.setStatus(`Маршрут к "${room.h}": ${state.current + 1}/${state.total}`);
+        this.setStatus(`Route to "${room.h}": ${state.current + 1}/${state.total}`);
         return;
       }
       const res = await fetchWithToken(
@@ -2622,7 +2627,7 @@ export class MapPaneController {
         // hole in the map, and must not read like one — otherwise they go looking
         // for a passage that is right there and that they closed themselves.
         if (data.vetoed_only) {
-          this.setStatus(`Нет маршрута к "${room.h}": ${reason}`, {
+          this.setStatus(`No route to "${room.h}": ${reason}`, {
             sticky: true,
           });
           return;
@@ -2639,15 +2644,16 @@ export class MapPaneController {
         const walk = dirs.join(";");
         if (this.config.setInputText) {
           this.config.setInputText(walk);
-          let status = `Route to "${room.h}": ${data.summary ?? `${dirs.length} step(s)`} → input`;
+          const fallbackSummary = `${dirs.length} ${dirs.length === 1 ? "step" : "steps"}`;
+          let status = `Route to "${room.h}": ${data.summary ?? fallbackSummary} → input`;
           if (data.locked)
-            status += ` · ⚠ ${data.locked} двер(и) помечены запертыми — нужен ключ`;
+            status += ` · ⚠ ${data.locked} ${data.locked === 1 ? "door is" : "doors are"} marked locked — a key is required`;
           if (data.dt) status += " ⚠ death trap on path";
           this.setStatus(status, { autoHide: !data.locked && !data.dt });
         } else {
           let status = `Route to "${room.h}": ${walk}`;
           if (data.locked)
-            status += ` · ⚠ ${data.locked} двер(и) помечены запертыми — нужен ключ`;
+            status += ` · ⚠ ${data.locked} ${data.locked === 1 ? "door is" : "doors are"} marked locked — a key is required`;
           if (data.dt) status += " ⚠ death trap on path";
           this.setStatus(status, { autoHide: !data.locked && !data.dt });
         }
@@ -2671,7 +2677,7 @@ export class MapPaneController {
     }
     const { add_exits, remove_exits } = cellPatchPayload(pos);
     if (add_exits.length === 0 && remove_exits.length === 0) {
-      this.setStatus("Нет изменений для применения");
+      this.setStatus("No changes to apply");
       return;
     }
     try {
@@ -2693,10 +2699,10 @@ export class MapPaneController {
       if (!res.ok) throw new Error(await res.text());
       const data: { ok?: boolean; reason?: string } = await res.json();
       if (!data.ok) {
-        this.setStatus(`Не удалось обновить клетку: ${data.reason ?? "?"}`);
+        this.setStatus(`Failed to update cell: ${data.reason ?? "?"}`);
         return;
       }
-      this.setStatus("Клетка обновлена из живого стейта", { sticky: true });
+      this.setStatus("Cell updated from live state", { sticky: true });
     } catch (err) {
       this.setStatus(
         `Update failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -2747,13 +2753,13 @@ export class MapPaneController {
         }>;
       } = await res.json();
       if (!data.applied) {
-        this.setStatus(`Не удалось записать комнату: ${data.reason ?? "?"}`, {
+        this.setStatus(`Failed to record room: ${data.reason ?? "?"}`, {
           sticky: true,
         });
         return;
       }
-      let status = data.created ? "Комната записана" : "Комната обновлена";
-      if (data.forked_to != null) status += " (набор карт форкнут в копию)";
+      let status = data.created ? "Room recorded" : "Room updated";
+      if (data.forked_to != null) status += " (map set forked to an editable copy)";
       // Report which neighbours the written exits now connect to. A one-sided
       // edge (back_link=false) exists ONLY because this record asserted it, so
       // it is the one worth eyeballing — flag those explicitly.
@@ -2761,11 +2767,11 @@ export class MapPaneController {
       if (touches.length > 0) {
         const parts = touches.map(
           (t) =>
-            `${t.dir}→${t.hint || "?"}${t.back_link ? "" : " (односторонний)"}`,
+            `${t.dir}→${t.hint || "?"}${t.back_link ? "" : " (one-way)"}`,
         );
-        status += ` · связи: ${parts.join(", ")}`;
+        status += ` · links: ${parts.join(", ")}`;
       }
-      this.setStatus(`${status} · «Отменить» в меню клетки вернёт как было`, {
+      this.setStatus(`${status} · use Undo in the cell menu to restore it`, {
         sticky: true,
       });
     } catch (err) {
@@ -2805,11 +2811,11 @@ export class MapPaneController {
         reanchored?: boolean;
       } = await res.json();
       if (data.nothing_to_undo) {
-        this.setStatus("Нечего отменять на этом наборе карт", { sticky: true });
+        this.setStatus("Nothing to undo in this map set", { sticky: true });
         return;
       }
       if (!data.applied) {
-        this.setStatus(`Отмена не применена: ${data.reason ?? "?"}`, {
+        this.setStatus(`Undo was not applied: ${data.reason ?? "?"}`, {
           sticky: true,
         });
         return;
@@ -2820,9 +2826,9 @@ export class MapPaneController {
         data.zone != null
           ? ` @ ${data.zone} ${data.x},${data.y},${data.l}`
           : "";
-      const re = data.reanchored ? " · позиция восстановлена" : "";
+      const re = data.reanchored ? " · position restored" : "";
       this.setStatus(
-        `Отменено: ${data.label ?? "последнее изменение"}${at}${re}`,
+        `Undone: ${data.label ?? "last change"}${at}${re}`,
         {
           sticky: true,
         },
@@ -2836,36 +2842,88 @@ export class MapPaneController {
 
   // --- search ------------------------------------------------------------
 
-  private async onSearch(): Promise<void> {
-    const q = this.searchInput.value.trim().toLowerCase();
-    const rooms = this.zoneCache.get(this.currentZone) || [];
-    if (this.searchResults) {
-      this.searchResults.innerHTML = "";
-      for (const candidate of rooms.filter((room) => q && room.h.toLowerCase().includes(q)).slice(0, 8)) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.textContent = candidate.h || `${candidate.x},${candidate.y},${candidate.l}`;
-        button.addEventListener("click", () => {
-          this.closeSearchPopover();
-          this.renderer.setLevel(candidate.l);
-          this.buildFloorStack();
-          this.renderer.centerOn(candidate.x, candidate.y, candidate.l);
-        });
-        this.searchResults.appendChild(button);
-      }
+  private onSearch(): void {
+    this.cancelMapSearch();
+    const query = this.searchInput.value.trim();
+    const folded = query.toLocaleLowerCase();
+    const localRooms = this.zoneCache.get(this.currentZone) || [];
+    this.renderSearchResults(localRooms
+      .filter((room) => folded && room.h.toLocaleLowerCase().includes(folded))
+      .slice(0, 8));
+    if (!query) return;
+
+    const generation = ++this.searchGeneration;
+    this.searchTimer = window.setTimeout(() => {
+      this.searchTimer = null;
+      void this.fetchMapSearch(query, generation);
+    }, 150);
+  }
+
+  private cancelMapSearch(): void {
+    if (this.searchTimer !== null) {
+      window.clearTimeout(this.searchTimer);
+      this.searchTimer = null;
     }
-    if (!q) return;
-    // Prefer the current zone; the map buffer holds one zone at a time, so search
-    // the loaded zone first, then fall through with a hint to switch zones.
-    const hit = rooms.find((r) => r.h.toLowerCase().includes(q));
-    if (hit) {
-      this.renderer.setLevel(hit.l);
-      this.buildFloorStack();
-      this.renderer.centerOn(hit.x, hit.y, hit.l);
-      this.setStatus(`Found "${hit.h}"`);
-    } else {
-      this.setStatus(`No match in "${this.currentZone}" — try another zone`);
+    this.searchRequest?.abort();
+    this.searchRequest = null;
+    this.searchGeneration++;
+  }
+
+  private async fetchMapSearch(query: string, generation: number): Promise<void> {
+    const mapSetID = this.mapSetID;
+    if (mapSetID == null || !this.searchPopover) return;
+    const controller = new AbortController();
+    this.searchRequest = controller;
+    try {
+      const params = new URLSearchParams({
+        q: query,
+        limit: "20",
+        prefer_zone: this.currentZone,
+      });
+      const res = await fetchWithToken(
+        `/api/map-sets/${mapSetID}/rooms/search?${params}`,
+        { signal: controller.signal },
+      );
+      if (!res.ok) throw new Error(await res.text());
+      const hits: MapRoomSearchResult[] = await res.json();
+      if (
+        this.disposed || generation !== this.searchGeneration ||
+        mapSetID !== this.mapSetID || !this.searchPopover
+      ) return;
+      this.renderSearchResults(hits);
+      if (hits.length === 0) this.setStatus(`No room matches "${query}"`);
+    } catch (err) {
+      if (controller.signal.aborted) return;
+      this.setStatus(`Search failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      if (this.searchRequest === controller) this.searchRequest = null;
     }
+  }
+
+  private renderSearchResults(candidates: MapRoomSearchResult[]): void {
+    if (!this.searchResults) return;
+    this.searchResults.innerHTML = "";
+    for (const candidate of candidates) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = `${candidate.h || `${candidate.x},${candidate.y},${candidate.l}`} — ${candidate.z}`;
+      button.addEventListener("click", () => void this.openSearchResult(candidate));
+      this.searchResults.appendChild(button);
+    }
+  }
+
+  private async openSearchResult(candidate: MapRoomSearchResult): Promise<void> {
+    this.closeSearchPopover();
+    const rooms = await this.showZone(
+      candidate.z,
+      { resetView: true },
+      this.nextLoadGeneration(),
+    );
+    if (!rooms) return;
+    this.renderer.setLevel(candidate.l);
+    this.buildFloorStack();
+    this.renderer.centerOn(candidate.x, candidate.y, candidate.l);
+    this.setStatus(`Found "${candidate.h}" in "${candidate.z}"`);
   }
 
   // --- "Я здесь" re-anchor (invoked from the cell menu) ------------------

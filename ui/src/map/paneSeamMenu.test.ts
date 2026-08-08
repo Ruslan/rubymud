@@ -92,20 +92,20 @@ describe("map pane seam chooser", () => {
     const menu = pane.root.querySelector(".map-cell-menu");
     const seam = menu?.querySelector<HTMLButtonElement>(".map-cell-menu__seam-item");
     expect(menu?.querySelector(".map-cell-menu__seams-toggle")).toBeNull();
-    expect(menu?.textContent).not.toContain("Переходы между зонами");
+    expect(menu?.textContent).not.toContain("Cross-zone transitions");
     expect(seam?.textContent).toBe("на восток → Восточная дорога");
-    expect(seam?.title).toBe("Целевая метка: 41");
+    expect(seam?.title).toBe("Target tag: 41");
     expect(seam?.classList.contains("map-cell-menu__seam-item")).toBe(true);
     expect(jumpSeam).not.toHaveBeenCalled();
 
     const labels = [...menu!.querySelectorAll<HTMLButtonElement>(
       ".map-cell-menu__item",
     )].map((button) => button.textContent);
-    expect(labels).toContain("Обновить комнату из живого");
-    expect(labels).toContain("Вставить путь в чат");
-    expect(labels).toContain("Начать маршрут");
-    expect(labels).toContain("Я здесь");
-    expect(labels).toContain("Отменить последнее изменение карты");
+    expect(labels).toContain("Update room from live data");
+    expect(labels).toContain("Insert route into chat");
+    expect(labels).toContain("Start route");
+    expect(labels).toContain("I'm here");
+    expect(labels).toContain("Undo last map change");
   });
 
   it("renders every valid seam directly and selects the seam the user clicked", () => {
@@ -149,14 +149,14 @@ describe("map pane seam chooser", () => {
     const nav = pane.root.querySelector<HTMLButtonElement>(".map-cell-menu__seam-item")!;
     const props = pane.root.querySelector<HTMLButtonElement>(".map-cell-menu__seam-props")!;
     expect(props.getAttribute("aria-label")).toBe(
-      "Свойства перехода на восток в Восточная дорога",
+      "Transition properties for на восток to Восточная дорога",
     );
     props.focus();
     expect(document.activeElement).toBe(props);
     props.click();
     expect(jumpSeam).not.toHaveBeenCalled();
     expect(pane.root.querySelector(".map-edge-menu")?.textContent).toContain(
-      "Переход: на восток → Восточная дорога",
+      "Transition: на восток → Восточная дорога",
     );
 
     clickRoom(seamRoom([["Восточная дорога", "на восток", 41]]));
@@ -294,7 +294,7 @@ describe("map pane seam chooser", () => {
     pane.root.querySelector<HTMLButtonElement>(".map-cell-menu__seam-props")!.click();
 
     const door = [...pane.root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-      .find((input) => input.parentElement?.textContent?.includes("дверь"))!;
+      .find((input) => input.parentElement?.textContent?.includes("door"))!;
     door.click();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       "/api/sessions/7/map-edge-attrs",
@@ -303,20 +303,20 @@ describe("map pane seam chooser", () => {
 
     expect(pane.root.querySelector(".map-edge-menu")).not.toBeNull();
     const pendingDoor = [...pane.root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-      .find((input) => input.parentElement?.textContent?.includes("дверь"))!;
+      .find((input) => input.parentElement?.textContent?.includes("door"))!;
     expect(pendingDoor.checked).toBe(true);
     expect(pendingDoor.disabled).toBe(true);
     expect([...pane.root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-      .find((input) => input.parentElement?.textContent?.includes("заперта")))
+      .find((input) => input.parentElement?.textContent?.includes("locked")))
       .toBeDefined();
     expect([...pane.root.querySelectorAll<HTMLInputElement>('input[type="text"]')]
-      .find((input) => input.parentElement?.textContent?.includes("команда открытия")))
+      .find((input) => input.parentElement?.textContent?.includes("opening command")))
       .toBeDefined();
 
     doorWrite.resolve(jsonRes({ ok: true }));
     const openCommand = await vi.waitFor(() => {
       const input = [...pane.root.querySelectorAll<HTMLInputElement>('input[type="text"]')]
-        .find((candidate) => candidate.parentElement?.textContent?.includes("команда открытия"));
+        .find((candidate) => candidate.parentElement?.textContent?.includes("opening command"));
       expect(input?.disabled).toBe(false);
       return input!;
     });
@@ -355,7 +355,7 @@ describe("map pane seam chooser", () => {
       }
       if (this.classList.contains("map-edge-menu")) {
         const hasOpen = [...this.querySelectorAll<HTMLInputElement>('input[type="text"]')]
-          .some((input) => input.parentElement?.textContent?.includes("команда открытия"));
+          .some((input) => input.parentElement?.textContent?.includes("opening command"));
         return rect(180, hasOpen ? 140 : 60);
       }
       return rect(0, 0);
@@ -366,7 +366,7 @@ describe("map pane seam chooser", () => {
     const menu = pane.root.querySelector<HTMLElement>(".map-edge-menu")!;
     expect(menu.style.top).toBe("40px");
     const door = [...menu.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-      .find((input) => input.parentElement?.textContent?.includes("дверь"))!;
+      .find((input) => input.parentElement?.textContent?.includes("door"))!;
     door.focus();
     door.click();
     expect(menu.style.top).toBe("6px");
@@ -374,7 +374,7 @@ describe("map pane seam chooser", () => {
     doorWrite.resolve(jsonRes({ ok: true }));
     await vi.waitFor(() => {
       const currentDoor = [...menu.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-        .find((input) => input.parentElement?.textContent?.includes("дверь"));
+        .find((input) => input.parentElement?.textContent?.includes("door"));
       expect(currentDoor?.disabled).toBe(false);
       expect(document.activeElement).toBe(currentDoor);
     });
@@ -392,10 +392,10 @@ describe("map pane seam chooser", () => {
     pane.root.querySelector<HTMLButtonElement>(".map-cell-menu__seam-props")!.click();
 
     [...pane.root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-      .find((input) => input.parentElement?.textContent?.includes("дверь"))!
+      .find((input) => input.parentElement?.textContent?.includes("door"))!
       .click();
     expect([...pane.root.querySelectorAll<HTMLInputElement>('input[type="text"]')]
-      .find((input) => input.parentElement?.textContent?.includes("команда открытия")))
+      .find((input) => input.parentElement?.textContent?.includes("opening command")))
       .toBeUndefined();
     doorWrite.resolve(jsonRes({ ok: true }));
     await vi.waitFor(() => expect(JSON.parse(String(fetchMock.mock.calls
@@ -410,12 +410,12 @@ describe("map pane seam chooser", () => {
     pane.root.querySelector<HTMLButtonElement>(".map-cell-menu__seam-props")!.click();
 
     [...pane.root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-      .find((input) => input.parentElement?.textContent?.includes("дверь"))!
+      .find((input) => input.parentElement?.textContent?.includes("door"))!
       .click();
 
     await vi.waitFor(() => {
       expect([...pane.root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-        .find((input) => input.parentElement?.textContent?.includes("дверь"))?.checked)
+        .find((input) => input.parentElement?.textContent?.includes("door"))?.checked)
         .toBe(false);
       expect(pane.root.querySelector(".map-edge-menu")).not.toBeNull();
     });
@@ -434,13 +434,13 @@ describe("map pane seam chooser", () => {
     clickRoom(value);
     pane.root.querySelector<HTMLButtonElement>(".map-cell-menu__seam-props")!.click();
     [...pane.root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-      .find((input) => input.parentElement?.textContent?.includes("дверь"))!
+      .find((input) => input.parentElement?.textContent?.includes("door"))!
       .click();
 
     clickRoom(value);
     pane.root.querySelector<HTMLButtonElement>(".map-cell-menu__seam-props")!.click();
     [...pane.root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-      .find((input) => input.parentElement?.textContent?.includes("дверь"))!
+      .find((input) => input.parentElement?.textContent?.includes("door"))!
       .click();
     await Promise.resolve();
     expect(fetchMock.mock.calls.filter(([url]) => url.includes("map-edge-attrs"))).toHaveLength(1);
@@ -453,7 +453,7 @@ describe("map pane seam chooser", () => {
 
     await vi.waitFor(() => {
       const door = [...pane.root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-        .find((input) => input.parentElement?.textContent?.includes("дверь"));
+        .find((input) => input.parentElement?.textContent?.includes("door"));
       expect(door?.checked).toBe(true);
       expect(door?.disabled).toBe(false);
     });
@@ -469,7 +469,7 @@ describe("map pane seam chooser", () => {
     pane.root.querySelector<HTMLButtonElement>(".map-cell-menu__seam-props")!.click();
 
     [...pane.root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-      .find((input) => input.parentElement?.textContent?.includes("дверь"))!
+      .find((input) => input.parentElement?.textContent?.includes("door"))!
       .click();
     await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledWith(
       "/api/sessions/7/map-edge-attrs",
@@ -479,10 +479,10 @@ describe("map pane seam chooser", () => {
 
     await vi.waitFor(() => {
       const door = [...pane.root.querySelectorAll<HTMLInputElement>('input[type="checkbox"]')]
-        .find((input) => input.parentElement?.textContent?.includes("дверь"));
+        .find((input) => input.parentElement?.textContent?.includes("door"));
       expect(door?.checked).toBe(false);
       expect([...pane.root.querySelectorAll<HTMLInputElement>('input[type="text"]')]
-        .find((input) => input.parentElement?.textContent?.includes("команда открытия")))
+        .find((input) => input.parentElement?.textContent?.includes("opening command")))
         .toBeUndefined();
     });
     expect(pane.root.querySelector(".map-edge-menu")).not.toBeNull();
@@ -497,9 +497,9 @@ describe("map pane seam chooser", () => {
     pane.root.querySelector<HTMLButtonElement>(".map-cell-menu__seam-props")!.click();
 
     const menu = pane.root.querySelector<HTMLElement>(".map-edge-menu")!;
-    expect(menu.textContent).toContain("перед шагом маршрут пошлёт «open e»");
+    expect(menu.textContent).toContain("route sends 'open e' before the step");
     const open = [...menu.querySelectorAll<HTMLInputElement>('input[type="text"]')]
-      .find((input) => input.parentElement?.textContent?.includes("команда открытия"));
+      .find((input) => input.parentElement?.textContent?.includes("opening command"));
     expect(open?.placeholder).toBe("open e");
   });
 
@@ -513,7 +513,7 @@ describe("map pane seam chooser", () => {
     const labels = [...pane.root.querySelectorAll<HTMLButtonElement>(
       ".map-cell-menu__seam-item",
     )].map((button) => button.textContent);
-    expect(labels).toEqual(["переход → broken", "на юг → Южная дорога"]);
+    expect(labels).toEqual(["transition → broken", "на юг → Южная дорога"]);
     const nav = [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__seam-item")];
     const props = [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__seam-props")];
     expect(nav[0]!.disabled).toBe(true);

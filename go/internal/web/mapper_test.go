@@ -179,6 +179,21 @@ func TestRESTImportListZonesRooms(t *testing.T) {
 		t.Errorf("slim room missing hint: %+v", rooms[0])
 	}
 
+	// --- GET /api/map-sets/{id}/rooms/search ---
+	hits := getJSON[[]storage.MapRoomSearchResult](t,
+		ts.URL+"/api/map-sets/"+itoa(summary.ID)+"/rooms/search?q="+urlEnc("комната")+"&limit=2&prefer_zone="+urlEnc("Зона Б"),
+		s.apiToken,
+	)
+	if len(hits) != 2 {
+		t.Fatalf("room search = %+v, want two limited results", hits)
+	}
+	if hits[0].Zone != "Зона Б" || hits[0].Hint != "Комната B1" {
+		t.Fatalf("preferred-zone search result = %+v, want Зона Б first", hits[0])
+	}
+	if hits[1].Zone != "Зона А" {
+		t.Fatalf("cross-zone search result = %+v, want Зона А", hits[1])
+	}
+
 	// A second import creates a NEW set (does not overwrite).
 	var body2 bytes.Buffer
 	mw2 := multipart.NewWriter(&body2)
@@ -409,5 +424,26 @@ func TestRESTRoomsMissingParams(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 (missing zone)", resp.StatusCode)
+	}
+}
+
+func TestRESTMapRoomSearchRejectsInvalidParams(t *testing.T) {
+	s, _ := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	for _, path := range []string{
+		"/api/map-sets/nope/rooms/search?q=bank",
+		"/api/map-sets/1/rooms/search?q=bank&limit=nope",
+	} {
+		req, _ := newAuthenticatedRequest(http.MethodGet, ts.URL+path, nil, s.apiToken)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("GET %s status = %d, want 400", path, resp.StatusCode)
+		}
 	}
 }

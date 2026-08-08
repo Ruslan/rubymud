@@ -14,7 +14,7 @@ const CONF_GLYPH: Record<Confidence, string> = {
 
 // Human-readable status header for the menu's top row.
 export function statusHeaderText(pos: PlayerPosition | null): string {
-  if (!pos) return "⚪ нет позиции";
+  if (!pos) return "⚪ no position";
   const glyph = CONF_GLYPH[pos.confidence] ?? "⚪";
   const parts = [`${glyph} ${pos.confidence}`];
   if (pos.reason) parts.push(pos.reason);
@@ -41,7 +41,7 @@ export function formatExitDiff(pos: PlayerPosition | null): string {
   const segs: string[] = [];
   if (added.length > 0) segs.push(`+${added.join("+")} live`);
   if (removed.length > 0) segs.push(`−${removed.join("−")} map`);
-  return `выходы: ${segs.join(" / ")}`;
+  return `exits: ${segs.join(" / ")}`;
 }
 
 // Whether "Идти сюда" (and its send/insert sub-actions) should be enabled: the
@@ -116,16 +116,16 @@ export function recordAction(
   cellExists: boolean,
 ): { label: string; enabled: boolean; reason: string } {
   const label = cellExists
-    ? "Обновить комнату из живого"
-    : "Записать комнату сюда";
+    ? "Update room from live data"
+    : "Record room here";
   if (!pos || !pos.valid) {
-    return { label, enabled: false, reason: "нет позиции — сначала «Я здесь»" };
+    return { label, enabled: false, reason: "no position — use 'I'm here' first" };
   }
   if (!isCurrentCell(pos, cell)) {
     return {
       label,
       enabled: false,
-      reason: "можно записать только клетку, в которой вы стоите",
+      reason: "you can only record the cell where you are standing",
     };
   }
   // 🔴 lost: the tracker still reports a coord, but it is the LAST-KNOWN one —
@@ -135,7 +135,7 @@ export function recordAction(
     return {
       label,
       enabled: false,
-      reason: "позиция потеряна (🔴) — живая комната описывает не эту клетку",
+      reason: "position lost (🔴) — the live room does not describe this cell",
     };
   }
   // The tracker is merely HOLDING this coord (ambiguous match / hint-less pipe
@@ -144,23 +144,24 @@ export function recordAction(
     return {
       label,
       enabled: false,
-      reason: "живая комната не соответствует этой клетке — сначала «Я здесь»",
+      reason: "the live room does not match this cell — use 'I'm here' first",
     };
   }
   if (!live || !live.hint) {
     return {
       label,
       enabled: false,
-      reason: "живая комната ещё не получена — сделайте «осмотреть»",
+      reason: "no live room received yet — look at the room first",
     };
   }
   // Recording re-anchors, and anchoring flushes the pending queue — doing that
   // mid-speedwalk would silently drop the in-flight moves.
   if (pos.pendingMoves > 0) {
+    const steps = pos.pendingMoves === 1 ? "step" : "steps";
     return {
       label,
       enabled: false,
-      reason: `идёт перемещение (${pos.pendingMoves} шаг(ов) в пути) — дождитесь конца`,
+      reason: `movement in progress (${pos.pendingMoves} pending ${steps}) — wait until it finishes`,
     };
   }
   return { label, enabled: true, reason: "" };
@@ -171,7 +172,7 @@ export function recordAction(
 // Fixed label. It does NOT switch between "record"/"update" the way the cell
 // menu's item does: a toolbar button whose caption changes under the cursor is
 // hard to aim at, and the create-vs-update distinction is in the tooltip instead.
-export const recordButtonLabel = "Записать комнату";
+export const recordButtonLabel = "Record room";
 
 // State of the top-bar record button. It is the SAME write as the cell menu's
 // record item — aimed, unconditionally, at the cell the player is standing in —
@@ -202,7 +203,7 @@ export function recordButtonState(
     return {
       label,
       enabled: false,
-      title: `${label}: нет позиции — сначала «Я здесь» в меню клетки`,
+      title: `${label}: no position — use 'I'm here' in the cell menu first`,
       cell: null,
     };
   }
@@ -213,15 +214,15 @@ export function recordButtonState(
   }
   const verb =
     cellExists === true
-      ? "обновит"
+      ? "update"
       : cellExists === false
-        ? "создаст"
-        : "запишет";
+        ? "create"
+        : "record";
   const at = `${cell.z} ${cell.x},${cell.y},${cell.l}`;
   return {
     label,
     enabled: true,
-    title: `${verb} клетку {${at}} из живого блока «${live?.hint ?? ""}»`,
+    title: `${verb} cell {${at}} from live room '${live?.hint ?? ""}'`,
     cell,
   };
 }

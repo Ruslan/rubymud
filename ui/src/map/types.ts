@@ -36,6 +36,14 @@ export interface SlimRoom {
   // way, so this is a different statement from `g` and the edge editor says so.
 }
 
+export interface MapRoomSearchResult {
+  z: string;
+  h: string;
+  x: number;
+  y: number;
+  l: number;
+}
+
 export interface SlimCrossZoneGrid {
   dir: string;
   r: string;

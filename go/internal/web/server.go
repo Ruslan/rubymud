@@ -494,6 +494,7 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 			r.Get("/", s.listMapSets)
 			r.Post("/import", s.importMapSet)
 			r.Get("/{id}/zones", s.listMapSetZones)
+			r.Get("/{id}/rooms/search", s.searchMapRooms)
 			r.Delete("/{id}", s.deleteMapSet)
 		})
 		r.Get("/rooms", s.listRooms)

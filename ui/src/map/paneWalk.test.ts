@@ -111,7 +111,7 @@ describe("map pane server walk", () => {
   it("renders a paused walk and resumes only when the server permits it", async () => {
     pane.onMapWalk({ active: true, job_id: 4, current: 1, total: 3, state: "paused", reason: "movement refused", can_resume: false });
     const resume = pane.root.querySelector<HTMLButtonElement>(".map-pane__walk-resume");
-    expect(pane.root.querySelector(".map-pane__walk-progress")?.textContent).toBe("Автоход 1/3: movement refused");
+    expect(pane.root.querySelector(".map-pane__walk-progress")?.textContent).toBe("Walk 1/3: movement refused");
     expect(resume?.hidden).toBe(false);
     expect(resume?.disabled).toBe(true);
 		expect(pane.root.querySelector<HTMLButtonElement>(".map-pane__walk-stop")?.hidden).toBe(false);

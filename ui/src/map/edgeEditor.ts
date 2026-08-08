@@ -58,15 +58,15 @@ export function passableNow(state: FaceState): boolean {
 export function provenanceLabel(state: FaceState): string {
   switch (state) {
     case "open":
-      return "проход размечен вручную (в тексте комнаты его нет)";
+      return "passage marked manually (not present in the room text)";
     case "blocked":
-      return "проход отрицён вручную (текст комнаты о нём говорит)";
+      return "passage blocked manually (the room text lists it)";
     case "derived":
-      return "проход разобран из текста комнаты";
+      return "passage parsed from the room text";
     case "fallback":
-      return "проход только по смежности: ни одна из комнат про выходы ничего не говорит";
+      return "adjacency-only passage: neither room provides exit data";
     default:
-      return "прохода нет";
+      return "no passage";
   }
 }
 
@@ -188,9 +188,9 @@ export function attrsSummary(
   defaultOpen: string,
 ): string {
   const parts: string[] = [];
-  if (attrs.weight !== 1) parts.push(`вес ${attrs.weight}`);
+  if (attrs.weight !== 1) parts.push(`weight ${attrs.weight}`);
   if (attrs.phrase) {
-    parts.push(`маршрут пошлёт «${attrs.phrase}» вместо направления`);
+    parts.push(`route sends '${attrs.phrase}' instead of the direction`);
   }
   if (attrs.door) {
     // `defaultOpen` is the SESSION's room-format template, and it is empty for every
@@ -198,22 +198,22 @@ export function attrsSummary(
     // пошлёт «»» instead would read as a bug — or worse, as a promise.
     const cmd = attrs.openCmd || renderDefaultOpen(defaultOpen, dir);
     if (cmd) {
-      parts.push(`перед шагом маршрут пошлёт «${cmd}»`);
+      parts.push(`route sends '${cmd}' before the step`);
     } else {
       parts.push(
-        "команда открытия не задана, и формат комнат этого мада двери не открывает" +
-          " — маршрут дверь не откроет",
+        "no opening command is set and this MUD's room format does not open doors" +
+          " — the route will not open the door",
       );
     }
   } else if (attrs.openCmd) {
     // An opening command with no door is inert — say so rather than let it look armed.
-    parts.push("команда открытия записана, но двери на грани нет — не сработает");
+    parts.push("an opening command is set, but this edge has no door — it will not run");
   }
   if (attrs.locked) {
-    parts.push("заперта по умолчанию с этой стороны — нужен ключ");
+    parts.push("locked by default from this side — a key is required");
   }
   if (attrs.noRoute) {
-    parts.push("маршруты сюда не строятся (пройти можно, трекер шаг примет)");
+    parts.push("routes avoid this edge (manual movement still works and is tracked)");
   }
   if (parts.length === 0) return "";
   return parts.join(" · ");
@@ -229,7 +229,10 @@ export function renderDefaultOpen(template: string, dir: string): string {
   // answer ("this format does not open doors"). A guard here would be dead code that
   // looks load-bearing — the branch that MATTERS is the one in attrsSummary, which
   // has to say so in words instead of quoting an empty command.
-  const word = dirName(dir);
+  const word =
+    { N: "север", S: "юг", E: "восток", W: "запад", U: "вверх", D: "вниз" }[
+      dir
+    ] ?? dir;
   // replaceAll, not replace: Go's renderDoorTemplate uses strings.ReplaceAll, and
   // these two are declared mirrors. With `replace` a template naming a placeholder
   // twice rendered differently on the two sides — the pane would promise one command
@@ -319,11 +322,10 @@ export function buildEdgeModel(
   };
 }
 
-// dirName renders a canonical letter as the Russian direction word the rest of
-// the pane speaks.
+// dirName renders a canonical letter as the English direction word used by the pane.
 export function dirName(dir: string): string {
   return (
-    { N: "север", S: "юг", E: "восток", W: "запад", U: "вверх", D: "вниз" }[
+    { N: "north", S: "south", E: "east", W: "west", U: "up", D: "down" }[
       dir
     ] ?? dir
   );

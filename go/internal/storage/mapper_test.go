@@ -136,6 +136,37 @@ func TestCreateAndListMapSet(t *testing.T) {
 	}
 }
 
+func TestSearchMapRoomsAcrossZonesUnicodeFoldAndLimit(t *testing.T) {
+	store := newMapperTestStore(t)
+	in := sampleInput()
+	in.Rooms[0].Hint = "Городской БАНК"
+	in.Rooms[1].Hint = "Северный банк"
+	in.Rooms[2].Hint = "Банк у площади"
+	id, err := store.CreateMapSet(in)
+	if err != nil {
+		t.Fatalf("CreateMapSet: %v", err)
+	}
+
+	got, err := store.SearchMapRooms(id, "  банк  ", "Beta", 2)
+	if err != nil {
+		t.Fatalf("SearchMapRooms: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("SearchMapRooms returned %d results, want 2: %+v", len(got), got)
+	}
+	if got[0].Zone != "Beta" || got[0].Hint != "Банк у площади" {
+		t.Fatalf("preferred-zone result = %+v, want Beta first", got[0])
+	}
+	if got[1].Zone != "Alpha" {
+		t.Fatalf("cross-zone result = %+v, want Alpha", got[1])
+	}
+
+	empty, err := store.SearchMapRooms(id, "   ", "", 20)
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty SearchMapRooms = (%+v, %v), want empty", empty, err)
+	}
+}
+
 func TestListMapSetsSeamCountComesFromAuthoritativeEdges(t *testing.T) {
 	store := newMapperTestStore(t)
 	in := sampleInput()

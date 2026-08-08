@@ -23,6 +23,10 @@ function upperRoom(): SlimRoom {
   return { ...room(), h: "Gallery", x: 1, l: 1 };
 }
 
+function remoteRoom(): SlimRoom {
+  return { ...room(), z: "B", h: "Remote Atrium", x: 7, y: 9, l: 2 };
+}
+
 function stubCanvas(): void {
   vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(() => new Proxy(
     { fillStyle: "", strokeStyle: "", lineWidth: 0, font: "", textAlign: "", textBaseline: "" },
@@ -37,8 +41,14 @@ describe("map pane compact toolbar", () => {
     stubCanvas();
     fetchMock.mockImplementation((url: string) => {
       if (url.includes("map-live-room")) return Promise.resolve(json({ seen: false }));
-      if (url.includes("/zones")) return Promise.resolve(json([{ zone: "A", room_count: 1 }]));
+      if (url.includes("/rooms/search")) {
+        return Promise.resolve(json(url.includes("remote")
+          ? [{ z: "B", h: "Remote Atrium", x: 7, y: 9, l: 2 }]
+          : [{ z: "A", h: "Atrium", x: 0, y: 0, l: 0 }]));
+      }
+      if (url.includes("/zones")) return Promise.resolve(json([{ zone: "A", room_count: 2 }, { zone: "B", room_count: 1 }]));
       if (url.includes("zone=A")) return Promise.resolve(json([room(), upperRoom()]));
+      if (url.includes("zone=B")) return Promise.resolve(json([remoteRoom()]));
       throw new Error(`unexpected ${url}`);
     });
     pane = new MapPaneController({ sessionID: 7, getActiveMapSetID: () => 1 });
@@ -83,6 +93,28 @@ describe("map pane compact toolbar", () => {
     [...popover.querySelectorAll("button")].find((button) => button.textContent === "Select rooms")!.click();
     expect(pane.root.querySelector(".map-pane__manager-popover")).toBeNull();
     expect(manager.classList.contains("on")).toBe(true);
+  });
+
+  it("searches across zones and opens the selected room", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("A"));
+    const renderer = (pane as unknown as { renderer: { centerOn(x: number, y: number, l: number): void } }).renderer;
+    const centerOn = vi.spyOn(renderer, "centerOn");
+    pane.root.querySelector<HTMLButtonElement>('[aria-label="Find room"]')!.click();
+    const input = pane.root.querySelector<HTMLInputElement>(".map-pane__search")!;
+    input.value = "remote";
+    input.dispatchEvent(new Event("input"));
+
+    const result = await vi.waitFor(() => {
+      const button = pane.root.querySelector<HTMLButtonElement>(".map-pane__search-results button");
+      expect(button?.textContent).toContain("Remote Atrium");
+      expect(button?.textContent).toContain("B");
+      return button!;
+    }, { timeout: 1000 });
+    result.click();
+
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("B"));
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes("zone=B"))).toBe(true);
+    expect(centerOn).toHaveBeenCalledWith(7, 9, 2);
   });
 
   it("gives every popover control a stable readable font independent of the output font", async () => {

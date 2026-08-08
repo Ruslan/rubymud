@@ -325,7 +325,7 @@ func TestNoRouteVetoSaysWhyThereIsNoRoute(t *testing.T) {
 	if !res.VetoedOnly {
 		t.Fatalf("the refusal does not say the map is intact: %+v", res)
 	}
-	if !strings.Contains(res.Reason, "не водить") {
+	if !strings.Contains(res.Reason, "avoid in routes") {
 		t.Errorf("Reason = %q, want it to name the mark the player has to lift", res.Reason)
 	}
 }

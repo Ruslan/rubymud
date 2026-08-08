@@ -80,13 +80,13 @@ describe("map pane record button", () => {
   it("is mounted in the control bar next to the confidence badge", () => {
     const bar = pane.root.querySelector(".map-pane__bar");
     expect(bar?.contains(recordBtn(pane))).toBe(true);
-    expect(recordBtn(pane).textContent).toBe("Записать комнату");
+    expect(recordBtn(pane).textContent).toBe("Record room");
   });
 
   it("starts disabled with a reason, before any position is known", () => {
     const btn = recordBtn(pane);
     expect(btn.disabled).toBe(true);
-    expect(btn.title).toContain("нет позиции");
+    expect(btn.title).toContain("no position");
   });
 
   it("stays VISIBLE while disabled — it must not vanish when unavailable", () => {

@@ -38,7 +38,7 @@ describe("statusHeaderText", () => {
   });
 
   it("handles a null position", () => {
-    expect(statusHeaderText(null)).toBe("⚪ нет позиции");
+    expect(statusHeaderText(null)).toBe("⚪ no position");
   });
 });
 
@@ -64,16 +64,16 @@ describe("formatExitDiff", () => {
   it("formats added + removed", () => {
     expect(
       formatExitDiff(pos({ exitsAddedLive: ["U"], exitsRemovedMap: ["N"] })),
-    ).toBe("выходы: +U live / −N map");
+    ).toBe("exits: +U live / −N map");
   });
   it("formats added only", () => {
     expect(formatExitDiff(pos({ exitsAddedLive: ["U", "D"] }))).toBe(
-      "выходы: +U+D live",
+      "exits: +U+D live",
     );
   });
   it("formats removed only", () => {
     expect(formatExitDiff(pos({ exitsRemovedMap: ["N", "S"] }))).toBe(
-      "выходы: −N−S map",
+      "exits: −N−S map",
     );
   });
   it("is empty with no diff", () => {

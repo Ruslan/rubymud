@@ -330,6 +330,37 @@ func (s *Server) listMapSetZones(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, zones)
 }
 
+// searchMapRooms handles GET /api/map-sets/{id}/rooms/search?q=&limit=&prefer_zone=.
+func (s *Server) searchMapRooms(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
+	if err != nil || id <= 0 {
+		http.Error(w, "invalid map set id", http.StatusBadRequest)
+		return
+	}
+	limit := 20
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit <= 0 {
+			http.Error(w, "invalid limit", http.StatusBadRequest)
+			return
+		}
+	}
+	if limit > 50 {
+		limit = 50
+	}
+	hits, err := s.store.SearchMapRooms(
+		id,
+		r.URL.Query().Get("q"),
+		r.URL.Query().Get("prefer_zone"),
+		limit,
+	)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, hits)
+}
+
 // listRooms handles GET /api/rooms?map_set=<id>&zone=<z>.
 func (s *Server) listRooms(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.ParseInt(r.URL.Query().Get("map_set"), 10, 64)
@@ -795,28 +826,32 @@ func (s *Server) mapRecordRoom(w http.ResponseWriter, r *http.Request) {
 	ev := st.Room
 	pos := st.Position
 	if !pos.Valid {
-		writeJSON(w, recordRefusal("position unknown — use «Я здесь» to re-anchor first"))
+		writeJSON(w, recordRefusal("position unknown — use \"I'm here\" to re-anchor first"))
 		return
 	}
 	if pos.Confidence == mapper.Red {
-		writeJSON(w, recordRefusal("позиция потеряна (🔴) — живая комната описывает не эту клетку; "+
-			"сначала «Я здесь»"))
+		writeJSON(w, recordRefusal("position lost (🔴) — the live room describes another cell; "+
+			"use \"I'm here\" first"))
 		return
 	}
 	if !pos.EventDescribesCell {
-		writeJSON(w, recordRefusal("живая комната не соответствует этой клетке "+
-			"(позиция удерживается по счислению) — сначала «Я здесь»"))
+		writeJSON(w, recordRefusal("the live room does not match this cell "+
+			"(position is held by dead reckoning) — use \"I'm here\" first"))
 		return
 	}
 	if ev.Hint == "" {
-		writeJSON(w, recordRefusal("в последнем блоке комнаты нет названия "+
-			"(коридор/только выходы) — запись стёрла бы название и описание"))
+		writeJSON(w, recordRefusal("the latest room block has no name "+
+			"(corridor or exits only) — recording would erase the name and description"))
 		return
 	}
 	if st.Pending > 0 {
+		stepWord := "steps"
+		if st.Pending == 1 {
+			stepWord = "step"
+		}
 		writeJSON(w, recordRefusal(fmt.Sprintf(
-			"идёт перемещение (%d шаг(ов) в пути) — запись сбросила бы очередь; дождитесь конца",
-			st.Pending)))
+			"movement in progress (%d queued %s) — recording would clear the queue; wait until it finishes",
+			st.Pending, stepWord)))
 		return
 	}
 	target := pos.Coord
@@ -1134,7 +1169,7 @@ func (s *Server) mapEdgeAttrs(w http.ResponseWriter, r *http.Request) {
 	}
 	if !res.Applied {
 		writeJSON(w, map[string]any{"ok": false,
-			"reason": "направленный проход отсутствует или выбранный шов неоднозначен"})
+			"reason": "the directed passage is missing or the selected seam is ambiguous"})
 		return
 	}
 	out := map[string]any{"ok": true}
@@ -1460,12 +1495,12 @@ func trimmedPtr(p *string) *string {
 // two write surfaces cannot check different halves of it.
 func edgeCommandsRefusal(patch storage.EdgeAttrPatch) string {
 	if patch.Phrase != nil {
-		if r := validateEdgeCommand("фраза перехода", *patch.Phrase); r != "" {
+		if r := validateEdgeCommand("traversal phrase", *patch.Phrase); r != "" {
 			return r
 		}
 	}
 	if patch.OpenCmd != nil {
-		if r := validateEdgeCommand("команда открытия", *patch.OpenCmd); r != "" {
+		if r := validateEdgeCommand("opening command", *patch.OpenCmd); r != "" {
 			return r
 		}
 	}
@@ -1636,24 +1671,26 @@ func pathResultJSON(res mapper.PathResult) map[string]any {
 			locked++
 		}
 	}
-	// The pane prints this verbatim, and the mapper's interface language is Russian
-	// (docs/dev/planned/i18n.md) — so it is Russian THROUGHOUT rather than an English
-	// skeleton with Russian clauses bolted on.
-	summary := fmt.Sprintf("%d шаг(ов)", len(res.Steps))
+	// The pane prints this summary verbatim, so keep it in the mapper UI language.
+	stepWord := "steps"
+	if len(res.Steps) == 1 {
+		stepWord = "step"
+	}
+	summary := fmt.Sprintf("%d %s", len(res.Steps), stepWord)
 	if seams > 0 {
-		summary += fmt.Sprintf(", швов: %d", seams)
+		summary += fmt.Sprintf(", seams: %d", seams)
 	}
 	if doors > 0 {
-		summary += fmt.Sprintf(", дверей: %d (открытие включено в путь)", doors)
+		summary += fmt.Sprintf(", doors: %d (opening included in route)", doors)
 	}
 	if locked > 0 {
-		summary += fmt.Sprintf(", ⚠ заперто по умолчанию: %d", locked)
+		summary += fmt.Sprintf(", ⚠ locked by default: %d", locked)
 	}
 	if phrases > 0 {
-		summary += fmt.Sprintf(", проходов фразой: %d", phrases)
+		summary += fmt.Sprintf(", phrase passages: %d", phrases)
 	}
 	if dt > 0 {
-		summary += fmt.Sprintf(", ⚠ death trap на пути: %d", dt)
+		summary += fmt.Sprintf(", ⚠ death traps on route: %d", dt)
 	}
 	out := map[string]any{
 		"reachable":    true,

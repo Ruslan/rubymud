@@ -85,6 +85,9 @@ func TestPathJSONCombinesAnOpeningCommandWithAPhrase(t *testing.T) {
 	if pathResultJSON(res)["locked"] != 1 {
 		t.Errorf("a locked hop was not reported: %#v", pathResultJSON(res))
 	}
+	if got := pathResultJSON(res)["summary"]; got != "1 step, doors: 1 (opening included in route), ⚠ locked by default: 1, phrase passages: 1" {
+		t.Errorf("singular summary = %q", got)
+	}
 }
 
 // TestPathJSONFlagsAVetoOnlyRefusal — п.2.3 on the wire. "No route" and "no route
@@ -92,7 +95,7 @@ func TestPathJSONCombinesAnOpeningCommandWithAPhrase(t *testing.T) {
 // player hunts for a hole in the map that is not there.
 func TestPathJSONFlagsAVetoOnlyRefusal(t *testing.T) {
 	out := pathResultJSON(mapper.PathResult{
-		Reachable: false, VetoedOnly: true, Reason: "маршрут есть, но только через грани с пометкой «не водить сюда»",
+		Reachable: false, VetoedOnly: true, Reason: "a route exists only through edges marked \"avoid in routes\"",
 	})
 	if out["vetoed_only"] != true {
 		t.Errorf("vetoed_only not surfaced: %#v", out)
@@ -117,6 +120,9 @@ func TestPathJSONLeavesAnOrdinaryRouteAlone(t *testing.T) {
 		t.Errorf("directions = %q", got)
 	}
 	out := pathResultJSON(res)
+	if out["summary"] != "2 steps" {
+		t.Errorf("plural summary = %q", out["summary"])
+	}
 	for _, k := range []string{"doors", "door_at", "locked", "phrases", "vetoed_only"} {
 		if _, present := out[k]; present {
 			t.Errorf("%q leaked into a plain route: %#v", k, out)
@@ -124,9 +130,9 @@ func TestPathJSONLeavesAnOrdinaryRouteAlone(t *testing.T) {
 	}
 }
 
-// The pane prints `summary` verbatim and the mapper's interface language is
-// Russian, so it must not be an English skeleton with Russian clauses inside it.
-func TestPathJSONSummaryIsRussianThroughout(t *testing.T) {
+// The pane prints `summary` verbatim, so every clause must use the mapper's
+// English interface language.
+func TestPathJSONSummaryIsEnglishThroughout(t *testing.T) {
 	out := pathResultJSON(mapper.PathResult{Reachable: true, Steps: []mapper.PathStep{
 		{Command: "n", Dir: "n", Seam: true},
 		{Command: "фраза", Dir: "e", Phrase: "фраза",
@@ -136,14 +142,9 @@ func TestPathJSONSummaryIsRussianThroughout(t *testing.T) {
 	if summary == "" {
 		t.Fatalf("no summary: %#v", out)
 	}
-	for _, english := range []string{"step(s)", "seam(s)", "door(s)", "on path"} {
-		if strings.Contains(summary, english) {
-			t.Errorf("summary still carries the english skeleton %q: %q", english, summary)
-		}
-	}
-	for _, ru := range []string{"шаг", "швов", "дверей", "заперто", "фразой"} {
-		if !strings.Contains(summary, ru) {
-			t.Errorf("summary is missing %q: %q", ru, summary)
+	for _, want := range []string{"steps", "seams", "doors", "locked", "phrase passages"} {
+		if !strings.Contains(summary, want) {
+			t.Errorf("summary is missing %q: %q", want, summary)
 		}
 	}
 }

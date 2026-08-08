@@ -89,10 +89,10 @@ describe("recordAction", () => {
 
   it("labels an unmapped cell 'record' and a mapped one 'update'", () => {
     expect(recordAction(pos(), live, here, false).label).toBe(
-      "Записать комнату сюда",
+      "Record room here",
     );
     expect(recordAction(pos(), live, here, true).label).toBe(
-      "Обновить комнату из живого",
+      "Update room from live data",
     );
   });
 
@@ -105,14 +105,14 @@ describe("recordAction", () => {
   it("refuses a cell the player is not standing in", () => {
     const a = recordAction(pos(), live, { z: "Z", x: 5, y: 5, l: 0 }, true);
     expect(a.enabled).toBe(false);
-    expect(a.reason).toContain("стоите");
+    expect(a.reason).toContain("standing");
   });
 
   it("refuses without a position at all", () => {
     expect(recordAction(null, live, here, false).enabled).toBe(false);
     expect(
       recordAction(pos({ valid: false }), live, here, false).reason,
-    ).toContain("Я здесь");
+    ).toContain("I'm here");
   });
 
   it("refuses until a live room block has been seen", () => {
@@ -124,7 +124,7 @@ describe("recordAction", () => {
       false,
     );
     expect(blank.enabled).toBe(false);
-    expect(blank.reason).toContain("живая комната");
+    expect(blank.reason).toContain("live room");
   });
 });
 
@@ -222,7 +222,7 @@ describe("recordAction guards", () => {
       true,
     );
     expect(a.enabled).toBe(false);
-    expect(a.reason).toContain("не соответствует");
+    expect(a.reason).toContain("does not match");
   });
 
   it("refuses mid-speedwalk, because the re-anchor would flush the queue", () => {
@@ -233,7 +233,7 @@ describe("recordAction guards", () => {
       false,
     );
     expect(a.enabled).toBe(false);
-    expect(a.reason).toContain("перемещение");
+    expect(a.reason).toContain("movement");
   });
 
   it("allows the normal case (settled, describing this cell)", () => {
@@ -364,30 +364,30 @@ describe("recordButtonState", () => {
   it("is disabled and explains itself with no live room block yet", () => {
     const st = recordButtonState(pos(), { hint: "", desc: "", exits: "" }, false);
     expect(st.enabled).toBe(false);
-    expect(st.title).toContain("живая комната");
+    expect(st.title).toContain("live room");
   });
 
   it("is disabled and explains itself mid-speedwalk", () => {
     const st = recordButtonState(pos({ pendingMoves: 3 }), live, false);
     expect(st.enabled).toBe(false);
-    expect(st.title).toContain("перемещение");
+    expect(st.title).toContain("movement");
   });
 
   it("is disabled with no position at all, and offers no cell to write to", () => {
     const st = recordButtonState(null, live, null);
     expect(st.enabled).toBe(false);
     expect(st.cell).toBeNull();
-    expect(st.title).toContain("Я здесь");
+    expect(st.title).toContain("I'm here");
     expect(recordButtonState(pos({ valid: false }), live, null).cell).toBeNull();
   });
 
   it("keeps one caption and puts create-vs-update in the tooltip", () => {
     expect(recordButtonState(pos(), live, false).label).toBe(recordButtonLabel);
     expect(recordButtonState(pos(), live, true).label).toBe(recordButtonLabel);
-    expect(recordButtonState(pos(), live, false).title).toContain("создаст");
-    expect(recordButtonState(pos(), live, true).title).toContain("обновит");
+    expect(recordButtonState(pos(), live, false).title).toContain("create");
+    expect(recordButtonState(pos(), live, true).title).toContain("update");
     // Unknown occupancy (the player's zone is not loaded) must not fabricate one.
-    expect(recordButtonState(pos(), live, null).title).toContain("запишет");
+    expect(recordButtonState(pos(), live, null).title).toContain("record");
   });
 
   // The button and the menu item are two doors to ONE write, so a state either
