@@ -1265,17 +1265,21 @@ export class MapPaneController {
     this.walkStopButton.disabled = !next.active || next.state === "stopping";
     if (!next.active) {
       this.walkProgress.textContent = "";
+      this.walkProgress.removeAttribute("title");
       if (next.reason && next.reason !== "completed") this.setStatus(next.reason);
       return;
     }
     const hop = next.total > 0 ? Math.min(next.current + 1, next.total) : 0;
+    let label: string;
     if (next.state === "paused") {
-      this.walkProgress.textContent = `Walk ${next.current}/${next.total}: ${next.reason ?? "paused"}`;
+      label = `Walk ${next.current}/${next.total}: ${next.reason ?? "paused"}`;
     } else {
-      this.walkProgress.textContent = next.state === "stopping"
+      label = next.state === "stopping"
         ? `Stopping ${next.current}/${next.total}`
         : `Walk ${hop}/${next.total}`;
     }
+    this.walkProgress.textContent = label;
+    this.walkProgress.title = label;
   }
 
   private async cancelMapWalk(): Promise<void> {

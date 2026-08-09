@@ -49,6 +49,22 @@ type optionalString struct {
 	set   bool
 }
 
+// optionalListenAddress keeps the default separate from an explicit --listen
+// so a saved Settings value can own normal starts without hiding operator
+// intent. Unlike optionalString it is not secret and may appear in diagnostics.
+type optionalListenAddress struct {
+	value string
+	set   bool
+}
+
+func (v *optionalListenAddress) String() string { return v.value }
+
+func (v *optionalListenAddress) Set(raw string) error {
+	v.value = raw
+	v.set = true
+	return nil
+}
+
 // String is used by flag diagnostics and must never disclose a parsed secret.
 func (v *optionalString) String() string { return "" }
 
@@ -101,7 +117,8 @@ func runtimeDataDir(db string) (string, error) {
 func main() {
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	mudAddr := flag.String("mud", "", "Optional: initial MUD server address in host:port format")
-	listenAddr := flag.String("listen", ":8080", "HTTP listen address")
+	listenAddr := optionalListenAddress{value: web.DefaultWebListenAddr}
+	flag.Var(&listenAddr, "listen", "HTTP listen address (overrides saved Web Access listener)")
 	dbPath := flag.String("db", "data/mudhost.db", "SQLite database path")
 	configDirPath := flag.String("config-dir", "", "Directory for exported profile .tt files (default: config/ next to --db)")
 	migrateOnly := flag.Bool("migrate-only", false, "Run migrations and exit")
@@ -121,10 +138,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("MCP configuration: %v", err)
 	}
-	if err := web.ValidateMCPConfig(*listenAddr, mcpConfig); err != nil {
-		log.Fatalf("MCP configuration: %v", err)
-	}
-
 	// Ensure data directory exists. Resolve a SQLite URI before taking its
 	// directory; filepath.Dir("file:...") would create the wrong path.
 	dataDir, err := runtimeDataDir(*dbPath)
@@ -174,6 +187,18 @@ func main() {
 		return
 	}
 
+	persistedWebAuth, err := store.GetWebAuthSettings()
+	if err != nil {
+		log.Fatalf("load Web Access settings: %v", err)
+	}
+	listenerConfig, err := web.ResolveWebListenerConfig(persistedWebAuth.ListenAddr, listenAddr.value, listenAddr.set)
+	if err != nil {
+		log.Fatalf("Web Access listener configuration: %v", err)
+	}
+	if err := web.ValidateMCPConfig(listenerConfig.CurrentAddr, mcpConfig); err != nil {
+		log.Fatalf("MCP configuration: %v", err)
+	}
+
 	manager := session.NewManager(store)
 
 	// If --mud is provided, ensure a default session exists and connect to it
@@ -198,15 +223,21 @@ func main() {
 		Pass: os.Getenv("MUDHOST_BASIC_AUTH_PASS"),
 	}
 
-	server, err := web.New(*listenAddr, manager, store, *configDirPath, basicAuth, mcpConfig)
+	server, err := web.NewWithWebListenerConfig(listenerConfig, manager, store, *configDirPath, basicAuth, mcpConfig)
 	if err != nil {
 		log.Fatalf("create web server: %v", err)
 	}
 	if basicAuth.User != "" && basicAuth.Pass != "" {
 		log.Printf("HTTP basic auth enabled for user %q", basicAuth.User)
 	}
-	log.Printf("mudhost listening on %s using db %s", *listenAddr, *dbPath)
-	log.Printf("open in browser: http://%s", listenURL(*listenAddr))
+	if listenerConfig.CurrentAddr != listenerConfig.ConfiguredAddr {
+		log.Printf("mudhost listener %s is an explicit --listen override; Settings will use %s next start", listenerConfig.CurrentAddr, listenerConfig.ConfiguredAddr)
+	}
+	if web.WebListenerExposure(listenerConfig.CurrentAddr) == "network" {
+		log.Printf("WARNING: Web Access Basic Auth over plain HTTP can expose passwords; use a TLS reverse proxy before network deployment")
+	}
+	log.Printf("mudhost listening on %s using db %s", listenerConfig.CurrentAddr, *dbPath)
+	log.Printf("open in browser: http://%s", listenURL(listenerConfig.CurrentAddr))
 	if err := server.ListenAndServe(); err != nil {
 		log.Fatalf("web server failed: %v", err)
 	}

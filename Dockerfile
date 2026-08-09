@@ -25,6 +25,9 @@ FROM alpine:latest
 
 ENV MUD_HOST=""
 ENV UI_PORT=8080
+# Docker follows the local-first default. Set UI_LISTEN=0.0.0.0:8080 only with
+# paired MUDHOST_BASIC_AUTH_USER/PASS or a database which already enables Web Access.
+ENV UI_LISTEN=""
 ENV DATA_DIR="/data"
 
 # Ensure data dir exists
@@ -36,4 +39,4 @@ EXPOSE ${UI_PORT}
 VOLUME ${DATA_DIR}
 
 # Using exec to ensure the Go app receives OS signals (like SIGTERM) properly
-CMD ["/bin/sh", "-c", "exec /mudhost --mud \"${MUD_HOST}\" --listen \":${UI_PORT}\" --db \"${DATA_DIR}/mudhost.db\""]
+CMD ["/bin/sh", "-c", "if [ -n \"${UI_LISTEN}\" ]; then set -- --listen \"${UI_LISTEN}\"; elif [ \"${UI_PORT}\" != 8080 ]; then set -- --listen \"127.0.0.1:${UI_PORT}\"; else set --; fi; exec /mudhost --mud \"${MUD_HOST}\" \"$@\" --db \"${DATA_DIR}/mudhost.db\""]

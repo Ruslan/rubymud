@@ -14,7 +14,7 @@
   import MapperProfilesSection from './settings/MapperProfilesSection.svelte';
   import MapSetsSection from './settings/MapSetsSection.svelte';
   import * as api from './settings/api';
-  import type { MCPSettings, MCPSettingsWriteResponse } from './settings/api';
+  import type { MCPSettings, MCPSettingsWriteResponse, WebAuthSettings } from './settings/api';
   import {
     copyOfMapperProfile,
     emptyMapperProfileForm,
@@ -62,6 +62,13 @@
   let mcpRevision = 0;
   let mcpCopyStatus = '';
   let mcpTokenInput: HTMLInputElement;
+  let webAuthSettings: WebAuthSettings = { enabled: false, requested_enabled: false, effective_enabled: false, username: '', credential_configured: false, externally_managed: false, current_listener: '127.0.0.1:8080', current_exposure: 'loopback', configured_listener: '127.0.0.1:8080', configured_exposure: 'loopback', listener_externally_managed: false, restart_required: false };
+  let webAuthUsername = '';
+  let webAuthPassword = '';
+  let webAuthPasswordConfirm = '';
+  let webAuthListenerMode: 'local' | 'network' = 'local';
+  let webAuthListenAddr = '0.0.0.0:8080';
+  let webAuthBusy = false;
   const wakeLockEnabledStorageKey = 'mudhost.wakeLockEnabled';
   let wakeLockEnabled = true;
 
@@ -377,9 +384,13 @@
 
       if (currentTab === 'app') {
         const revision = mcpRevision;
-        const [nextAppSettings, nextMCPSettings] = await Promise.all([api.fetchAppSettings(), api.fetchMCPSettings()]);
+        const [nextAppSettings, nextMCPSettings, nextWebAuthSettings] = await Promise.all([api.fetchAppSettings(), api.fetchMCPSettings(), api.fetchWebAuthSettings()]);
         appSettings = nextAppSettings;
         if (revision === mcpRevision) mcpSettings = nextMCPSettings;
+        webAuthSettings = nextWebAuthSettings;
+        webAuthUsername = nextWebAuthSettings.username;
+        webAuthListenerMode = nextWebAuthSettings.configured_exposure === 'network' ? 'network' : 'local';
+        if (nextWebAuthSettings.configured_exposure === 'network') webAuthListenAddr = nextWebAuthSettings.configured_listener;
       } else if (currentTab === 'logs' && selectedSessionID) {
         await fetchLogs();
         // If the URL carried ?q=, run that search once on first load so a shared
@@ -1333,6 +1344,86 @@
     }
   }
 
+  async function saveWebAuthEnabled(enabled: boolean) {
+    if (webAuthBusy || webAuthSettings.externally_managed) return;
+    if (!enabled && !confirm('Disable web access protection?')) {
+      webAuthSettings = { ...webAuthSettings };
+      return;
+    }
+    webAuthBusy = true;
+    try {
+      const res = await api.saveWebAuthSettingsRequest({ enabled });
+      if (!res.ok) {
+        formError = await res.text() || 'Failed to update web access protection.';
+        webAuthSettings = { ...webAuthSettings };
+        return;
+      }
+      webAuthSettings = await res.json();
+      webAuthUsername = webAuthSettings.username;
+      formError = '';
+      if (enabled) window.location.reload();
+    } catch {
+      formError = 'Web access protection may have changed. Reload the page to verify the current credentials.';
+    } finally {
+      webAuthBusy = false;
+    }
+  }
+
+  async function saveWebAuthCredentials() {
+    if (webAuthBusy || webAuthSettings.externally_managed) return;
+    if (webAuthPassword !== webAuthPasswordConfirm) {
+      formError = 'Passwords do not match.';
+      return;
+    }
+    webAuthBusy = true;
+    try {
+      const res = await api.saveWebAuthSettingsRequest({
+        enabled: true,
+        username: webAuthUsername,
+        password: webAuthPassword,
+      });
+      if (!res.ok) {
+        formError = await res.text() || 'Failed to save web access credentials.';
+        return;
+      }
+      webAuthSettings = await res.json();
+      webAuthListenerMode = webAuthSettings.configured_exposure === 'network' ? 'network' : 'local';
+      if (webAuthSettings.configured_exposure === 'network') webAuthListenAddr = webAuthSettings.configured_listener;
+      webAuthPassword = '';
+      webAuthPasswordConfirm = '';
+      formError = '';
+      window.location.reload();
+    } catch {
+      formError = 'Web access credentials may have changed. Reload the page and sign in with the new credentials.';
+    } finally {
+      webAuthBusy = false;
+    }
+  }
+
+  async function saveWebAuthListener() {
+    if (webAuthBusy) return;
+    webAuthBusy = true;
+    try {
+      const listen_addr = webAuthListenerMode === 'local' ? '127.0.0.1:8080' : webAuthListenAddr;
+      const res = await api.saveWebAuthSettingsRequest({
+        enabled: webAuthSettings.enabled,
+        listen_addr,
+      });
+      if (!res.ok) {
+        formError = await res.text() || 'Failed to save web listener.';
+        return;
+      }
+      webAuthSettings = await res.json();
+      webAuthListenerMode = webAuthSettings.configured_exposure === 'network' ? 'network' : 'local';
+      if (webAuthSettings.configured_exposure === 'network') webAuthListenAddr = webAuthSettings.configured_listener;
+      formError = '';
+    } catch {
+      formError = 'Web listener settings may have changed. Reload the page to verify them.';
+    } finally {
+      webAuthBusy = false;
+    }
+  }
+
   async function rotateMCPToken() {
     if (mcpBusy) return;
     const revision = ++mcpRevision;
@@ -1943,6 +2034,71 @@
             </div>
         </div>
         <div class="editor-box integration-settings">
+            <h3>Web Access</h3>
+            <div class="integration-row">
+                <label class="checkbox-label" title={webAuthSettings.externally_managed ? webAuthSettings.externally_managed_reason : ''}>
+                    <input
+                      type="checkbox"
+                      checked={webAuthSettings.requested_enabled}
+                      disabled={webAuthBusy || webAuthSettings.externally_managed || (!webAuthSettings.credential_configured && !webAuthSettings.requested_enabled)}
+                      on:change={(event) => saveWebAuthEnabled((event.currentTarget as HTMLInputElement).checked)}
+                    />
+                    Protected
+                </label>
+                <span class:status-active={webAuthSettings.effective_enabled} class="integration-status">{webAuthSettings.effective_enabled ? 'Active' : 'Inactive'}</span>
+                <span class:status-active={webAuthSettings.credential_configured} class="integration-status">{webAuthSettings.credential_configured ? 'Credentials configured' : 'No credentials'}</span>
+            </div>
+            {#if webAuthSettings.externally_managed_reason}
+              <p class="integration-note">{webAuthSettings.externally_managed_reason}</p>
+            {/if}
+            <form class="credential-form" on:submit|preventDefault={saveWebAuthCredentials}>
+                <label>
+                    <span>Username</span>
+                    <input bind:value={webAuthUsername} type="text" autocomplete="username" maxlength="128" disabled={webAuthBusy || webAuthSettings.externally_managed} required />
+                </label>
+                <label>
+                    <span>New password</span>
+                    <input bind:value={webAuthPassword} type="password" autocomplete="new-password" minlength="12" maxlength="72" disabled={webAuthBusy || webAuthSettings.externally_managed} required />
+                </label>
+                <label>
+                    <span>Confirm password</span>
+                    <input bind:value={webAuthPasswordConfirm} type="password" autocomplete="new-password" minlength="12" maxlength="72" disabled={webAuthBusy || webAuthSettings.externally_managed} required />
+                </label>
+                <div>
+                    <button class="btn-secondary" type="submit" disabled={webAuthBusy || webAuthSettings.externally_managed || !webAuthUsername || webAuthPassword.length < 12 || webAuthPassword !== webAuthPasswordConfirm}>
+                      {webAuthBusy ? 'Saving...' : webAuthSettings.effective_enabled ? 'Change credentials' : 'Save and enable'}
+                    </button>
+                </div>
+            </form>
+            <div class="listener-form">
+                <div class="listener-form__header">
+                    <span>Listener for next start</span>
+                    {#if webAuthSettings.restart_required}<span class="integration-status status-active">Restart required</span>{/if}
+                </div>
+                <div class="listener-mode" role="group" aria-label="Web listener mode">
+                    <button type="button" class:active={webAuthListenerMode === 'local'} disabled={webAuthBusy} on:click={() => webAuthListenerMode = 'local'}>Local only</button>
+                    <button type="button" class:active={webAuthListenerMode === 'network'} disabled={webAuthBusy || !webAuthSettings.effective_enabled} on:click={() => webAuthListenerMode = 'network'}>Network access</button>
+                </div>
+                {#if webAuthListenerMode === 'network'}
+                    <label class="listener-address">
+                        <span>Listen address</span>
+                        <input bind:value={webAuthListenAddr} type="text" inputmode="text" placeholder="0.0.0.0:8080" disabled={webAuthBusy} required />
+                    </label>
+                {/if}
+                <div class="integration-row">
+                    <span class="integration-status">Current: {webAuthSettings.current_listener} ({webAuthSettings.current_exposure})</span>
+                    <span class="integration-status">Next: {webAuthSettings.configured_listener} ({webAuthSettings.configured_exposure})</span>
+                    <button class="btn-secondary" type="button" disabled={webAuthBusy || (webAuthListenerMode === 'network' && !webAuthSettings.effective_enabled)} on:click={saveWebAuthListener}>{webAuthBusy ? 'Saving...' : 'Save listener'}</button>
+                </div>
+                {#if webAuthSettings.listener_externally_managed}
+                  <p class="integration-note">The current listener is set by <code>--listen</code>. The saved listener applies after starting without that flag.</p>
+                {/if}
+                {#if webAuthListenerMode === 'network' || webAuthSettings.configured_exposure === 'network'}
+                  <p class="listener-security-warning">Network access sends a reusable Basic Auth password. Use a TLS reverse proxy outside a trusted local network.</p>
+                {/if}
+            </div>
+        </div>
+        <div class="editor-box integration-settings">
             <h3>Integration: MCP</h3>
             <div class="integration-row">
                 <label class="checkbox-label" title={mcpSettings.enabled_externally_managed ? mcpSettings.externally_managed_reason : ''}>
@@ -2031,6 +2187,18 @@
   .integration-status { color: #9ba3af; font-size: 0.82rem; border-left: 1px solid #30363d; padding-left: 10px; }
   .status-active { color: #56d364; }
   .integration-note { color: #9ba3af; font-size: 0.85rem; margin: 0; }
+  .credential-form { display: grid; grid-template-columns: repeat(3, minmax(160px, 260px)); gap: 12px; align-items: end; }
+  .credential-form label { display: flex; flex-direction: column; gap: 5px; color: #9ba3af; font-size: 0.8rem; }
+  .credential-form input { box-sizing: border-box; width: 100%; min-width: 0; background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px 12px; border-radius: 6px; font: inherit; }
+  .listener-form { display: grid; gap: 9px; margin-top: 16px; padding-top: 14px; border-top: 1px solid #30363d; }
+  .listener-form__header { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; color: #cbd5e1; font-size: 0.88rem; }
+  .listener-mode { display: inline-flex; width: fit-content; border: 1px solid #30363d; border-radius: 6px; overflow: hidden; }
+  .listener-mode button { border: 0; border-radius: 0; background: #161b22; color: #9ba3af; padding: 7px 10px; font: inherit; }
+  .listener-mode button + button { border-left: 1px solid #30363d; }
+  .listener-mode button.active { background: #1f6feb; color: #fff; }
+  .listener-address { display: flex; flex-direction: column; gap: 5px; max-width: 320px; color: #9ba3af; font-size: 0.8rem; }
+  .listener-address input { box-sizing: border-box; width: 100%; min-width: 0; background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px 12px; border-radius: 6px; font: inherit; }
+  .listener-security-warning { margin: 0; color: #f0b429; font-size: 0.85rem; }
   .token-dialog { box-sizing: border-box; width: min(520px, calc(100vw - 36px)); max-height: calc(100vh - 36px); overflow: auto; background: #1a1d21; border: 1px solid #30363d; border-radius: 8px; padding: 20px; }
   .token-dialog::backdrop { background: rgba(0, 0, 0, 0.64); }
   .token-dialog h3 { margin: 0 0 14px; }
@@ -2065,6 +2233,7 @@
     .nav-links li button { padding: 10px 12px; font-size: 0.85rem; }
     .content { padding: 18px 14px; }
     .description { margin-bottom: 20px; }
+    .credential-form { grid-template-columns: 1fr; }
   }
 
 </style>

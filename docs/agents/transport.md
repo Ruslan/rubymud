@@ -25,6 +25,18 @@ Use this when you need to understand how `rubymud` communicates with MUD servers
 - **Token Protection**: Every WebSocket and API request must include a valid session token.
 - **Token Delivery**: The token is either sent in the `X-Session-Token` header or as a `token` query parameter.
 - **Storage**: The token is generated on the first run and stored in the `settings` table of the database.
+- **Web Access**: A first run binds `127.0.0.1:8080` with browser Basic Auth
+  disabled. App Settings stores credentials as a bcrypt hash and the desired
+  next-start listener. Network access can be saved only while Web Access is
+  active; listener changes require a restart and cannot remove protection until
+  both current and saved listeners are loopback. `MUDHOST_BASIC_AUTH_USER` and
+  `MUDHOST_BASIC_AUTH_PASS` are a paired credential override, but do not lock
+  repair of the saved listener. `--listen` owns the running address only.
+  Browser Basic Auth over a network listener requires a TLS reverse proxy:
+  plain HTTP exposes the password.
+- **MCP Separation**: Exact path `/mcp` bypasses browser Basic Auth and uses its
+  own Bearer credential. Public PWA assets also bypass Basic Auth; application
+  HTML, API routes, and WebSocket upgrades do not.
 
 ### Message Format
 - **Outgoing (Server -> Client)**: JSON objects with a `type` field (e.g., `log`, `status`, `tick`, `variables`).

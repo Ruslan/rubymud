@@ -47,6 +47,33 @@ Do not put a real token in source control, shared client configuration, logs,
 or prompt text. The MCP bearer credential is independent of the browser/basic
 authentication credential.
 
+When `mudhost` is behind a reverse proxy, do not apply the proxy's Basic Auth
+gate to `/mcp`: Basic and Bearer both occupy the single `Authorization` header.
+Use the Web Access control in App Settings for the browser UI and the MCP Bearer
+credential for `/mcp`; the built-in browser gate deliberately exempts that
+exact path. The reverse proxy can then provide TLS and network policy without
+rewriting either credential.
+
+For a no-downtime migration from proxy Basic Auth, first configure the same
+username and password in App Settings, then remove the proxy's Basic Auth gate
+and reload the proxy. Existing browser credentials continue to work while the
+application becomes the sole owner of browser authentication.
+
+On a fresh installation the browser listener is `127.0.0.1:8080`; it is not
+published to the local network until Web Access credentials and a network
+listener are deliberately configured in App Settings. A listener saved there
+applies after restart. For network deployments, let the proxy provide HTTPS:
+Basic Auth over plain HTTP exposes the password. A temporary explicit
+`--listen=127.0.0.1:PORT` override keeps the persisted listener editable for
+recovery without exposing it.
+
+For a local Docker trial, export `MUDHOST_BASIC_AUTH_USER` and
+`MUDHOST_BASIC_AUTH_PASS`, then run `make docker-run`. The target publishes the
+container only on host loopback and passes inherited credentials to Docker by
+name, without printing them or putting them in the Make recipe. It intentionally
+has no default password. For a remote deployment, use a secret manager or
+prepared database and put HTTPS in front of the application.
+
 ## Enabling And Security
 
 MCP is disabled by default. A disabled endpoint responds as not found.

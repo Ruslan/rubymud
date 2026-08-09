@@ -3,7 +3,6 @@ package web
 import (
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/subtle"
 	"embed"
 	"encoding/base64"
 	"encoding/hex"
@@ -24,6 +23,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/gorilla/websocket"
+	"golang.org/x/crypto/bcrypt"
 
 	"rubymud/go/internal/colorreg"
 	"rubymud/go/internal/session"
@@ -41,12 +41,14 @@ type Server struct {
 	store                         *storage.Store
 	upgrader                      websocket.Upgrader
 	apiToken                      string
-	basicAuth                     BasicAuth
+	webAuthRuntime                *webAuthRuntime
+	webListener                   WebListenerConfig
 	mcp                           MCPConfig
 	mcpRuntime                    *mcpRuntime
 	mcpSessions                   *mcpSessionStore
 	mcpTokenRandom                io.Reader
 	mcpSettingsUnsubscribe        func()
+	webAuthSettingsUnsubscribe    func()
 	configDir                     string
 	roomImagesRoot                string
 	mapSetDeleteMu                sync.Mutex
@@ -152,10 +154,9 @@ func validateMCPListenerAddr(addr net.Addr, config MCPConfig) error {
 	return nil
 }
 
-// BasicAuth holds optional HTTP basic auth credentials. When both fields are
-// set, browser routes except public PWA assets are gated behind basic auth
-// (issue #6). MCP has its own Bearer credential because both schemes cannot
-// share one Authorization header.
+// BasicAuth holds the optional operator override for database-managed web
+// access credentials. MCP has its own Bearer credential because both schemes
+// cannot share one Authorization header.
 type BasicAuth struct {
 	User string
 	Pass string
@@ -184,7 +185,36 @@ type clientMessage struct {
 	ClientCommandID string `json:"client_command_id"`
 }
 
+// New preserves the package's historical constructor for in-process callers.
+// The executable uses NewWithWebListenerConfig so startup can distinguish a
+// saved listener from an explicit --listen operator override.
 func New(listenAddr string, manager *session.Manager, store *storage.Store, configDir string, basicAuth BasicAuth, mcp MCPConfig) (*Server, error) {
+	return newServer(WebListenerConfig{CurrentAddr: listenAddr, ConfiguredAddr: listenAddr}, manager, store, configDir, basicAuth, mcp)
+}
+
+// NewWithWebListenerConfig creates the production server with resolved
+// current and next-start listener ownership. The final exposure check happens
+// after net.Listen resolves the actual bound address in ListenAndServe.
+func NewWithWebListenerConfig(listener WebListenerConfig, manager *session.Manager, store *storage.Store, configDir string, basicAuth BasicAuth, mcp MCPConfig) (*Server, error) {
+	if err := ValidateWebListenAddr(listener.CurrentAddr); err != nil {
+		return nil, fmt.Errorf("current web listener: %w", err)
+	}
+	if err := ValidateWebListenAddr(listener.ConfiguredAddr); err != nil {
+		return nil, fmt.Errorf("configured web listener: %w", err)
+	}
+	return newServer(listener, manager, store, configDir, basicAuth, mcp)
+}
+
+func newServer(listener WebListenerConfig, manager *session.Manager, store *storage.Store, configDir string, basicAuth BasicAuth, mcp MCPConfig) (*Server, error) {
+	listenAddr := listener.CurrentAddr
+	persistedWebAuth, err := store.GetWebAuthSettings()
+	if err != nil {
+		return nil, fmt.Errorf("load web access settings: %w", err)
+	}
+	webAuthRuntime, err := newWebAuthRuntime(persistedWebAuth, basicAuth)
+	if err != nil {
+		return nil, fmt.Errorf("web access configuration: %w", err)
+	}
 	mcp = mcp.normalized()
 	// Preserve the established operator-facing startup failure for the legacy
 	// explicit Enabled:true form. Database-owned state is instead reconciled
@@ -218,7 +248,8 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 		configDir:      configDir,
 		roomImagesRoot: store.RoomImagesRoot(),
 		apiToken:       apiToken,
-		basicAuth:      basicAuth,
+		webAuthRuntime: webAuthRuntime,
+		webListener:    listener,
 		mcp:            mcp,
 		mcpRuntime:     runtime,
 		mcpSessions:    newMCPSessionStore(),
@@ -232,19 +263,36 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 	s.mcpSettingsUnsubscribe = store.SubscribeMCPSettings(func(settings storage.MCPSettings) {
 		_ = s.applyPersistedMCPSettings(settings)
 	})
+	s.webAuthSettingsUnsubscribe = store.SubscribeWebAuthSettings(func(settings storage.WebAuthSettings) {
+		_ = s.webAuthRuntime.replacePersisted(settings)
+	})
 	// Close the read/subscribe race: a write missed before registration is seen
 	// here, while revision ordering makes a concurrent callback win over stale data.
 	currentMCP, err := store.GetMCPSettings()
 	if err != nil {
 		s.mcpSettingsUnsubscribe()
+		s.webAuthSettingsUnsubscribe()
 		return nil, fmt.Errorf("reload MCP settings after subscribe: %w", err)
 	}
 	if err := s.applyPersistedMCPSettings(currentMCP); err != nil {
 		s.mcpSettingsUnsubscribe()
+		s.webAuthSettingsUnsubscribe()
+		return nil, err
+	}
+	currentWebAuth, err := store.GetWebAuthSettings()
+	if err != nil {
+		s.mcpSettingsUnsubscribe()
+		s.webAuthSettingsUnsubscribe()
+		return nil, fmt.Errorf("reload web access settings after subscribe: %w", err)
+	}
+	if err := s.webAuthRuntime.replacePersisted(currentWebAuth); err != nil {
+		s.mcpSettingsUnsubscribe()
+		s.webAuthSettingsUnsubscribe()
 		return nil, err
 	}
 	if err := s.recoverMapSetImageTombstones(); err != nil {
 		s.mcpSettingsUnsubscribe()
+		s.webAuthSettingsUnsubscribe()
 		return nil, fmt.Errorf("recover map-set image cleanup: %w", err)
 	}
 
@@ -280,33 +328,24 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 		})
 	})
 
-	// Optional HTTP basic auth: an outer gate in front of the token check.
-	// PWA/static assets stay public so the app can be discovered and installed.
-	if s.basicAuth.enabled() {
-		r.Use(func(next http.Handler) http.Handler {
-			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				// MCP has an independent Bearer credential. Requiring Basic here
-				// would make the endpoint unusable because both use Authorization.
-				if r.URL.Path == "/mcp" {
-					next.ServeHTTP(w, r)
-					return
-				}
-				if isPublicAsset(r.URL.Path) {
-					next.ServeHTTP(w, r)
-					return
-				}
-				user, pass, ok := r.BasicAuth()
-				userOK := subtle.ConstantTimeCompare([]byte(user), []byte(s.basicAuth.User)) == 1
-				passOK := subtle.ConstantTimeCompare([]byte(pass), []byte(s.basicAuth.Pass)) == 1
-				if !ok || !userOK || !passOK {
-					w.Header().Set("WWW-Authenticate", `Basic realm="mudhost", charset="UTF-8"`)
-					http.Error(w, "Unauthorized", http.StatusUnauthorized)
-					return
-				}
+	// HTTP basic auth is a runtime gate so Settings changes take effect without
+	// rebuilding the router. PWA assets remain public; MCP uses its own Bearer
+	// credential because both schemes cannot share Authorization.
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/mcp" || isPublicAsset(r.URL.Path) {
 				next.ServeHTTP(w, r)
-			})
+				return
+			}
+			user, pass, ok := r.BasicAuth()
+			if !s.webAuthRuntime.authenticate(user, pass, ok) {
+				w.Header().Set("WWW-Authenticate", `Basic realm="mudhost", charset="UTF-8"`)
+				http.Error(w, "Unauthorized", http.StatusUnauthorized)
+				return
+			}
+			next.ServeHTTP(w, r)
 		})
-	}
+	})
 
 	// Token protection: check X-Session-Token header
 	r.Use(func(next http.Handler) http.Handler {
@@ -522,6 +561,10 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 			r.Patch("/settings", s.updateMCPSettings)
 			r.Post("/settings/token", s.rotateMCPToken)
 		})
+		r.Route("/web-auth", func(r chi.Router) {
+			r.Get("/settings", s.getWebAuthSettings)
+			r.Patch("/settings", s.updateWebAuthSettings)
+		})
 	})
 
 	r.Handle("/*", http.HandlerFunc(s.handleIndex))
@@ -532,6 +575,7 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 	}
 	s.httpServer.RegisterOnShutdown(func() {
 		s.mcpSettingsUnsubscribe()
+		s.webAuthSettingsUnsubscribe()
 		s.mcpSessions.clear()
 	})
 
@@ -541,6 +585,10 @@ func New(listenAddr string, manager *session.Manager, store *storage.Store, conf
 func (s *Server) ListenAndServe() error {
 	listener, err := net.Listen("tcp", s.httpServer.Addr)
 	if err != nil {
+		return err
+	}
+	if err := validateWebAuthListenerAddr(listener.Addr(), s.webAuthRuntime.status().EffectiveEnabled); err != nil {
+		_ = listener.Close()
 		return err
 	}
 	gate := s.mcpRuntime.snapshotValue()
@@ -554,6 +602,7 @@ func (s *Server) ListenAndServe() error {
 	}
 	err = s.httpServer.Serve(listener)
 	s.mcpSettingsUnsubscribe()
+	s.webAuthSettingsUnsubscribe()
 	s.mcpSessions.clear()
 	return err
 }
@@ -561,6 +610,7 @@ func (s *Server) ListenAndServe() error {
 // Close releases ephemeral MCP continuity state along with the HTTP listener.
 func (s *Server) Close() error {
 	s.mcpSettingsUnsubscribe()
+	s.webAuthSettingsUnsubscribe()
 	s.mcpSessions.clear()
 	return s.httpServer.Close()
 }
@@ -687,6 +737,171 @@ type mcpSettingsJSON struct {
 
 type mcpSettingsUpdateJSON struct {
 	Enabled *bool `json:"enabled"`
+}
+
+type webAuthSettingsJSON struct {
+	Enabled                   bool   `json:"enabled"`
+	RequestedEnabled          bool   `json:"requested_enabled"`
+	EffectiveEnabled          bool   `json:"effective_enabled"`
+	Username                  string `json:"username"`
+	CredentialConfigured      bool   `json:"credential_configured"`
+	ExternallyManaged         bool   `json:"externally_managed"`
+	ExternallyManagedReason   string `json:"externally_managed_reason,omitempty"`
+	CurrentListener           string `json:"current_listener"`
+	CurrentExposure           string `json:"current_exposure"`
+	ConfiguredListener        string `json:"configured_listener"`
+	ConfiguredExposure        string `json:"configured_exposure"`
+	ListenerExternallyManaged bool   `json:"listener_externally_managed"`
+	RestartRequired           bool   `json:"restart_required"`
+}
+
+type webAuthSettingsUpdateJSON struct {
+	Enabled    *bool   `json:"enabled"`
+	Username   *string `json:"username"`
+	Password   *string `json:"password"`
+	ListenAddr *string `json:"listen_addr"`
+}
+
+const webAuthAdminBodyLimit = 4096
+
+func (s *Server) getWebAuthSettings(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.webAuthSettingsStatus())
+}
+
+func (s *Server) webAuthSettingsStatus() webAuthSettingsJSON {
+	status := s.webAuthRuntime.status()
+	persisted := s.webAuthRuntime.persistedValue()
+	configured := persisted.ListenAddr
+	if configured == "" {
+		configured = DefaultWebListenAddr
+	}
+	status.CurrentListener = s.webListener.CurrentAddr
+	status.CurrentExposure = WebListenerExposure(s.webListener.CurrentAddr)
+	status.ConfiguredListener = configured
+	status.ConfiguredExposure = WebListenerExposure(configured)
+	status.ListenerExternallyManaged = s.webListener.ExternallyManaged
+	status.RestartRequired = status.CurrentListener != status.ConfiguredListener
+	return status
+}
+
+func decodeWebAuthSettingsUpdate(w http.ResponseWriter, r *http.Request, update *webAuthSettingsUpdateJSON) (int, error) {
+	mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if err != nil || mediaType != "application/json" {
+		return http.StatusUnsupportedMediaType, errors.New("Content-Type must be application/json")
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, webAuthAdminBodyLimit)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(update); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return http.StatusRequestEntityTooLarge, errors.New("request body is too large")
+		}
+		return http.StatusBadRequest, errors.New("invalid web access settings payload")
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			return http.StatusRequestEntityTooLarge, errors.New("request body is too large")
+		}
+		return http.StatusBadRequest, errors.New("request body must contain one JSON object")
+	}
+	if update.Enabled == nil {
+		return http.StatusBadRequest, errors.New("enabled is required")
+	}
+	if (update.Username == nil) != (update.Password == nil) {
+		return http.StatusBadRequest, errors.New("username and password must be provided together")
+	}
+	return 0, nil
+}
+
+func validateWebAuthCredentials(username, password string) error {
+	if username == "" || username != strings.TrimSpace(username) {
+		return errors.New("username must not be empty or have surrounding whitespace")
+	}
+	if len(username) > 128 {
+		return errors.New("username must be at most 128 bytes")
+	}
+	if strings.ContainsRune(username, ':') || strings.ContainsAny(username, "\r\n\x00") {
+		return errors.New("username contains unsupported characters")
+	}
+	if len(password) < 12 {
+		return errors.New("password must be at least 12 bytes")
+	}
+	if len(password) > 72 {
+		return errors.New("password must be at most 72 bytes")
+	}
+	return nil
+}
+
+func (s *Server) updateWebAuthSettings(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	if !validateMCPAdminOrigin(r) {
+		http.Error(w, "Forbidden", http.StatusForbidden)
+		return
+	}
+	var update webAuthSettingsUpdateJSON
+	if status, err := decodeWebAuthSettingsUpdate(w, r, &update); err != nil {
+		http.Error(w, err.Error(), status)
+		return
+	}
+	next := s.webAuthRuntime.persistedValue()
+	credentialsExternallyManaged := s.webAuthRuntime.status().ExternallyManaged
+	// Environment credentials own only the browser gate. They deliberately do
+	// not prevent an operator from repairing the persisted next-start listener.
+	if credentialsExternallyManaged && (update.ListenAddr == nil || update.Username != nil || *update.Enabled != next.Enabled) {
+		http.Error(w, "web access credentials are managed by startup configuration", http.StatusConflict)
+		return
+	}
+	if update.ListenAddr != nil {
+		next.ListenAddr = strings.TrimSpace(*update.ListenAddr)
+		if err := ValidateWebListenAddr(next.ListenAddr); err != nil {
+			http.Error(w, "invalid web listener: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if update.Username != nil {
+		if err := validateWebAuthCredentials(*update.Username, *update.Password); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		hash, err := bcrypt.GenerateFromPassword([]byte(*update.Password), bcrypt.DefaultCost)
+		if err != nil {
+			http.Error(w, "could not secure web access password", http.StatusInternalServerError)
+			return
+		}
+		next.Username = *update.Username
+		next.PasswordHash = string(hash)
+	}
+	if *update.Enabled && (next.Username == "" || next.PasswordHash == "") {
+		http.Error(w, "username and password are required before enabling web access protection", http.StatusBadRequest)
+		return
+	}
+	if *update.Enabled && !validWebAuthPasswordHash(next.PasswordHash) {
+		http.Error(w, "saved password is invalid; provide a new username and password", http.StatusBadRequest)
+		return
+	}
+	// Disabling must not leave either the currently bound address or the
+	// saved next-start address open to the network. Change the listener to
+	// local-only, restart, then remove credentials.
+	configuredAddr := next.ListenAddr
+	if configuredAddr == "" {
+		configuredAddr = DefaultWebListenAddr
+	}
+	effectiveWebAccess := *update.Enabled || credentialsExternallyManaged
+	if !effectiveWebAccess && (!webListenerIsLoopback(s.webListener.CurrentAddr) || !webListenerIsLoopback(configuredAddr)) {
+		http.Error(w, "move both the current and next-start listener to loopback before disabling web access protection", http.StatusConflict)
+		return
+	}
+	next.Enabled = *update.Enabled
+	if _, err := s.store.SaveWebAuthSettings(next); err != nil {
+		http.Error(w, "could not save web access settings", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(s.webAuthSettingsStatus())
 }
 
 func (s *Server) getMCPSettings(w http.ResponseWriter, r *http.Request) {

@@ -41,6 +41,8 @@ CONTAINER=${CONTAINER:-rubymud-tzdata-smoke}
 PORT=${PORT:-18080}
 ZONE=${ZONE:-America/Los_Angeles}
 BASE="http://127.0.0.1:${PORT}"
+WEB_AUTH_USER=${WEB_AUTH_USER:-tzdata-smoke}
+WEB_AUTH_PASS=${WEB_AUTH_PASS:-tzdata-smoke-throwaway-password}
 
 for dep in docker curl jq; do
 	command -v "$dep" >/dev/null 2>&1 || {
@@ -60,11 +62,16 @@ fi
 echo "==> starting container on 127.0.0.1:${PORT}"
 docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
 # Empty MUD_HOST: serve HTTP only, no outbound MUD connection needed.
-docker run -d --rm --name "$CONTAINER" -e MUD_HOST="" -p "127.0.0.1:${PORT}:8080" "$IMAGE" >/dev/null
+docker run -d --rm --name "$CONTAINER" \
+	-e MUD_HOST="" \
+	-e UI_LISTEN=0.0.0.0:8080 \
+	-e "MUDHOST_BASIC_AUTH_USER=${WEB_AUTH_USER}" \
+	-e "MUDHOST_BASIC_AUTH_PASS=${WEB_AUTH_PASS}" \
+	-p "127.0.0.1:${PORT}:8080" "$IMAGE" >/dev/null
 
 echo "==> waiting for HTTP readiness"
 i=0
-until curl -fsS "$BASE/" >/dev/null 2>&1; do
+until curl -fsS -u "${WEB_AUTH_USER}:${WEB_AUTH_PASS}" "$BASE/" >/dev/null 2>&1; do
 	i=$((i + 1))
 	if [ "$i" -ge 60 ]; then
 		echo "FAIL: server did not become ready within 60s" >&2
@@ -75,7 +82,7 @@ until curl -fsS "$BASE/" >/dev/null 2>&1; do
 done
 
 # The index page injects the API token as window.API_TOKEN and is not token-gated.
-TOKEN=$(curl -fsS "$BASE/" | sed -n 's/.*window\.API_TOKEN="\([^"]*\)".*/\1/p')
+TOKEN=$(curl -fsS -u "${WEB_AUTH_USER}:${WEB_AUTH_PASS}" "$BASE/" | sed -n 's/.*window\.API_TOKEN="\([^"]*\)".*/\1/p')
 if [ -z "$TOKEN" ]; then
 	echo "FAIL: could not extract API token from index page" >&2
 	exit 1
@@ -83,7 +90,7 @@ fi
 AUTH="X-Session-Token: ${TOKEN}"
 
 echo "==> creating a throwaway session"
-created=$(curl -fsS -X POST "$BASE/api/sessions" -H "$AUTH" -H 'Content-Type: application/json' \
+created=$(curl -fsS -u "${WEB_AUTH_USER}:${WEB_AUTH_PASS}" -X POST "$BASE/api/sessions" -H "$AUTH" -H 'Content-Type: application/json' \
 	-d '{"name":"tz-smoke","mud_host":"localhost","mud_port":4000}')
 sid=$(printf '%s' "$created" | jq -r '.id')
 if [ -z "$sid" ] || [ "$sid" = "null" ]; then
@@ -95,11 +102,11 @@ echo "==> PUT timezone=${ZONE} (tz_follow=0) on session ${sid}"
 # Echo the created record back with only the zone pinned, to mirror the real
 # Settings save (a full-record PUT) rather than a partial update.
 body=$(printf '%s' "$created" | jq --arg z "$ZONE" '.timezone=$z | .tz_follow=0')
-curl -fsS -X PUT "$BASE/api/sessions/${sid}" -H "$AUTH" -H 'Content-Type: application/json' \
+curl -fsS -u "${WEB_AUTH_USER}:${WEB_AUTH_PASS}" -X PUT "$BASE/api/sessions/${sid}" -H "$AUTH" -H 'Content-Type: application/json' \
 	-d "$body" >/dev/null
 
 echo "==> reading the zone back from the server"
-got=$(curl -fsS "$BASE/api/sessions" -H "$AUTH" | jq -r --argjson id "$sid" \
+got=$(curl -fsS -u "${WEB_AUTH_USER}:${WEB_AUTH_PASS}" "$BASE/api/sessions" -H "$AUTH" | jq -r --argjson id "$sid" \
 	'.[] | select(.id==$id) | .timezone')
 
 echo "    requested: ${ZONE}"

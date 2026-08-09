@@ -8,7 +8,8 @@ require (
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
-	golang.org/x/text v0.20.0
+	golang.org/x/crypto v0.40.0
+	golang.org/x/text v0.27.0
 	gorm.io/gorm v1.31.1
 )
 

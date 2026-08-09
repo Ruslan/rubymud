@@ -836,7 +836,10 @@ func setupTestServer(t *testing.T) (*Server, *session.Session) {
 		record.ID: sess,
 	}))
 
-	s, err := New(":0", manager, store, t.TempDir(), BasicAuth{}, MCPConfig{})
+	// Tests exercise the handler directly through httptest, so use a concrete
+	// loopback address rather than the wildcard shorthand a real listener would
+	// reject without Web Access protection.
+	s, err := New("127.0.0.1:8080", manager, store, t.TempDir(), BasicAuth{}, MCPConfig{})
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}

@@ -16,6 +16,29 @@ export type MCPSettings = {
 
 export type MCPSettingsWriteResponse = MCPSettings & { token?: string };
 
+export type WebAuthSettings = {
+  enabled: boolean;
+  requested_enabled: boolean;
+  effective_enabled: boolean;
+  username: string;
+  credential_configured: boolean;
+  externally_managed: boolean;
+  externally_managed_reason?: string;
+  current_listener: string;
+  current_exposure: 'loopback' | 'network';
+  configured_listener: string;
+  configured_exposure: 'loopback' | 'network';
+  listener_externally_managed: boolean;
+  restart_required: boolean;
+};
+
+export type WebAuthSettingsUpdate = {
+  enabled: boolean;
+  username?: string;
+  password?: string;
+  listen_addr?: string;
+};
+
 function apiToken(): string {
   // @ts-ignore injected by settings.html
   return window.API_TOKEN || '';
@@ -65,6 +88,8 @@ export const saveAppSettingsRequest = (settings: any) => putJSON('/api/app/setti
 export const fetchMCPSettings = () => getJSON<MCPSettings>('/api/mcp/settings');
 export const saveMCPSettingsRequest = (enabled: boolean) => fetch('/api/mcp/settings', { method: 'PATCH', headers: apiHeaders(true), body: JSON.stringify({ enabled }) });
 export const rotateMCPTokenRequest = () => postNoBody('/api/mcp/settings/token');
+export const fetchWebAuthSettings = () => getJSON<WebAuthSettings>('/api/web-auth/settings');
+export const saveWebAuthSettingsRequest = (settings: WebAuthSettingsUpdate) => fetch('/api/web-auth/settings', { method: 'PATCH', headers: apiHeaders(true), body: JSON.stringify(settings) });
 export const fetchProfileFiles = () => getJSON('/api/profiles/files');
 export const fetchSessionProfiles = (sessionID: number) => getJSON(`/api/sessions/${sessionID}/profiles`);
 export const fetchSessionVariables = (sessionID: number) => getJSON(`/api/sessions/${sessionID}/variables`);

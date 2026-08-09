@@ -11,9 +11,6 @@ import (
 func setupTestServerWithBasicAuth(t *testing.T, user, pass string) *httptest.Server {
 	t.Helper()
 	s, _ := setupTestServer(t)
-	s.basicAuth = BasicAuth{User: user, Pass: pass}
-	// Rebuild the router so the basic-auth middleware wired in New() picks up
-	// the credentials injected above.
 	rebuilt, err := New(":0", s.manager, s.store, t.TempDir(), BasicAuth{User: user, Pass: pass}, MCPConfig{})
 	if err != nil {
 		t.Fatalf("New: %v", err)

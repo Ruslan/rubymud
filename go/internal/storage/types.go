@@ -13,6 +13,10 @@ type Store struct {
 	mcpListenersMu sync.Mutex
 	mcpListeners   map[*mcpSettingsListener]struct{}
 
+	webAuthUpdateMu    sync.Mutex
+	webAuthListenersMu sync.Mutex
+	webAuthListeners   map[*webAuthSettingsListener]struct{}
+
 	// journal is the shared, in-memory per-map-set topology undo journal.
 	// Lazily created via WriteJournal(); guarded by journalMu so concurrent
 	// sessions don't race the lazy init.
@@ -30,6 +34,12 @@ type mcpSettingsListener struct {
 	mu     sync.Mutex
 	active bool
 	notify func(MCPSettings)
+}
+
+type webAuthSettingsListener struct {
+	mu     sync.Mutex
+	active bool
+	notify func(WebAuthSettings)
 }
 
 func NewTestStore(db *gorm.DB) *Store {

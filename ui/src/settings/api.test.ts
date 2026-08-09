@@ -5,10 +5,12 @@ import {
   deleteMapperProfile,
   fetchMapperProfiles,
   fetchMCPSettings,
+  fetchWebAuthSettings,
   fetchSessionHistory,
   saveAppSettingsRequest,
   rotateMCPTokenRequest,
   saveMCPSettingsRequest,
+  saveWebAuthSettingsRequest,
   saveSessionMapperProfile,
   toggleProfileGroup,
   replayMapperProfile,
@@ -85,6 +87,59 @@ describe('settings api', () => {
       headers: { 'X-Session-Token': '' },
     });
     expect(payload).not.toHaveProperty('token');
+  });
+
+  it('reads and updates web access settings without retaining a password', async () => {
+    const status = {
+      enabled: false,
+      requested_enabled: false,
+      effective_enabled: false,
+      username: 'operator',
+      credential_configured: true,
+      externally_managed: false,
+      current_listener: '127.0.0.1:8080',
+      current_exposure: 'loopback' as const,
+      configured_listener: '127.0.0.1:8080',
+      configured_exposure: 'loopback' as const,
+      listener_externally_managed: false,
+      restart_required: false,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify(status), { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(fetchWebAuthSettings()).resolves.toEqual(status);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/web-auth/settings', {
+      headers: { 'X-Session-Token': '' },
+    });
+
+    await saveWebAuthSettingsRequest({
+      enabled: true,
+      username: 'operator',
+      password: 'correct horse battery staple',
+    });
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/web-auth/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': '' },
+      body: JSON.stringify({
+        enabled: true,
+        username: 'operator',
+        password: 'correct horse battery staple',
+      }),
+    });
+    expect(status).not.toHaveProperty('password');
+    expect(status).not.toHaveProperty('password_hash');
+  });
+
+  it('saves the next-start listener through the same protected endpoint', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await saveWebAuthSettingsRequest({ enabled: true, listen_addr: '0.0.0.0:8080' });
+    expect(fetchMock).toHaveBeenCalledWith('/api/web-auth/settings', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', 'X-Session-Token': '' },
+      body: JSON.stringify({ enabled: true, listen_addr: '0.0.0.0:8080' }),
+    });
   });
 
   it('uploads archives as multipart and deletes map sets through authenticated endpoints', async () => {

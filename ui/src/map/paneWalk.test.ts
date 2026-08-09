@@ -80,7 +80,9 @@ describe("map pane server walk", () => {
     expect(JSON.parse(init.body as string)).toEqual({
       to: { zone: "Z", x: 2, y: 1, l: 0 },
     });
-    expect(pane.root.querySelector(".map-pane__walk-progress")?.textContent).toBe("Walk 1/3");
+    const progress = pane.root.querySelector<HTMLElement>(".map-pane__walk-progress");
+    expect(progress?.textContent).toBe("Walk 1/3");
+    expect(progress?.title).toBe("Walk 1/3");
     const stop = pane.root.querySelector<HTMLButtonElement>(".map-pane__walk-stop");
     expect(stop?.hidden).toBe(false);
     expect(stop?.disabled).toBe(false);
@@ -112,6 +114,7 @@ describe("map pane server walk", () => {
     pane.onMapWalk({ active: true, job_id: 4, current: 1, total: 3, state: "paused", reason: "movement refused", can_resume: false });
     const resume = pane.root.querySelector<HTMLButtonElement>(".map-pane__walk-resume");
     expect(pane.root.querySelector(".map-pane__walk-progress")?.textContent).toBe("Walk 1/3: movement refused");
+    expect(pane.root.querySelector<HTMLElement>(".map-pane__walk-progress")?.title).toBe("Walk 1/3: movement refused");
     expect(resume?.hidden).toBe(false);
     expect(resume?.disabled).toBe(true);
 		expect(pane.root.querySelector<HTMLButtonElement>(".map-pane__walk-stop")?.hidden).toBe(false);
@@ -167,6 +170,7 @@ describe("map pane server walk", () => {
     pane.onMapWalk({ active: false, epoch: 41, job_id: 8, current: 0, total: 0, state: "stopped" });
 
     expect(pane.root.querySelector<HTMLButtonElement>(".map-pane__walk-stop")?.hidden).toBe(true);
+    expect(pane.root.querySelector<HTMLElement>(".map-pane__walk-progress")?.title).toBe("");
   });
 
   it("ignores a delayed id-zero inactive response after a live job starts", () => {

@@ -3,7 +3,9 @@ UI_DIR := ui
 BIN_DIR := bin
 BIN_NAME := mudhost
 MUD ?= 127.0.0.1:4000
-LISTEN ?= :8080
+# Empty means use the database-owned listener, or the loopback-only first-run
+# default. Set LISTEN explicitly only for an operator override.
+LISTEN ?=
 DB_PATH ?= data/mudhost.db
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || printf 'dev')
 GO_LDFLAGS ?= -X rubymud/go/internal/buildinfo.Version=$(VERSION)
@@ -12,7 +14,7 @@ GO_LDFLAGS ?= -X rubymud/go/internal/buildinfo.Version=$(VERSION)
 
 help:
 	@printf "Targets:\n"
-	@printf "  make run MUD=host:port [LISTEN=:8080]   Build ui, build and run mudhost\n"
+	@printf "  make run MUD=host:port [LISTEN=host:port] Build ui, build and run mudhost\n"
 	@printf "  make build                               Build ui and $(BIN_DIR)/$(BIN_NAME)\n"
 	@printf "  make ui-install                         Install frontend dependencies\n"
 	@printf "  make ui                                  Build frontend assets\n"
@@ -21,7 +23,7 @@ help:
 	@printf "  make db-init                             Initialize or update database schema\n"
 	@printf "  make db-schema                           Print mudhost.db schema\n"
 	@printf "  make docker-build                        Build Docker image\n"
-	@printf "  make docker-run                          Run Docker container\n"
+	@printf "  make docker-run                          Run protected local Docker container (requires inherited MUDHOST_BASIC_AUTH_* env)\n"
 	@printf "  make smoke-tzdata                        Verify timezones persist in the alpine runtime image\n"
 
 .PHONY: ui-install
@@ -46,7 +48,11 @@ sync-styles:
 	cp "$(UI_DIR)/src/styles/ansi-themes/"*.css "$(GO_DIR)/internal/web/styles/ansi-themes/"
 
 run: build
-	"./$(BIN_DIR)/$(BIN_NAME)" --mud "$(MUD)" --listen "$(LISTEN)" --db "$(DB_PATH)"
+	@if [ -n "$(LISTEN)" ]; then \
+		"./$(BIN_DIR)/$(BIN_NAME)" --mud "$(MUD)" --listen "$(LISTEN)" --db "$(DB_PATH)"; \
+	else \
+		"./$(BIN_DIR)/$(BIN_NAME)" --mud "$(MUD)" --db "$(DB_PATH)"; \
+	fi
 
 build: ui
 	$(MAKE) go-build
@@ -70,8 +76,15 @@ db-schema:
 docker-build:
 	docker build -t rubymud .
 
-docker-run: docker-build
-	docker run -it --rm -p 8080:8080 -v "$(PWD)/data:/data" rubymud
+docker-run:
+	@test -n "$${MUDHOST_BASIC_AUTH_USER:-}" || (echo "MUDHOST_BASIC_AUTH_USER must be inherited from the environment" >&2; exit 2)
+	@test -n "$${MUDHOST_BASIC_AUTH_PASS:-}" || (echo "MUDHOST_BASIC_AUTH_PASS must be inherited from the environment" >&2; exit 2)
+	$(MAKE) docker-build
+	docker run -it --rm -p 127.0.0.1:8080:8080 -v "$(PWD)/data:/data" \
+		-e UI_LISTEN=0.0.0.0:8080 \
+		-e MUDHOST_BASIC_AUTH_USER \
+		-e MUDHOST_BASIC_AUTH_PASS \
+		rubymud
 
 # Build the real alpine runtime image and assert a non-UTC session timezone
 # round-trips through the shipped binary — guards the `time/tzdata` embed against
