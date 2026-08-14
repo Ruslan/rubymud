@@ -29,6 +29,25 @@ The frontend is split into two main parts:
     - `/api/variables`, `/api/profiles`, etc.
 - **Auth**: Uses a `%TOKEN%` injection during build or a shared secret.
 
+## Mapper Cross-Zone Navigation
+
+The room payload exposes two distinct kinds of sparse cross-zone topology. Keep
+them distinct in the canvas and cell menu:
+
+- `se` contains directed seams and exact portals. Their menu actions use the
+  resolved `to` endpoint when present; unresolved legacy seams remain visible
+  but disabled so they can be inspected or repaired.
+- `xz` contains directed grid edges whose exact endpoint is `z,x,y,l`. An `xz`
+  contact gets its own amber navigation action even when the same room also has
+  a dead `se` entry. The reverse direction exists only when the backend returns
+  a separate reverse contact.
+
+Grid navigation must match the target zone exactly after NFC normalization; it
+must not use the fuzzy zone-name lookup intended for legacy seam selectors.
+Blocked contacts and contacts whose exact zone or room no longer exists are not
+treated as successful jumps. Async jumps use the pane load generation guard so
+a late response cannot replace a newer zone selection.
+
 ## Development
 
 - **Build**: Vite compiles everything into `go/internal/web/static/`.

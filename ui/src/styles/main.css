@@ -1641,6 +1641,20 @@ body {
 .map-cell-menu__seam-item:hover:not(:disabled) {
   border-color: #f0b64e;
 }
+.map-cell-menu__grid {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.map-cell-menu__grid-item {
+  color: #f0b64e;
+  border-color: #a66d1f;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.map-cell-menu__grid-item:hover:not(:disabled) {
+  border-color: #f0b64e;
+}
 .map-cell-menu__update {
   border-color: #f0b64e;
   color: #f0b64e;

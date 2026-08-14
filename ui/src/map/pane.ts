@@ -52,6 +52,7 @@ import type {
   MapRoomSearchResult,
   PlayerPosition,
   SlimRoom,
+  SlimCrossZoneGrid,
   SeamTarget,
 } from "./types";
 
@@ -1468,6 +1469,62 @@ export class MapPaneController {
     this.setStatus(`Jumped via seam to "${target}"`);
   }
 
+  // Cross-zone grid contacts stay grid edges in the map model. They get their
+  // own navigation action here instead of being normalized into a seam/portal:
+  // the endpoint is an exact zone + coordinate carried by SlimRoom.xz, and the
+  // edge remains directed (the reverse direction is a separate contact).
+  private async jumpGrid(
+    contact: SlimCrossZoneGrid,
+    _room: SlimRoom,
+  ): Promise<void> {
+    if (!contact.p) {
+      this.setStatus("Grid edge is blocked");
+      return;
+    }
+    const target = this.exactGridTargetZone(contact.z);
+    if (!target) {
+      this.setStatus(`Grid target zone "${contact.z}" not found`);
+      return;
+    }
+    const generation = this.nextLoadGeneration();
+    const mapSetID = this.mapSetID;
+    const rooms = await this.showZone(target, { resetView: true }, generation);
+    if (
+      rooms === null ||
+      !this.isCurrentLoad(generation, mapSetID) ||
+      this.currentZone !== target
+    ) return;
+    // Do not infer a destination from the direction or from a same-coordinate
+    // room in another zone. The cross-zone edge carries the exact endpoint, so
+    // navigation succeeds only when that exact room is present in the fetched
+    // target zone.
+    const hit = rooms.find((candidate) =>
+      candidate.z === target &&
+      candidate.x === contact.x &&
+      candidate.y === contact.y &&
+      candidate.l === contact.l,
+    );
+    if (!hit) {
+      this.setStatus(
+        `Grid target room "${contact.z} (${contact.x},${contact.y},${contact.l})" not found`,
+      );
+      return;
+    }
+    this.renderer.centerOn(hit.x, hit.y, hit.l);
+    this.setStatus(`Jumped via grid edge to "${target}"`);
+  }
+
+  // Unlike a legacy seam selector, XZ already carries the authoritative target
+  // namespace. Only Unicode composition may differ; partial-name fallback would
+  // allow a corrupt "Лен" endpoint to open the real "Ленинград" zone.
+  private exactGridTargetZone(zone: string): string | null {
+    if (zone === "") return null;
+    const normalized = zone.normalize("NFC");
+    return this.zoneNames.find((candidate) =>
+      candidate.normalize("NFC") === normalized
+    ) ?? null;
+  }
+
   // --- cell context menu -------------------------------------------------
 
   // Open the per-cell context menu at the click position. The menu is built from
@@ -1509,6 +1566,7 @@ export class MapPaneController {
 
     if (room) {
       this.appendSeamItems(menu, room);
+      this.appendGridItems(menu, room);
       const portal = this.menuButton("Add directed portal", () =>
         this.openPortalMenu(room, null, clientX, clientY),
       );
@@ -1652,6 +1710,32 @@ export class MapPaneController {
         row.appendChild(repair);
       }
       section.appendChild(row);
+    }
+    menu.appendChild(section);
+  }
+
+  // Cross-zone grid contacts are direct navigation actions, but intentionally
+  // use a separate control/class from seams: these are directed grid edges,
+  // not portals with editable seam properties. The exact endpoint is shown in
+  // the label and passed unchanged to jumpGrid.
+  private appendGridItems(menu: HTMLElement, room: SlimRoom): void {
+    const contacts = room.xz ?? [];
+    if (contacts.length === 0) return;
+
+    const section = document.createElement("div");
+    section.className = "map-cell-menu__grid";
+    for (const contact of contacts) {
+      const targetKnown = this.exactGridTargetZone(contact.z) !== null;
+      const button = this.menuButton(
+        `${contact.dir || "grid"} → ${contact.z} (${contact.x},${contact.y},${contact.l})`,
+        () => void this.jumpGrid(contact, room),
+      );
+      button.classList.add("map-cell-menu__grid-item");
+      button.disabled = !contact.p || !targetKnown;
+      button.title = button.disabled
+        ? (!contact.p ? "Grid edge is blocked" : "Grid target zone is missing")
+        : `Target: ${contact.z} (${contact.x},${contact.y},${contact.l})`;
+      section.appendChild(button);
     }
     menu.appendChild(section);
   }

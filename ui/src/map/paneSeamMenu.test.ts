@@ -80,6 +80,187 @@ describe("map pane seam chooser", () => {
     })) };
   }
 
+  function gridContact(overrides: Partial<NonNullable<SlimRoom["xz"]>[number]> = {}): NonNullable<SlimRoom["xz"]>[number] {
+    return {
+      dir: "E", r: "manual", p: true, z: "Ленинград", x: 3, y: 4, l: 0,
+      ...overrides,
+    };
+  }
+
+  it("renders cross-zone grid links in both directions beside a dead seam", () => {
+    (pane as unknown as { zoneNames: string[] }).zoneNames = ["Город", "Ленинград"];
+    const forward: SlimRoom = {
+      ...room,
+      se: [{ o: 0, k: "seam", r: "parsed", p: true, tz: "Южный Эргот", c: "на запад" }],
+      xz: [gridContact()],
+    };
+    const reverse: SlimRoom = {
+      ...room,
+      z: "Ленинград",
+      x: 3,
+      y: 4,
+      xz: [gridContact({ dir: "W", z: "Город", x: 0, y: 0 })],
+    };
+
+    clickRoom(forward);
+    const forwardGrid = pane.root.querySelector<HTMLButtonElement>(".map-cell-menu__grid-item");
+    expect(forwardGrid?.textContent).toBe("E → Ленинград (3,4,0)");
+    expect(forwardGrid?.disabled).toBe(false);
+    expect(pane.root.querySelector<HTMLButtonElement>(".map-cell-menu__seam-item")?.textContent)
+      .toBe("на запад → Южный Эргот");
+
+    const jumpGrid = vi.spyOn(
+      pane as unknown as {
+        jumpGrid: (contact: unknown, room: SlimRoom) => Promise<void>;
+      },
+      "jumpGrid",
+    );
+    forwardGrid?.click();
+    expect(jumpGrid).toHaveBeenCalledWith(gridContact(), forward);
+
+    clickRoom(reverse);
+    const reverseGrid = pane.root.querySelector<HTMLButtonElement>(".map-cell-menu__grid-item");
+    expect(reverseGrid?.textContent).toBe("W → Город (0,0,0)");
+    reverseGrid?.click();
+    expect(jumpGrid).toHaveBeenCalledWith(
+      gridContact({ dir: "W", z: "Город", x: 0, y: 0 }),
+      reverse,
+    );
+  });
+
+  it("disables blocked, empty, and unknown exact grid targets", () => {
+    (pane as unknown as { zoneNames: string[] }).zoneNames = ["Город", "Ленинград"];
+    clickRoom({
+      ...room,
+      xz: [
+        gridContact({ p: false }),
+        gridContact({ z: "" }),
+        gridContact({ z: "Лен" }),
+      ],
+    });
+
+    const buttons = [...pane.root.querySelectorAll<HTMLButtonElement>(
+      ".map-cell-menu__grid-item",
+    )];
+    expect(buttons).toHaveLength(3);
+    expect(buttons.map((button) => button.disabled)).toEqual([true, true, true]);
+    expect(buttons.map((button) => button.title)).toEqual([
+      "Grid edge is blocked",
+      "Grid target zone is missing",
+      "Grid target zone is missing",
+    ]);
+  });
+
+  it("rejects a similar zone name instead of fuzzy-jumping to it", async () => {
+    const internal = pane as unknown as {
+      zoneNames: string[];
+      jumpGrid: (contact: NonNullable<SlimRoom["xz"]>[number], room: SlimRoom) => Promise<void>;
+      renderer: { centerOn: (x: number, y: number, l: number) => void };
+    };
+    internal.zoneNames = ["Город", "Ленинград"];
+    const center = vi.spyOn(internal.renderer, "centerOn");
+
+    await internal.jumpGrid(gridContact({ z: "Лен" }), room);
+
+    expect(center).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalledWith(
+      expect.stringContaining("zone="),
+      expect.anything(),
+    );
+    expect((pane as unknown as { statusText: HTMLElement }).statusText.textContent)
+      .toBe('Grid target zone "Лен" not found');
+  });
+
+  it("jumps a grid contact to its exact endpoint in the target zone", async () => {
+    const internal = pane as unknown as {
+      mapSetID: number;
+      zoneNames: string[];
+      currentZone: string;
+      jumpGrid: (contact: NonNullable<SlimRoom["xz"]>[number], room: SlimRoom) => Promise<void>;
+      renderer: { centerOn: (x: number, y: number, l: number) => void };
+    };
+    internal.mapSetID = 1;
+    internal.zoneNames = ["Город", "Ленинград"];
+    internal.currentZone = "Город";
+    const contact = gridContact();
+    const center = vi.spyOn(internal.renderer, "centerOn");
+    fetchMock.mockImplementation((url: string) => {
+      if (decodeURIComponent(url).includes("zone=Ленинград")) {
+        return Promise.resolve(jsonRes([
+          { ...room, z: "Ленинград", x: 3, y: 5, l: 0, h: "nearby decoy" },
+          { ...room, z: "Ленинград", x: 3, y: 4, l: 0, h: "exact landing" },
+        ]));
+      }
+      return Promise.resolve(jsonRes({ seen: false }));
+    });
+
+    await internal.jumpGrid(contact, room);
+
+    expect(center).toHaveBeenCalledOnce();
+    expect(center).toHaveBeenCalledWith(3, 4, 0);
+    expect((pane as unknown as { statusText: HTMLElement }).statusText.textContent)
+      .toContain('Jumped via grid edge to "Ленинград"');
+  });
+
+  it("does not claim success when the exact grid target room is absent", async () => {
+    const internal = pane as unknown as {
+      mapSetID: number;
+      zoneNames: string[];
+      currentZone: string;
+      jumpGrid: (contact: NonNullable<SlimRoom["xz"]>[number], room: SlimRoom) => Promise<void>;
+      renderer: { centerOn: (x: number, y: number, l: number) => void };
+    };
+    internal.mapSetID = 1;
+    internal.zoneNames = ["Город", "Ленинград"];
+    internal.currentZone = "Город";
+    const center = vi.spyOn(internal.renderer, "centerOn");
+    fetchMock.mockImplementation((url: string) => {
+      if (decodeURIComponent(url).includes("zone=Ленинград")) {
+        return Promise.resolve(jsonRes([
+          { ...room, z: "Ленинград", x: 3, y: 5, l: 0 },
+        ]));
+      }
+      return Promise.resolve(jsonRes({ seen: false }));
+    });
+
+    await internal.jumpGrid(gridContact(), room);
+
+    expect(center).not.toHaveBeenCalled();
+    expect((pane as unknown as { statusText: HTMLElement }).statusText.textContent)
+      .toBe('Grid target room "Ленинград (3,4,0)" not found');
+  });
+
+  it("does not publish a stale grid jump after a newer zone selection", async () => {
+    const delayedTarget = deferred<Response>();
+    const internal = pane as unknown as {
+      mapSetID: number;
+      zoneNames: string[];
+      currentZone: string;
+      jumpGrid: (contact: NonNullable<SlimRoom["xz"]>[number], room: SlimRoom) => Promise<void>;
+      showZone: (zone: string, opts: { resetView: boolean }) => Promise<unknown>;
+      renderer: { centerOn: (x: number, y: number, l: number) => void };
+    };
+    internal.mapSetID = 1;
+    internal.zoneNames = ["Город", "Ленинград"];
+    internal.currentZone = "Город";
+    fetchMock.mockImplementation((url: string) => {
+      if (decodeURIComponent(url).includes("zone=Ленинград")) return delayedTarget.promise;
+      if (decodeURIComponent(url).includes("zone=Город")) return Promise.resolve(jsonRes([{ ...room, z: "Город" }]));
+      return Promise.resolve(jsonRes({ seen: false }));
+    });
+    const center = vi.spyOn(internal.renderer, "centerOn");
+    const jump = internal.jumpGrid(gridContact(), room);
+    await Promise.resolve();
+    await internal.showZone("Город", { resetView: true });
+    delayedTarget.resolve(jsonRes([{ ...room, z: "Ленинград", x: 3, y: 4, l: 0 }]));
+    await jump;
+
+    expect(internal.currentZone).toBe("Город");
+    expect(center).not.toHaveBeenCalled();
+    expect((pane as unknown as { statusText: HTMLElement }).statusText.textContent)
+      .not.toContain("Jumped via grid edge");
+  });
+
   it("renders one seam as a direct amber menu button with ordinary room actions", () => {
     const jumpSeam = vi.spyOn(
       pane as unknown as {
