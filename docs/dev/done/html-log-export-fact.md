@@ -6,9 +6,16 @@ Done. Closes the `html-log-export.md` plan (both Phase 1 — static colored HTML
 export — and Phase 2 — the in-file replay viewer). Exports a session's logs as a
 **self-contained colored HTML file** rendered through the session's `ansi_theme`
 palette: the raw server stream (no highlights/substitutions/gags), scoped to the
-main game buffer, with canonical sent commands, plus an embedded vanilla-JS
+main game buffer, with canonical-evaluated command hints, plus an embedded vanilla-JS
 replay viewer. The plain `.txt` download is unchanged (still the greppable
 "everything" format).
+
+Historical precision note (added 2026-08-15): the exporter reads legacy
+`command_hint` overlays. Their text is canonical **after VM evaluation**, but the
+current writer created them before transport `conn.Write`; therefore they are
+transport-unconfirmed (`legacy_unverified` in the follow-up terminology), not a
+strict proof that the frame was accepted by the socket. First-class after-write
+events are tracked in `../planned/canonical-command-echo.md`.
 
 Implements `log-browsing.md` §5/§6 for export with one intentional deviation:
 colors are the native server ANSI **mapped through the `ansi_theme` palette**
@@ -47,19 +54,20 @@ logged at a telnet echo-off password prompt — stays open in
 ### Export query — `go/internal/storage/log_store.go`
 - `StreamExportLog(opts, fn)` runs a merged UNION as a single ordered cursor
   (never buffering the whole result): `source_type='mud'` server output +
-  optional `command_hint` canonical outgoing commands, with a normalized
-  lexicographic sort key (`STRFTIME(...) || PRINTF('%09d', ...)`) so whole-second
-  and fractional timestamps order correctly.
+  optional legacy `command_hint` canonical-evaluated commands, with a normalized
+  lexicographic key built from `substr(created_at,1,19)` plus a right-padded
+  nine-digit fractional part (`CASE`/`replace`), so whole-second and fractional
+  RFC3339Nano timestamps order correctly.
 - **Local echo excluded from export.** `AppendLogEntry` now tags rows
-  `source_type="echo"` (all three callers are local echo: `#showme`/`#woutput`/
-  command echo); `AppendLogEntryWithOverlays` tags genuine server output
-  `source_type="mud"`. The export selects only `mud`.
+  `source_type="echo"` for local/synthetic output paths;
+  `AppendLogEntryWithOverlays` tags genuine server output `source_type="mud"`.
+  The export selects only `mud`.
 - Auto-login (`source="connect"`) commands get no `command_hint` overlay, so they
   never reach the export (regression-tested).
 
 ### Buffer scoping
-- The export is scoped to `buffer=main` (the game screen). Canonical command
-  echoes anchored to side buffers would otherwise leak in; both the output and
+- The export is scoped to `buffer=main` (the game screen). Legacy command hints
+  anchored to side buffers would otherwise leak in; both the output and
   `command_hint` branches filter `window_name='main'`.
 
 ### Embedded theme CSS (single source of truth)
@@ -99,8 +107,9 @@ logged at a telnet echo-off password prompt — stays open in
 
 ### Frontend — `ui/src/SettingsApp.svelte`, `ui/src/settings/*`
 - Logs tab export form: a **date+time range to the minute** (`datetime-local`,
-  for exporting a single raid/event), an **Include sent commands** toggle, and two
-  buttons — **Download .txt** and **Download .html**. Search is a separate block.
+  for exporting a single raid/event), an **Include sent commands** toggle used by
+  HTML only, and two buttons — **Download .txt** and **Download .html**. The TXT
+  handler does not read this toggle. Search is a separate block.
 - `window.open` of the streaming endpoint (mirrors the `.txt` download) — no
   client-side assembly, no caps.
 - **URL-persisted filter:** `?from&to&q` are mirrored into the URL via

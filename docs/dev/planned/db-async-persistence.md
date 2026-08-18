@@ -1,5 +1,14 @@
 # Async DB Persistence for Log Pipeline
 
+> Integration note, 2026-08-15: `canonical-command-echo.md` activates this
+> deferred foundation and broadens the proposed log-only `seq` into one shared
+> `stream_seq` for `log_entries` and `command_events`. Its migration number,
+> common timeline sequencer, durable range leases/high-watermark (preventing ID
+> reuse after best-effort drops), composite read cursor, queue policy and
+> recent-ring contract supersede the `008_log_seq.sql` sketch and log-only
+> ordering language below. This document remains the detailed batching/latency
+> design; the canonical echo plan owns the cross-stream integration contract.
+
 ## Context
 
 Сейчас live output ждёт SQLite перед отправкой строки в браузер:
