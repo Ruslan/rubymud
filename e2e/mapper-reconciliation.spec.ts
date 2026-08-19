@@ -72,9 +72,10 @@ test("reconciles the live five-room loop and survives restart", async ({ browser
   await page.locator(".map-pane").screenshot({ path: join(stack.artifactsDir, "reconciled-map.png") });
 
   await addNPCToRoomOne(page, initialRevision + 1);
+	await reuseNPCInRoomTwoAndSynchronizeMCP(page, initialRevision + 1);
 
   await walkLoop(page);
-  expectTraceLoops(2);
+  expectTraceLoops(2, true);
   await expect(page.getByRole("dialog", { name: "Resolve mapper conflict" })).toHaveCount(0);
   await expectRecordingAtRoomOne(page);
 
@@ -88,7 +89,7 @@ test("reconciles the live five-room loop and survives restart", async ({ browser
   expectReconciled(initialRevision + 1);
   await expectNPCInRoomOne(restarted, initialRevision + 1);
   await walkLoop(restarted);
-  expectTraceLoops(3);
+  expectTraceLoops(3, true);
   await expect(restarted.getByRole("dialog", { name: "Resolve mapper conflict" })).toHaveCount(0);
   await expectRecordingAtRoomOne(restarted);
   await context.close();
@@ -135,7 +136,7 @@ function obsButton(page: Page) {
   return page.locator('.map-pane button[aria-label="Diagnostic movement observation; no rooms are written"]');
 }
 
-async function openRoomOneKnowledge(page: Page) {
+async function openCurrentRoomKnowledge(page: Page, roomName: string) {
   const canvas = page.locator(".map-pane__canvas");
   const box = await canvas.boundingBox();
   expect(box).not.toBeNull();
@@ -145,20 +146,25 @@ async function openRoomOneKnowledge(page: Page) {
   await menu.getByRole("button", { name: "Knowledge…" }).click();
   const dialog = page.getByRole("dialog", { name: "Knowledge" });
   await expect(dialog).toBeVisible();
-  await expect(dialog).toContainText("Loop Room 1");
+  await expect(dialog).toContainText(roomName);
   return dialog;
+}
+
+async function openRoomOneKnowledge(page: Page) {
+	return openCurrentRoomKnowledge(page, "Loop Room 1");
 }
 
 async function addNPCToRoomOne(page: Page, topologyRevisionBefore: number): Promise<void> {
   const dialog = await openRoomOneKnowledge(page);
   await expect(dialog).toContainText("No inhabitants have been recorded for this room.");
-  await dialog.getByRole("button", { name: "Add" }).click();
+  await dialog.getByRole("button", { name: "Add new" }).click();
   const form = dialog.locator(".map-inhabitant-form");
   await expect(form).toBeVisible();
   await form.getByLabel("Name").fill("Хранитель круга");
   await form.getByLabel("Type").selectOption("npc");
   await form.getByLabel("Look target").fill("хранитель");
   await form.getByLabel("Look result").fill("Высокий страж в плаще с вышитым знаком круга.");
+	await form.getByLabel("Interaction strategy").fill("Сначала назвать пароль.");
   await page.screenshot({ path: join(stack.artifactsDir, "npc-form-page.png"), fullPage: true });
   await dialog.screenshot({ path: join(stack.artifactsDir, "npc-form-dialog.png") });
   await form.getByRole("button", { name: "Save" }).click();
@@ -169,7 +175,7 @@ async function addNPCToRoomOne(page: Page, topologyRevisionBefore: number): Prom
   await expect(card).toContainText("Look result: Высокий страж в плаще с вышитым знаком круга.");
   await page.screenshot({ path: join(stack.artifactsDir, "npc-card-page.png"), fullPage: true });
   await dialog.screenshot({ path: join(stack.artifactsDir, "npc-card-dialog.png") });
-  expectNPCStored(topologyRevisionBefore);
+  expectNPCStored(topologyRevisionBefore, [{ tag: 1, resident: 0, presence_text: "" }]);
   await dialog.getByRole("button", { name: "Close" }).click();
   await expect(dialog).toBeHidden();
 }
@@ -179,11 +185,14 @@ async function expectNPCInRoomOne(page: Page, topologyRevisionBefore: number): P
   const card = dialog.locator(".map-inhabitant-card", { hasText: "Хранитель круга" });
   await expect(card).toContainText("Look target: хранитель");
   await expect(card).toContainText("Высокий страж в плаще с вышитым знаком круга.");
-  expectNPCStored(topologyRevisionBefore);
+  expectNPCStored(topologyRevisionBefore, [
+	{ tag: 1, resident: 0, presence_text: "" },
+	{ tag: 2, resident: 1, presence_text: "Хранитель проверяет восточный зал." },
+  ]);
   await dialog.getByRole("button", { name: "Close" }).click();
 }
 
-function expectNPCStored(topologyRevisionBefore: number): void {
+function expectNPCStored(topologyRevisionBefore: number, placements: Array<{ tag: number; resident: number; presence_text: string }>): void {
   expect(stack.query(
     `SELECT name,kind,look_target,look_text FROM map_inhabitants WHERE map_set_id=${stack.seed.map_set_id}`,
   )).toEqual([{
@@ -191,9 +200,92 @@ function expectNPCStored(topologyRevisionBefore: number): void {
     look_text: "Высокий страж в плаще с вышитым знаком круга.",
   }]);
   expect(stack.query(
-    `SELECT r.tag,ri.resident,ri.presence_text FROM room_inhabitants ri JOIN rooms r ON r.map_set_id=ri.map_set_id AND r.zone=ri.zone AND r.x=ri.x AND r.y=ri.y AND r.l=ri.l WHERE ri.map_set_id=${stack.seed.map_set_id}`,
-  )).toEqual([{ tag: 1, resident: 0, presence_text: "" }]);
+    `SELECT r.tag,ri.resident,ri.presence_text FROM room_inhabitants ri JOIN rooms r ON r.map_set_id=ri.map_set_id AND r.zone=ri.zone AND r.x=ri.x AND r.y=ri.y AND r.l=ri.l WHERE ri.map_set_id=${stack.seed.map_set_id} ORDER BY r.tag`,
+  )).toEqual(placements);
   expect(topologyRevision()).toBe(topologyRevisionBefore);
+}
+
+async function reuseNPCInRoomTwoAndSynchronizeMCP(page: Page, topologyRevisionBefore: number): Promise<void> {
+	const entity = stack.query<{ id: number }>(
+	  `SELECT id FROM map_inhabitants WHERE map_set_id=${stack.seed.map_set_id}`,
+	);
+	expect(entity).toHaveLength(1);
+	const inhabitantID = entity[0]!.id;
+
+	const lookAtRoomOne = await mcpTool("mud_look_map", { session_id: stack.seed.session_id });
+	expect(lookAtRoomOne).toContain("Known inhabitants:");
+	expect(lookAtRoomOne).toContain("Хранитель круга [npc]");
+	expect(lookAtRoomOne).toContain("strategy=Сначала назвать пароль.");
+	expect(lookAtRoomOne).not.toContain("Высокий страж в плаще");
+
+	await sendAndExpectRoom(page, "E", "Loop Room 2");
+	const dialog = await openCurrentRoomKnowledge(page, "Loop Room 2");
+	await expect(dialog).toContainText("No inhabitants have been recorded for this room.");
+	await dialog.getByRole("button", { name: "Place existing" }).click();
+	await dialog.getByLabel("Search catalog").fill("хранитель");
+	const candidate = dialog.locator(".map-inhabitant-catalog__item", { hasText: "Хранитель круга" });
+	await expect(candidate).toBeVisible();
+	await candidate.getByRole("button", { name: "Place" }).click();
+	const placement = dialog.locator(".map-inhabitant-placement-form");
+	await placement.getByLabel("Presence text").fill("Хранитель осматривает восточный зал.");
+	await placement.getByLabel("Permanent resident of this room").check();
+	await placement.getByRole("button", { name: "Place" }).click();
+	await expect(dialog.locator(".map-inhabitant-card", { hasText: "Хранитель круга" })).toBeVisible();
+
+	const updated = await mcpTool("mud_inhabitant_write", {
+	  session_id: stack.seed.session_id, operation: "update", inhabitant_id: inhabitantID,
+	  room: stack.seed.rooms["2"], name: "Хранитель круга", kind: "npc", look_target: "хранитель",
+	  look_text: "Высокий страж в плаще с вышитым знаком круга.", note: "Помнит обходы.",
+	  strategy: "Назвать пароль и предложить чай.", presence_text: "Хранитель проверяет восточный зал.", resident: true,
+	});
+	expect(updated).toContain(`updated inhabitant id=${inhabitantID}`);
+	const refreshed = dialog.locator(".map-inhabitant-card", { hasText: "Хранитель круга" });
+	await expect(refreshed).toContainText("Presence: Хранитель проверяет восточный зал.");
+	await expect(refreshed).toContainText("Strategy: Назвать пароль и предложить чай.");
+
+	const listed = await mcpTool("mud_inhabitants", {
+	  session_id: stack.seed.session_id, room: stack.seed.rooms["2"], limit: 20,
+	});
+	expect(listed).toContain(`id=${inhabitantID}`);
+	expect(listed).toContain("resident=true");
+	expect(listed).not.toContain("Высокий страж в плаще");
+	const detail = await mcpTool("mud_inhabitant", { session_id: stack.seed.session_id, inhabitant_id: inhabitantID });
+	expect(detail).toContain("Высокий страж в плаще с вышитым знаком круга.");
+	expect(detail).toContain("placements: 2");
+	const lookAtRoomTwo = await mcpTool("mud_look_map", { session_id: stack.seed.session_id });
+	expect(lookAtRoomTwo).toContain("Хранитель круга [npc, resident]");
+	expect(lookAtRoomTwo).not.toContain("Высокий страж в плаще");
+
+	expectNPCStored(topologyRevisionBefore, [
+	  { tag: 1, resident: 0, presence_text: "" },
+	  { tag: 2, resident: 1, presence_text: "Хранитель проверяет восточный зал." },
+	]);
+	await dialog.getByRole("button", { name: "Close" }).click();
+	await sendAndExpectRoom(page, "W", "Loop Room 1");
+}
+
+async function mcpTool(name: string, args: Record<string, unknown>): Promise<string> {
+	const response = await fetch(`${stack.baseURL}/mcp`, {
+	  method: "POST", headers: { "Content-Type": "application/json" },
+	  body: JSON.stringify({ jsonrpc: "2.0", method: "tools/call", id: 1, params: { name, arguments: args } }),
+	});
+	expect(response.ok).toBeTruthy();
+	const body = await response.json() as { result?: { isError?: boolean; content?: Array<{ text?: string }> }; error?: unknown };
+	expect(body.error).toBeUndefined();
+	expect(body.result?.isError).not.toBe(true);
+	return body.result?.content?.[0]?.text ?? "";
+}
+
+async function sendAndExpectRoom(page: Page, command: string, hint: string): Promise<void> {
+	const token = await page.evaluate(() => (window as Window & { API_TOKEN?: string }).API_TOKEN ?? "");
+	await page.locator("#input").fill(command);
+	await page.locator("#input").press("Enter");
+	await expect.poll(async () => {
+	  const response = await page.request.get(`${stack.baseURL}/api/sessions/${stack.seed.session_id}/map-live-room`, {
+		headers: { "X-Session-Token": token },
+	  });
+	  return (await response.json()).hint;
+	}).toBe(hint);
 }
 
 async function walkLoop(page: Page): Promise<void> {
@@ -268,7 +360,7 @@ function expectReconciled(revision: number): void {
   expect(topologyRevision()).toBe(revision);
 }
 
-function expectTraceLoops(loopCount: number): void {
+function expectTraceLoops(loopCount: number, withKnowledgeDetour = false): void {
   const raw = readFileSync(stack.tracePath, "utf8").trim();
   const rows = raw ? raw.split("\n").map((line) => JSON.parse(line) as {
     from: number; command: string; to: number; moved: boolean;
@@ -280,8 +372,15 @@ function expectTraceLoops(loopCount: number): void {
     { from: 4, command: "W", to: 5, moved: true },
     { from: 5, command: "N", to: 1, moved: true },
   ];
+  const expected = Array.from({ length: loopCount }, () => oneLoop).flat();
+	if (withKnowledgeDetour) {
+	  expected.splice(oneLoop.length, 0,
+		{ from: 1, command: "E", to: 2, moved: true },
+		{ from: 2, command: "W", to: 1, moved: true },
+	  );
+	}
   expect(rows.map(({ from, command, to, moved }) => ({ from, command, to, moved })))
-    .toEqual(Array.from({ length: loopCount }, () => oneLoop).flat());
+    .toEqual(expected);
 }
 
 async function expectRecordingAtRoomOne(page: Page): Promise<void> {

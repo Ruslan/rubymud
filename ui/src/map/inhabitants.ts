@@ -22,6 +22,16 @@ export interface RoomInhabitant {
   placement_updated_at?: string | null;
 }
 
+interface InhabitantCatalogItem {
+  id: number;
+  map_set_id: number;
+  name: string;
+  kind: InhabitantKind;
+  look_target: string;
+  strategy: string;
+  placement_count: number;
+}
+
 export interface KnowledgeRoom {
   mapSetID: number;
   zone: string;
@@ -84,9 +94,12 @@ export class RoomKnowledgeDialog {
   private list: HTMLElement | null = null;
   private message: HTMLElement | null = null;
   private addButton: HTMLButtonElement | null = null;
+	private placeExistingButton: HTMLButtonElement | null = null;
   private form: HTMLFormElement | null = null;
   private loadRequest: AbortController | null = null;
+	private catalogRequest: AbortController | null = null;
   private writeRequest: AbortController | null = null;
+	private catalogTimer: ReturnType<typeof setTimeout> | null = null;
   private generation = 0;
   private disposed = false;
   private pendingRefresh = false;
@@ -141,13 +154,17 @@ export class RoomKnowledgeDialog {
     actions.className = "map-knowledge-dialog__actions";
     this.addButton = document.createElement("button");
     this.addButton.type = "button";
-    this.addButton.textContent = "Add";
+    this.addButton.textContent = "Add new";
     this.addButton.addEventListener("click", () => this.openForm(null));
+	this.placeExistingButton = document.createElement("button");
+	this.placeExistingButton.type = "button";
+	this.placeExistingButton.textContent = "Place existing";
+	this.placeExistingButton.addEventListener("click", () => this.openCatalog());
     const close = document.createElement("button");
     close.type = "button";
     close.textContent = "Close";
     close.addEventListener("click", () => this.close());
-    actions.append(this.addButton, close);
+    actions.append(this.addButton, this.placeExistingButton, close);
     panel.append(this.message, this.list, actions);
     dialog.append(title, roomLine, tabs, panel);
 
@@ -194,6 +211,10 @@ export class RoomKnowledgeDialog {
     const returnFocus = this.returnFocus;
     this.loadRequest?.abort();
     this.loadRequest = null;
+	this.catalogRequest?.abort();
+	this.catalogRequest = null;
+	if (this.catalogTimer) clearTimeout(this.catalogTimer);
+	this.catalogTimer = null;
     this.writeRequest?.abort();
     this.writeRequest = null;
     this.generation++;
@@ -206,6 +227,7 @@ export class RoomKnowledgeDialog {
     this.list = null;
     this.message = null;
     this.addButton = null;
+	this.placeExistingButton = null;
     this.form = null;
     this.pendingRefresh = false;
     this.returnFocus = null;
@@ -279,6 +301,7 @@ export class RoomKnowledgeDialog {
     this.form = null;
     this.list.hidden = false;
     if (this.addButton) this.addButton.hidden = false;
+	if (this.placeExistingButton) this.placeExistingButton.hidden = false;
     this.list.replaceChildren();
     for (const row of this.rows) this.list.appendChild(this.card(row));
     if (this.pendingRefresh) {
@@ -348,6 +371,7 @@ export class RoomKnowledgeDialog {
     this.form?.remove();
     this.list.hidden = true;
     if (this.addButton) this.addButton.hidden = true;
+	if (this.placeExistingButton) this.placeExistingButton.hidden = true;
     const form = document.createElement("form");
     form.className = "map-inhabitant-form";
     const heading = document.createElement("h3");
@@ -407,6 +431,166 @@ export class RoomKnowledgeDialog {
     this.list.after(form);
     queueMicrotask(() => name.focus());
   }
+
+	private openCatalog(): void {
+	  if (!this.dialog || !this.list || !this.room) return;
+	  if (this.loadRequest) {
+		this.loadRequest.abort();
+		this.loadRequest = null;
+		this.generation++;
+		this.pendingRefresh = true;
+	  }
+	  this.writeRequest?.abort();
+	  this.writeRequest = null;
+	  this.form?.remove();
+	  this.form = null;
+	  this.list.hidden = true;
+	  if (this.addButton) this.addButton.hidden = true;
+	  if (this.placeExistingButton) this.placeExistingButton.hidden = true;
+
+	  const panel = document.createElement("section");
+	  panel.className = "map-inhabitant-catalog";
+	  const heading = document.createElement("h3");
+	  heading.textContent = "Place existing inhabitant";
+	  const search = textInput("catalog_query", "", nameLimit);
+	  search.placeholder = "Search by name or look target";
+	  const results = document.createElement("div");
+	  results.className = "map-inhabitant-catalog__results";
+	  const status = document.createElement("div");
+	  status.className = "map-inhabitant-form__message";
+	  status.setAttribute("role", "status");
+	  const cancel = document.createElement("button");
+	  cancel.type = "button";
+	  cancel.textContent = "Cancel";
+	  cancel.addEventListener("click", () => {
+		this.catalogRequest?.abort();
+		panel.remove();
+		this.renderList();
+	  });
+	  panel.append(heading, labelWrap("Search catalog", search), status, results, cancel);
+	  this.list.after(panel);
+
+	  const loadCatalog = async (): Promise<void> => {
+		const room = this.room;
+		if (!room || !panel.isConnected) return;
+		this.catalogRequest?.abort();
+		const controller = new AbortController();
+		this.catalogRequest = controller;
+		status.textContent = "Searching…";
+		const params = new URLSearchParams({
+		  query: search.value.trim(), limit: "50",
+		  exclude_zone: room.zone, exclude_x: String(room.x), exclude_y: String(room.y), exclude_l: String(room.l),
+		});
+		try {
+		  const response = await fetchWithToken(`/api/map-sets/${room.mapSetID}/inhabitants/catalog?${params}`, { signal: controller.signal });
+		  if (!response.ok) throw new Error(await response.text());
+		  const payload = await response.json() as { items?: InhabitantCatalogItem[]; truncated?: boolean };
+		  if (controller.signal.aborted || this.room !== room || !panel.isConnected) return;
+		  const items = Array.isArray(payload.items) ? payload.items : [];
+		  results.replaceChildren();
+		  for (const item of items) {
+			const card = document.createElement("article");
+			card.className = "map-inhabitant-catalog__item";
+			const label = document.createElement("div");
+			label.textContent = `${item.name} · ${item.kind} · ${item.placement_count} placement${item.placement_count === 1 ? "" : "s"}`;
+			const place = document.createElement("button");
+			place.type = "button";
+			place.textContent = "Place";
+			place.addEventListener("click", () => this.openPlacementForm(item, panel));
+			card.append(label, place);
+			results.appendChild(card);
+		  }
+		  status.textContent = items.length === 0
+			? "No reusable inhabitants found."
+			: (payload.truncated ? "Showing the first 50 matches; refine the search." : "");
+		} catch (error) {
+		  if (!controller.signal.aborted && this.room === room && panel.isConnected) {
+			status.textContent = `Failed to search catalog: ${error instanceof Error ? error.message : String(error)}`;
+		  }
+		} finally {
+		  if (this.catalogRequest === controller) this.catalogRequest = null;
+		}
+	  };
+	  search.addEventListener("input", () => {
+		if (this.catalogTimer) clearTimeout(this.catalogTimer);
+		this.catalogTimer = setTimeout(() => { void loadCatalog(); }, 150);
+	  });
+	  queueMicrotask(() => search.focus());
+	  void loadCatalog();
+	}
+
+	private openPlacementForm(item: InhabitantCatalogItem, catalog: HTMLElement): void {
+	  if (!this.room || !catalog.isConnected || !this.list) return;
+	  this.catalogRequest?.abort();
+	  catalog.hidden = true;
+	  const form = document.createElement("form");
+	  form.className = "map-inhabitant-form map-inhabitant-placement-form";
+	  const heading = document.createElement("h3");
+	  heading.textContent = `Place ${item.name}`;
+	  const presence = textArea("presence_text", "");
+	  const resident = document.createElement("input");
+	  resident.type = "checkbox";
+	  resident.name = "resident";
+	  const residentLabel = document.createElement("label");
+	  residentLabel.className = "map-inhabitant-form__resident";
+	  residentLabel.append(resident, document.createTextNode(" Permanent resident of this room"));
+	  const message = document.createElement("div");
+	  message.className = "map-inhabitant-form__message";
+	  message.setAttribute("role", "status");
+	  const actions = document.createElement("div");
+	  actions.className = "map-inhabitant-form__actions";
+	  const back = document.createElement("button");
+	  back.type = "button";
+	  back.textContent = "Back";
+	  back.addEventListener("click", () => { form.remove(); catalog.hidden = false; this.form = null; });
+	  const save = document.createElement("button");
+	  save.type = "submit";
+	  save.textContent = "Place";
+	  actions.append(back, save);
+	  form.append(heading, labelWrap("Presence text", presence), residentLabel, message, actions);
+	  form.addEventListener("submit", (event) => {
+		event.preventDefault();
+		void this.placeExisting(item, form, message);
+	  });
+	  this.form = form;
+	  catalog.after(form);
+	  queueMicrotask(() => presence.focus());
+	}
+
+	private async placeExisting(item: InhabitantCatalogItem, form: HTMLFormElement, message: HTMLElement): Promise<void> {
+	  const room = this.room;
+	  if (!room || this.form !== form) return;
+	  const controls = [...form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLButtonElement>("input, textarea, button")];
+	  controls.forEach((control) => { control.disabled = true; });
+	  const controller = new AbortController();
+	  this.writeRequest?.abort();
+	  this.writeRequest = controller;
+	  message.textContent = "Placing…";
+	  try {
+		const response = await fetchWithToken(`/api/map-sets/${room.mapSetID}/inhabitants`, {
+		  method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+		  body: JSON.stringify({
+			inhabitant_id: item.id, zone: room.zone, x: room.x, y: room.y, l: room.l,
+			presence_text: (form.elements.namedItem("presence_text") as HTMLTextAreaElement).value,
+			resident: (form.elements.namedItem("resident") as HTMLInputElement).checked,
+		  }),
+		});
+		if (!response.ok) throw new Error(await response.text());
+		const saved = await response.json() as RoomInhabitant;
+		if (controller.signal.aborted || this.room !== room || this.form !== form) return;
+		this.rows.push(saved);
+		this.rows.sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
+		form.previousElementSibling?.remove();
+		this.setMessage("");
+		this.renderList();
+	  } catch (error) {
+		if (controller.signal.aborted || this.room !== room || this.form !== form) return;
+		message.textContent = `Failed to place: ${error instanceof Error ? error.message : String(error)}`;
+		controls.forEach((control) => { control.disabled = false; });
+	  } finally {
+		if (this.writeRequest === controller) this.writeRequest = null;
+	  }
+	}
 
   private formBody(form: HTMLFormElement): Record<string, unknown> {
     const room = this.room!;

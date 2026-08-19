@@ -30,6 +30,11 @@ type roomInhabitantRequest struct {
 
 const roomInhabitantBodyLimit int64 = 64 << 10
 
+type inhabitantCatalogResponse struct {
+	Items     []storage.MapInhabitantSummary `json:"items"`
+	Truncated bool                           `json:"truncated"`
+}
+
 func (body roomInhabitantRequest) cell() (storage.EdgeCell, error) {
 	if body.X == nil || body.Y == nil || body.L == nil {
 		return storage.EdgeCell{}, errors.New("zone, x, y, and l are required")
@@ -149,6 +154,51 @@ func (s *Server) listRoomInhabitants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, rows)
+}
+
+func (s *Server) listInhabitantCatalog(w http.ResponseWriter, r *http.Request) {
+	mapSetID, _, err := mapperInhabitantIDs(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	limit := storage.InhabitantListDefaultLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit <= 0 || limit > storage.InhabitantListMaxLimit {
+			http.Error(w, "limit must be between 1 and 100", http.StatusBadRequest)
+			return
+		}
+	}
+	queryText := r.URL.Query().Get("query")
+	if len([]rune(queryText)) > storage.InhabitantQueryLimit {
+		http.Error(w, "query exceeds 256 characters", http.StatusBadRequest)
+		return
+	}
+	options := storage.InhabitantListOptions{Query: queryText, Limit: limit}
+	q := r.URL.Query()
+	if q.Has("exclude_zone") || q.Has("exclude_x") || q.Has("exclude_y") || q.Has("exclude_l") {
+		zone, err := storage.NormalizeZoneName(q.Get("exclude_zone"))
+		if err != nil {
+			http.Error(w, "invalid exclude room", http.StatusBadRequest)
+			return
+		}
+		values := make([]int, 3)
+		for i, name := range []string{"exclude_x", "exclude_y", "exclude_l"} {
+			values[i], err = strconv.Atoi(q.Get(name))
+			if err != nil {
+				http.Error(w, "invalid exclude room", http.StatusBadRequest)
+				return
+			}
+		}
+		options.ExcludeCell = &storage.EdgeCell{Zone: zone, X: values[0], Y: values[1], L: values[2]}
+	}
+	rows, truncated, err := s.store.ListMapInhabitants(mapSetID, options)
+	if err != nil {
+		writeRoomInhabitantError(w, err)
+		return
+	}
+	writeJSON(w, inhabitantCatalogResponse{Items: rows, Truncated: truncated})
 }
 
 func (s *Server) createRoomInhabitant(w http.ResponseWriter, r *http.Request) {

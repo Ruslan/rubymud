@@ -499,10 +499,55 @@ func (s *Server) mcpListTools() any {
 			},
 			map[string]any{
 				"name":        "mud_look_map",
-				"description": "Describe the current room from the authoritative materialized topology: each shown outgoing grid edge and seam is separate, with source, passable state, resolution (mapped, vetoed, dangling, dead_target, or blocked), target coordinate when known, and non-default directed attrs. Seam lines retain the exact occurrence order, kind/source, target_zone/nullable target_tag/command selector, and resolved target when known. Pathological edge lists are capped with a truncation note. Includes confidence. Alias: mud_room. An omitted session_id defaults to the first session.",
+				"description": "Describe the current room from the authoritative materialized topology: each shown outgoing grid edge and seam is separate, with source, passable state, resolution (mapped, vetoed, dangling, dead_target, or blocked), target coordinate when known, and non-default directed attrs. Also includes a brief bounded known-inhabitants summary with kind, resident status and strategy, but never detailed look_text. Seam lines retain exact occurrence order. Includes confidence. Alias: mud_room. An omitted session_id defaults to the first session.",
 				"inputSchema": map[string]any{
 					"type":       "object",
 					"properties": map[string]any{"session_id": sessionIDProp},
+				},
+			},
+			map[string]any{
+				"name":        "mud_inhabitants",
+				"description": "List known inhabitants of the session's active map set without detailed look_text. Optional query matches name/look target; filter by either zone or exact room. Returns at most limit entities (default 20, hard max 100) and reports truncation. Room results include resident/presence; all results include strategy and total placement count.",
+				"inputSchema": map[string]any{
+					"type": "object", "additionalProperties": false,
+					"properties": map[string]any{
+						"session_id": sessionIDProp,
+						"query":      map[string]any{"type": "string", "maxLength": 256, "description": "Optional case-insensitive name/look-target substring."},
+						"zone":       map[string]any{"type": "string", "description": "Optional zone placement filter; mutually exclusive with room."},
+						"room": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
+							"zone": map[string]any{"type": "string"}, "x": map[string]any{"type": "integer"}, "y": map[string]any{"type": "integer"}, "l": map[string]any{"type": "integer"},
+						}, "required": []string{"zone", "x", "y", "l"}},
+						"limit": map[string]any{"type": "integer", "minimum": 1, "maximum": 100},
+					},
+				},
+			},
+			map[string]any{
+				"name":        "mud_inhabitant",
+				"description": "Read one known inhabitant by id from the session's active map set. Explicit detailed read: includes look_text, note, strategy and up to 100 room placements.",
+				"inputSchema": map[string]any{
+					"type": "object", "additionalProperties": false,
+					"properties": map[string]any{"session_id": sessionIDProp, "inhabitant_id": map[string]any{"type": "integer", "minimum": 1}},
+					"required":   []string{"inhabitant_id"},
+				},
+			},
+			map[string]any{
+				"name":        "mud_inhabitant_write",
+				"description": "Write the inhabitants overlay of the session's active map set without topology fork/revision changes. operation=create creates an entity and placement; place reuses inhabitant_id in another room; update replaces shared entity fields and the selected placement fields; remove removes only that placement and deletes the entity only when no placements remain. room is always required. update requires name and kind; empty optional text clears it.",
+				"inputSchema": map[string]any{
+					"type": "object", "additionalProperties": false,
+					"properties": map[string]any{
+						"session_id":    sessionIDProp,
+						"operation":     map[string]any{"type": "string", "enum": []string{"create", "place", "update", "remove"}},
+						"inhabitant_id": map[string]any{"type": "integer", "minimum": 1},
+						"room": map[string]any{"type": "object", "additionalProperties": false, "properties": map[string]any{
+							"zone": map[string]any{"type": "string"}, "x": map[string]any{"type": "integer"}, "y": map[string]any{"type": "integer"}, "l": map[string]any{"type": "integer"},
+						}, "required": []string{"zone", "x", "y", "l"}},
+						"name": map[string]any{"type": "string", "maxLength": 256}, "kind": map[string]any{"type": "string", "enum": []string{"npc", "monster", "other"}},
+						"look_target": map[string]any{"type": "string", "maxLength": 2048}, "look_text": map[string]any{"type": "string", "maxLength": 2048},
+						"note": map[string]any{"type": "string", "maxLength": 2048}, "strategy": map[string]any{"type": "string", "maxLength": 2048},
+						"presence_text": map[string]any{"type": "string", "maxLength": 2048}, "resident": map[string]any{"type": "boolean"},
+					},
+					"required": []string{"operation", "room"},
 				},
 			},
 			map[string]any{
@@ -1362,6 +1407,55 @@ func (s *Server) mcpCallTool(ctx context.Context, params json.RawMessage, mcpSes
 			break
 		}
 		content, isError = s.mcpLookMap(sid)
+
+	case "mud_inhabitants":
+		var args struct {
+			SessionID int64             `json:"session_id"`
+			Query     string            `json:"query"`
+			Zone      string            `json:"zone"`
+			Room      *mcpRequiredCoord `json:"room"`
+			Limit     int               `json:"limit"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return nil, err
+		}
+		sid, err := s.mcpResolveSessionID(args.SessionID)
+		if err != nil {
+			content, isError = err.Error(), true
+			break
+		}
+		content, isError = s.mcpInhabitants(sid, args.Room, args.Zone, args.Query, args.Limit)
+
+	case "mud_inhabitant":
+		var args struct {
+			SessionID    int64  `json:"session_id"`
+			InhabitantID *int64 `json:"inhabitant_id"`
+		}
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return nil, err
+		}
+		sid, err := s.mcpResolveSessionID(args.SessionID)
+		if err != nil {
+			content, isError = err.Error(), true
+			break
+		}
+		if args.InhabitantID == nil {
+			content, isError = "inhabitant_id is required.", true
+			break
+		}
+		content, isError = s.mcpInhabitant(sid, *args.InhabitantID)
+
+	case "mud_inhabitant_write":
+		var args mcpInhabitantWriteArgs
+		if err := json.Unmarshal(call.Arguments, &args); err != nil {
+			return nil, err
+		}
+		sid, err := s.mcpResolveSessionID(args.SessionID)
+		if err != nil {
+			content, isError = err.Error(), true
+			break
+		}
+		content, isError = s.mcpInhabitantWrite(sid, args)
 
 	case "mud_path":
 		var args struct {

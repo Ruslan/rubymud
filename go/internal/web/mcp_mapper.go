@@ -217,6 +217,25 @@ func (s *Server) mcpLookMap(sid int64) (string, bool) {
 			// showDT=false: the room-level "** DEATH TRAP **" above already covers it.
 			sb.WriteString(formatAnnotation(anno, false))
 		}
+		cell := storage.EdgeCell{Zone: annoCoord.Zone, X: annoCoord.X, Y: annoCoord.Y, L: annoCoord.L}
+		rows, truncated, err := s.store.ListRoomInhabitantsBounded(mapSetID, cell, storage.InhabitantListDefaultLimit)
+		if err == nil && len(rows) > 0 {
+			sb.WriteString("Known inhabitants:\n")
+			for _, row := range rows {
+				flags := row.Kind
+				if row.Resident {
+					flags += ", resident"
+				}
+				sb.WriteString(fmt.Sprintf("  %s [%s]", row.Name, flags))
+				if row.Strategy != "" {
+					sb.WriteString(" strategy=" + row.Strategy)
+				}
+				sb.WriteByte('\n')
+			}
+			if truncated {
+				sb.WriteString("  ... inhabitants truncated after 20\n")
+			}
+		}
 	}
 	if !found {
 		return "No tracker for this session yet (no active map set loaded).", false

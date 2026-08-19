@@ -4,11 +4,12 @@
 
 План подготовлен 2026-08-19. Основной live smoke A–G реализован той же датой:
 five-room TCP emulator, безопасный storage seed, отдельные SQLite/mudhost,
-Playwright reconciliation и room-NPC dialog flows, второй круг и restart
-persistence запускаются командой
+Playwright reconciliation, room-NPC create/reuse, MCP/UI synchronization,
+второй круг и restart persistence запускаются командой
 `make e2e-mapper-reconciliation`. Negative scenarios расширенного набора пока
-остаются в backlog ниже. Финальный основной spec прошёл три clean runs подряд
-без retry; полный Go и UI regression suites также зелёные.
+остаются в backlog ниже. Исходный reconciliation/NPC spec прошёл три clean runs
+подряд без retry; расширенный UI reuse/MCP spec после добавления прошёл полный
+run без retry. Полные Go и UI regression suites также зелёные.
 
 Он проверяет observation/conflict и manual reconciliation из
 [`mapper-autorecord-reconciliation.md`](mapper-autorecord-reconciliation.md)
@@ -191,16 +192,21 @@ target selection, Preview и Apply выполняются через насто�
 
 ### G. Room knowledge / NPC
 
-1. Через настоящий canvas открыть свойства logical room `1`, затем
-   `Knowledge… → Inhabitants → Add`.
-2. Заполнить три основные строки сущности: имя, цель команды `look` и результат
-   `look`; сохранить через DOM controls.
-3. Проверить карточку NPC и обе нормализованные SQLite-записи:
-   `map_inhabitants` для сущности и `room_inhabitants` для размещения в room `1`.
-4. Убедиться, что knowledge overlay не изменил `topology_revision`.
-5. Сохранить отдельные screenshots формы и готовой карточки.
-6. После restart снова открыть room `1` через canvas и подтвердить сохранность
-   карточки NPC до следующего физического круга.
+1. Через настоящий canvas открыть logical room `1`, затем
+   `Knowledge… → Inhabitants → Add new`.
+2. Заполнить имя, цель/результат `look` и стратегию; сохранить через DOM controls.
+3. Перейти физической командой в room `2`, открыть её через canvas и через
+   `Place existing` найти/разместить ту же каталожную сущность, не создавая
+   дубликат `map_inhabitants`.
+4. Через настоящий loopback MCP вызвать bounded list, explicit detail и update;
+   проверить, что открытая browser-карточка получила новый presence/strategy по
+   `room_knowledge_changed`, list/`mud_look_map` не раскрывают `look_text`, а
+   detail раскрывает его явно.
+5. Проверить одну строку `map_inhabitants`, две строки `room_inhabitants` и
+   неизменный `topology_revision`.
+6. Сохранить отдельные screenshots формы и готовой карточки.
+7. После restart снова открыть room `1` через canvas и подтвердить сохранность
+   общей сущности и обоих placements до следующего физического круга.
 
 ## Negative scenarios
 
@@ -268,9 +274,9 @@ credentials и не предназначена для загрузки или п
 - после Apply существует только exact `5 --N--> 1`, без reverse/ложного face;
 - второй круг и круг после restart заканчиваются green без conflict;
 - screenshot подтверждает relayout и длинный `4–5` passage;
-- screenshots подтверждают заполнение трёх основных NPC-полей и готовую
-  room-scoped карточку; сущность и placement переживают restart без topology
-  revision;
+- screenshots подтверждают заполнение основных NPC-полей и готовую room-scoped
+  карточку; одна сущность, два placements и MCP-правка переживают restart без
+  topology revision;
 - искусственный failure оставляет bounded diagnostic bundle;
 - основная DB и generated/static git status не меняются.
 

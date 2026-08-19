@@ -20,7 +20,7 @@ when changing the shipped tool surface, endpoint behavior, or security model.
 The endpoint is optional, `POST /mcp`, Streamable HTTP request/response. It is
 not SSE, browser CORS, or a WebSocket MCP transport. `initialize` creates an
 opaque `Mcp-Session-Id`; the id carries only best-effort continuity state, not
-authentication. The listed surface currently contains 29 tools. `mud_room` is
+authentication. The listed surface currently contains 35 tools. `mud_room` is
 a handler-only compatibility alias for `mud_look_map`, not a `tools/list` item.
 
 ## Invariants
@@ -56,6 +56,10 @@ a handler-only compatibility alias for `mud_look_map`, not a `tools/list` item.
 - Topology writes use the session write path, fork frozen sets, refresh live
   state, broadcast changes, and are undone per active set. Annotation overlays
   do not fork and may intentionally be dangling.
+- Inhabitant catalogue reads are bounded. Only the explicit `mud_inhabitant`
+  detail tool returns `look_text`; list and `mud_look_map` stay compact.
+  Inhabitant writes are overlays and broadcast every affected placement when a
+  shared entity field changes.
 
 ## Change And Debug Workflow
 

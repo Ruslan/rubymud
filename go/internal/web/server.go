@@ -541,6 +541,7 @@ func newServer(listener WebListenerConfig, manager *session.Manager, store *stor
 			r.Get("/{id}/zones", s.listMapSetZones)
 			r.Get("/{id}/rooms/search", s.searchMapRooms)
 			r.Get("/{id}/inhabitants", s.listRoomInhabitants)
+			r.Get("/{id}/inhabitants/catalog", s.listInhabitantCatalog)
 			r.Post("/{id}/inhabitants", s.createRoomInhabitant)
 			r.Patch("/{id}/inhabitants/{inhabitantID}", s.updateRoomInhabitant)
 			r.Delete("/{id}/inhabitants/{inhabitantID}", s.deleteRoomInhabitant)

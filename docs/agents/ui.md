@@ -60,8 +60,10 @@ server broadcasts `room_knowledge_changed`, and only an open dialog for the
 affected room refetches. Abort/generation guards preserve unsaved forms across
 late GET responses and discard responses after closing or switching rooms.
 Entity fields are shared across placements, while `presence_text` and
-`resident` belong to one room. The current browser UI creates new entities;
-placing an existing catalogue entity and live NPC detection remain later work.
+`resident` belong to one room. `Place existing` searches a bounded catalogue
+endpoint and attaches the selected entity by id, so shared fields are not
+duplicated; entities already attached to the room are excluded. Live NPC
+detection remains intentionally out of scope.
 
 ## Development
 

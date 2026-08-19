@@ -111,6 +111,48 @@ func TestRoomInhabitantsCRUDAndMultiplePlacements(t *testing.T) {
 	}
 }
 
+func TestListMapInhabitantsFiltersExcludesAndBoundsCatalog(t *testing.T) {
+	store := newMapperTestStore(t)
+	setID, err := store.CreateMapSet(sampleInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	alpha := EdgeCell{Zone: "Alpha", X: 0, Y: 0, L: 0}
+	beta := EdgeCell{Zone: "Beta", X: 0, Y: 0, L: 1}
+	smith, err := store.CreateRoomInhabitant(setID, alpha, RoomInhabitantFields{
+		InhabitantFields: inhabitantFields("Master Smith", InhabitantKindNPC),
+		Resident:         true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PlaceRoomInhabitant(setID, beta, smith.ID, "Buying ore.", false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.CreateRoomInhabitant(setID, alpha, RoomInhabitantFields{
+		InhabitantFields: inhabitantFields("Cave rat", InhabitantKindMonster),
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rows, truncated, err := store.ListMapInhabitants(setID, InhabitantListOptions{Limit: 1})
+	if err != nil || len(rows) != 1 || !truncated || rows[0].Name != "Cave rat" {
+		t.Fatalf("bounded catalog = %+v truncated=%v err=%v", rows, truncated, err)
+	}
+	rows, truncated, err = store.ListMapInhabitants(setID, InhabitantListOptions{
+		Query: "smith", Zone: "Beta", Limit: 20,
+	})
+	if err != nil || truncated || len(rows) != 1 || rows[0].ID != smith.ID || rows[0].PlacementCount != 2 {
+		t.Fatalf("filtered catalog = %+v truncated=%v err=%v", rows, truncated, err)
+	}
+	rows, truncated, err = store.ListMapInhabitants(setID, InhabitantListOptions{
+		ExcludeCell: &alpha, Limit: 20,
+	})
+	if err != nil || truncated || len(rows) != 0 {
+		t.Fatalf("room-excluded catalog = %+v truncated=%v err=%v", rows, truncated, err)
+	}
+}
+
 func TestRoomInhabitantValidation(t *testing.T) {
 	store := newMapperTestStore(t)
 	setID, _ := store.CreateMapSet(sampleInput())

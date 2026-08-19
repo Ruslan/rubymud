@@ -1691,6 +1691,55 @@ body {
   color: #cfe6d6;
 }
 .map-inhabitant-form :disabled { opacity: .5; cursor: wait; }
+.map-inhabitant-catalog {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.map-inhabitant-catalog > label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: #9fc4ac;
+}
+.map-inhabitant-catalog input {
+  min-width: 0;
+  height: 29px;
+  box-sizing: border-box;
+  padding: 5px 7px;
+  background: #090c0a;
+  color: #cfe6d6;
+  border: 1px solid #2c5a3c;
+  border-radius: 4px;
+  font: inherit;
+}
+.map-inhabitant-catalog__results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: min(42vh, 320px);
+  overflow-y: auto;
+}
+.map-inhabitant-catalog__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px;
+  border: 1px solid #1b2a20;
+  border-radius: 5px;
+  background: #090c0a;
+}
+.map-inhabitant-catalog button {
+  min-height: 28px;
+  padding: 4px 9px;
+  background: #0d1712;
+  color: #cfe6d6;
+  border: 1px solid #2c5a3c;
+  border-radius: 4px;
+  font: inherit;
+  cursor: pointer;
+}
 .map-cell-menu__knowledge { border-color: #2f8a52; color: #54e888; }
 
 .map-cell-menu {

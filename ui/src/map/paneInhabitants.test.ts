@@ -57,10 +57,22 @@ describe("map room inhabitants knowledge dialog", () => {
       if (url.endsWith("/api/map-sets/5/zones")) return Promise.resolve(response([{ zone: "Город", room_count: 1 }]));
       if (url.includes("/api/rooms?map_set=5&zone=Город")) return Promise.resolve(response([room]));
       if (url.includes("/api/map-sets/5/inhabitants") && (!init?.method || init.method === "GET")) {
+		if (url.includes("/catalog?")) {
+		  return Promise.resolve(response({ items: [{
+			id: 8, map_set_id: 5, name: "Странствующий лекарь", kind: "npc",
+			look_target: "лекарь", strategy: "Купить бинты.", placement_count: 1,
+		  }], truncated: false }));
+		}
         return Promise.resolve(response(initialRows));
       }
       if (url.endsWith("/api/map-sets/5/inhabitants") && init?.method === "POST") {
         const body = JSON.parse(String(init.body));
+		if (body.inhabitant_id === 8) {
+		  return Promise.resolve(response({
+			id: 8, placement_id: 18, map_set_id: 5, name: "Странствующий лекарь", kind: "npc",
+			look_target: "лекарь", look_text: "", note: "", strategy: "Купить бинты.", ...body,
+		  }, 201));
+		}
         return Promise.resolve(response({ id: 3, placement_id: 13, map_set_id: 5, ...body }, 201));
       }
       if (url.endsWith("/api/map-sets/5/inhabitants/1") && init?.method === "PATCH") {
@@ -111,7 +123,7 @@ describe("map room inhabitants knowledge dialog", () => {
     expect(decodeURIComponent(String(listCall[0]))).toContain("zone=Город&x=3&y=4&l=0");
 
     [...dialog.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "Add")!.click();
+      .find((button) => button.textContent === "Add new")!.click();
     const createForm = dialog.querySelector<HTMLFormElement>(".map-inhabitant-form")!;
     (createForm.elements.namedItem("name") as HTMLInputElement).value = "Торговец";
     (createForm.elements.namedItem("kind") as HTMLSelectElement).value = "other";
@@ -156,6 +168,36 @@ describe("map room inhabitants knowledge dialog", () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 
+	it("searches the bounded catalog and places an existing entity", async () => {
+	  await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
+	  clickRoom();
+	  [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
+		.find((button) => button.textContent === "Knowledge…")!.click();
+	  const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
+	  await vi.waitFor(() => expect(dialog.textContent).toContain("Кузнец"));
+	  [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+		.find((button) => button.textContent === "Place existing")!.click();
+	  const search = dialog.querySelector<HTMLInputElement>('input[name="catalog_query"]')!;
+	  search.value = "лекарь";
+	  search.dispatchEvent(new Event("input", { bubbles: true }));
+	  await vi.waitFor(() => expect(dialog.textContent).toContain("Странствующий лекарь"));
+	  [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+		.find((button) => button.textContent === "Place")!.click();
+	  const form = dialog.querySelector<HTMLFormElement>(".map-inhabitant-placement-form")!;
+	  (form.elements.namedItem("presence_text") as HTMLTextAreaElement).value = "Лекарь осматривает раненых.";
+	  (form.elements.namedItem("resident") as HTMLInputElement).checked = false;
+	  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+	  await vi.waitFor(() => expect(dialog.textContent).toContain("Странствующий лекарь"));
+	  const placementCall = fetchMock.mock.calls.find(([, init]) => {
+		if (init?.method !== "POST") return false;
+		return JSON.parse(String(init.body)).inhabitant_id === 8;
+	  })!;
+	  expect(JSON.parse(String(placementCall[1].body))).toMatchObject({
+		inhabitant_id: 8, zone: "Город", x: 3, y: 4, l: 0,
+		presence_text: "Лекарь осматривает раненых.", resident: false,
+	  });
+	});
+
   it("refreshes only an open matching room on room_knowledge_changed", async () => {
     await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
     clickRoom();
@@ -185,7 +227,7 @@ describe("map room inhabitants knowledge dialog", () => {
     await vi.waitFor(() => expect(pane.root.querySelector(".map-knowledge-dialog")?.textContent).toContain("Кузнец"));
     const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
     [...dialog.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "Add")!.click();
+      .find((button) => button.textContent === "Add new")!.click();
     const form = dialog.querySelector<HTMLFormElement>(".map-inhabitant-form")!;
     const name = form.elements.namedItem("name") as HTMLInputElement;
     const note = form.elements.namedItem("note") as HTMLTextAreaElement;
@@ -209,7 +251,7 @@ describe("map room inhabitants knowledge dialog", () => {
       .find((button) => button.textContent === "Knowledge…")!.click();
     const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
     [...dialog.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "Add")!.click();
+      .find((button) => button.textContent === "Add new")!.click();
     const form = dialog.querySelector<HTMLFormElement>(".map-inhabitant-form")!;
     const name = form.elements.namedItem("name") as HTMLInputElement;
     name.value = "Несохранённый NPC";

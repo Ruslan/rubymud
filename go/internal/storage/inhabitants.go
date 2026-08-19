@@ -17,8 +17,11 @@ const (
 
 	// Match the established room-annotation transport cap. Storage enforces it
 	// too so REST, tests and future MCP callers cannot bypass the bound.
-	InhabitantTextLimit = 2048
-	inhabitantNameLimit = 256
+	InhabitantTextLimit        = 2048
+	InhabitantQueryLimit       = 256
+	InhabitantListDefaultLimit = 20
+	InhabitantListMaxLimit     = 100
+	inhabitantNameLimit        = 256
 )
 
 var (
@@ -95,6 +98,27 @@ type RoomInhabitantView struct {
 	Resident           bool        `json:"resident"`
 	UpdatedAt          *SQLiteTime `json:"updated_at"`
 	PlacementUpdatedAt *SQLiteTime `json:"placement_updated_at"`
+}
+
+// MapInhabitantSummary is the bounded catalogue wire model. Deliberately omit
+// look_text and note: callers use GetMapInhabitant for the potentially large
+// detailed knowledge body.
+type MapInhabitantSummary struct {
+	ID             int64  `json:"id"`
+	MapSetID       int64  `json:"map_set_id"`
+	Name           string `json:"name"`
+	Kind           string `json:"kind"`
+	LookTarget     string `json:"look_target"`
+	Strategy       string `json:"strategy"`
+	PlacementCount int    `json:"placement_count"`
+}
+
+type InhabitantListOptions struct {
+	Query       string
+	Zone        string
+	Cell        *EdgeCell
+	ExcludeCell *EdgeCell
+	Limit       int
 }
 
 func normalizeInhabitantFields(fields InhabitantFields) (InhabitantFields, error) {
@@ -196,6 +220,75 @@ func (s *Store) GetMapInhabitant(mapSetID, inhabitantID int64) (MapInhabitant, e
 		return MapInhabitant{}, ErrInhabitantNotFound
 	}
 	return row, err
+}
+
+// ListMapInhabitants returns unique catalogue entities in stable name/id order.
+// It always applies a hard entity limit and reports whether another row exists.
+// Zone/Cell filters mean "has at least one placement here"; ExcludeCell is used
+// by the UI placement picker to hide entities already attached to the room.
+func (s *Store) ListMapInhabitants(mapSetID int64, options InhabitantListOptions) ([]MapInhabitantSummary, bool, error) {
+	if err := mapSetExistsTx(s.db, mapSetID); err != nil {
+		return nil, false, err
+	}
+	if utf8.RuneCountInString(options.Query) > InhabitantQueryLimit {
+		return nil, false, fmt.Errorf("%w: query exceeds %d characters", ErrInvalidInhabitant, InhabitantQueryLimit)
+	}
+	limit := options.Limit
+	if limit <= 0 {
+		limit = InhabitantListDefaultLimit
+	}
+	if limit > InhabitantListMaxLimit {
+		limit = InhabitantListMaxLimit
+	}
+	query := s.db.Table("map_inhabitants AS mi").
+		Select(`mi.id, mi.map_set_id, mi.name, mi.kind, mi.look_target, mi.strategy,
+			COUNT(ri.id) AS placement_count`).
+		Joins("LEFT JOIN room_inhabitants AS ri ON ri.map_set_id=mi.map_set_id AND ri.inhabitant_id=mi.id").
+		Where("mi.map_set_id=?", mapSetID)
+	if needle := strings.TrimSpace(options.Query); needle != "" {
+		needle = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(strings.ToLower(needle))
+		like := "%" + needle + "%"
+		query = query.Where(`(LOWER(mi.name) LIKE ? ESCAPE '\' OR LOWER(mi.look_target) LIKE ? ESCAPE '\')`, like, like)
+	}
+	if options.Cell != nil {
+		cell, err := normalizeInhabitantCell(*options.Cell)
+		if err != nil {
+			return nil, false, err
+		}
+		query = query.Where(`EXISTS (SELECT 1 FROM room_inhabitants f
+			WHERE f.map_set_id=mi.map_set_id AND f.inhabitant_id=mi.id
+			AND f.zone=? AND f.x=? AND f.y=? AND f.l=?)`, cell.Zone, cell.X, cell.Y, cell.L)
+	} else if strings.TrimSpace(options.Zone) != "" {
+		zone, err := NormalizeZoneName(options.Zone)
+		if err != nil {
+			return nil, false, err
+		}
+		query = query.Where(`EXISTS (SELECT 1 FROM room_inhabitants f
+			WHERE f.map_set_id=mi.map_set_id AND f.inhabitant_id=mi.id AND f.zone=?)`, zone)
+	}
+	if options.ExcludeCell != nil {
+		cell, err := normalizeInhabitantCell(*options.ExcludeCell)
+		if err != nil {
+			return nil, false, err
+		}
+		query = query.Where(`NOT EXISTS (SELECT 1 FROM room_inhabitants e
+			WHERE e.map_set_id=mi.map_set_id AND e.inhabitant_id=mi.id
+			AND e.zone=? AND e.x=? AND e.y=? AND e.l=?)`, cell.Zone, cell.X, cell.Y, cell.L)
+	}
+	var rows []MapInhabitantSummary
+	err := query.Group("mi.id, mi.map_set_id, mi.name, mi.kind, mi.look_target, mi.strategy").
+		Order("mi.name COLLATE NOCASE ASC, mi.id ASC").Limit(limit + 1).Scan(&rows).Error
+	if err != nil {
+		return nil, false, err
+	}
+	truncated := len(rows) > limit
+	if truncated {
+		rows = rows[:limit]
+	}
+	if rows == nil {
+		rows = []MapInhabitantSummary{}
+	}
+	return rows, truncated, nil
 }
 
 func updateMapInhabitantTx(tx *gorm.DB, mapSetID, inhabitantID int64, fields InhabitantFields) (MapInhabitant, bool, error) {
@@ -387,6 +480,39 @@ func (s *Store) ListRoomInhabitants(mapSetID int64, cell EdgeCell) ([]RoomInhabi
 	return rows, err
 }
 
+func (s *Store) ListRoomInhabitantsBounded(mapSetID int64, cell EdgeCell, limit int) ([]RoomInhabitantView, bool, error) {
+	cell, err := normalizeInhabitantCell(cell)
+	if err != nil {
+		return nil, false, err
+	}
+	if limit <= 0 {
+		limit = InhabitantListDefaultLimit
+	}
+	if limit > InhabitantListMaxLimit {
+		limit = InhabitantListMaxLimit
+	}
+	var rows []RoomInhabitantView
+	err = s.db.Table("room_inhabitants AS ri").
+		Select(`mi.id, ri.id AS placement_id, mi.map_set_id, ri.zone, ri.x, ri.y, ri.l,
+			mi.name, mi.kind, mi.look_target, mi.look_text, mi.note, mi.strategy,
+			ri.presence_text, ri.resident, mi.updated_at, ri.updated_at AS placement_updated_at`).
+		Joins("JOIN map_inhabitants AS mi ON mi.id=ri.inhabitant_id AND mi.map_set_id=ri.map_set_id").
+		Where("ri.map_set_id=? AND ri.zone=? AND ri.x=? AND ri.y=? AND ri.l=?",
+			mapSetID, cell.Zone, cell.X, cell.Y, cell.L).
+		Order("mi.name COLLATE NOCASE ASC, mi.id ASC").Limit(limit + 1).Scan(&rows).Error
+	if err != nil {
+		return nil, false, err
+	}
+	truncated := len(rows) > limit
+	if truncated {
+		rows = rows[:limit]
+	}
+	if rows == nil {
+		rows = []RoomInhabitantView{}
+	}
+	return rows, truncated, nil
+}
+
 // ListInhabitantPlacements returns every room binding for one entity. The REST
 // update path uses it to invalidate all open room views after changing shared
 // entity fields such as name/strategy.
@@ -398,6 +524,29 @@ func (s *Store) ListInhabitantPlacements(mapSetID, inhabitantID int64) ([]RoomIn
 		rows = []RoomInhabitant{}
 	}
 	return rows, err
+}
+
+func (s *Store) ListInhabitantPlacementsBounded(mapSetID, inhabitantID int64, limit int) ([]RoomInhabitant, bool, error) {
+	if limit <= 0 {
+		limit = InhabitantListDefaultLimit
+	}
+	if limit > InhabitantListMaxLimit {
+		limit = InhabitantListMaxLimit
+	}
+	var rows []RoomInhabitant
+	err := s.db.Where("map_set_id=? AND inhabitant_id=?", mapSetID, inhabitantID).
+		Order("zone ASC, l ASC, x ASC, y ASC, id ASC").Limit(limit + 1).Find(&rows).Error
+	if err != nil {
+		return nil, false, err
+	}
+	truncated := len(rows) > limit
+	if truncated {
+		rows = rows[:limit]
+	}
+	if rows == nil {
+		rows = []RoomInhabitant{}
+	}
+	return rows, truncated, nil
 }
 
 func (s *Store) UpdateRoomInhabitant(mapSetID int64, cell EdgeCell, inhabitantID int64, fields RoomInhabitantFields) (RoomInhabitantView, bool, error) {

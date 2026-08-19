@@ -210,7 +210,7 @@ session; capacity pressure evicts the least recently used state. A client that
 needs durable or exact control should pass its own cursor and tolerate losing
 implicit state.
 
-## Tool Inventory (32 Tools)
+## Tool Inventory (35 Tools)
 
 The following block is intentionally machine-checked against `tools/list`.
 
@@ -228,6 +228,9 @@ The following block is intentionally machine-checked against `tools/list`.
 - `mud_map_zone`
 - `mud_where`
 - `mud_look_map`
+- `mud_inhabitants`
+- `mud_inhabitant`
+- `mud_inhabitant_write`
 - `mud_path`
 - `mud_map_walk`
 - `mud_map_walk_status`
@@ -349,7 +352,36 @@ grid edge and seam from materialized topology. Edge output distinguishes source,
 passability, resolution, target when known, and non-default attrs. Seam output
 preserves its exact occurrence `order`, `target_zone`, nullable `target_tag`, and
 `command` selector; malformed imported seams are shown explicitly. `mud_room` is its legacy
-alias.
+alias. A bounded `Known inhabitants` block includes kind, resident status, and
+strategy for the current room. It deliberately omits detailed `look_text`.
+
+### `mud_inhabitants`
+
+Arguments: optional `session_id`, `query`, `zone`, exact
+`room:{zone,x,y,l}`, and `limit` (default 20, maximum 100). `zone` and `room`
+are mutually exclusive. Returns unique catalogue entities with total placement
+count and strategy; an exact room filter also shows its resident and presence
+fields. The response reports truncation and never includes `look_text`.
+
+### `mud_inhabitant`
+
+Arguments: required positive `inhabitant_id`; optional `session_id`. This is the
+explicit detailed read and includes `look_target`, `look_text`, note, strategy,
+and up to 100 placements from the active map set.
+
+### `mud_inhabitant_write`
+
+Arguments: required `operation` and exact `room`; optional `session_id`.
+`create` requires `name` and `kind` and creates an entity plus its first
+placement. `place` requires `inhabitant_id` and reuses it in another room.
+`update` requires `inhabitant_id`, `name`, and `kind`; it replaces the shared
+entity fields and the selected room's placement fields. `remove` removes only
+the selected placement and deletes the catalogue entity only when its last
+placement is gone. Optional text fields may be cleared with an empty string.
+
+These are knowledge-overlay writes: they work on frozen sets in place, do not
+advance `topology_revision`, and broadcast room-scoped refreshes to open browser
+dialogs. The catalogue records expected/known locations, not live presence.
 
 ### `mud_path`
 

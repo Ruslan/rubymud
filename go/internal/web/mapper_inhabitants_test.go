@@ -121,6 +121,20 @@ func TestRESTRoomInhabitantsLazyCRUDOnFrozenMapSet(t *testing.T) {
 		t.Fatalf("second placement: status=%d body=%s", resp.StatusCode, data)
 	}
 
+	catalogURL := fmt.Sprintf("%s/api/map-sets/%d/inhabitants/catalog?query=smith&limit=20&exclude_zone=%s&exclude_x=7&exclude_y=7&exclude_l=0",
+		ts.URL, setID, url.QueryEscape("Alpha"))
+	resp, data = doInhabitantRequest(t, s, http.MethodGet, catalogURL, nil)
+	var catalog inhabitantCatalogResponse
+	if resp.StatusCode != http.StatusOK || json.Unmarshal(data, &catalog) != nil || catalog.Truncated || len(catalog.Items) != 1 || catalog.Items[0].ID != smith.ID || catalog.Items[0].PlacementCount != 2 {
+		t.Fatalf("catalog: status=%d response=%+v body=%s", resp.StatusCode, catalog, data)
+	}
+	excludedURL := fmt.Sprintf("%s/api/map-sets/%d/inhabitants/catalog?limit=20&exclude_zone=%s&exclude_x=1&exclude_y=2&exclude_l=0",
+		ts.URL, setID, url.QueryEscape("Alpha"))
+	resp, data = doInhabitantRequest(t, s, http.MethodGet, excludedURL, nil)
+	if resp.StatusCode != http.StatusOK || json.Unmarshal(data, &catalog) != nil || len(catalog.Items) != 0 {
+		t.Fatalf("room-excluded catalog: status=%d response=%+v body=%s", resp.StatusCode, catalog, data)
+	}
+
 	resp, data = doInhabitantRequest(t, s, http.MethodGet, endpoint, nil)
 	var rows []storage.RoomInhabitantView
 	if resp.StatusCode != http.StatusOK || json.Unmarshal(data, &rows) != nil || len(rows) != 2 {

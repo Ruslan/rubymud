@@ -137,6 +137,7 @@ export class LiveStack {
       "--db", this.dbPath,
       "--config-dir", join(this.runDir, "config"),
       "--listen", `127.0.0.1:${this.webPort}`,
+	  "--mcp",
     ], { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
     this.mudhost.stdout!.pipe(out, { end: false });
     this.mudhost.stderr!.pipe(out, { end: false });
