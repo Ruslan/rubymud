@@ -2,6 +2,15 @@ import type { HistoryListResponse, LogEntry, MapperProfile, MapperSpec } from '.
 
 export type ProfileRuleDomain = 'aliases' | 'triggers' | 'subs' | 'highlights' | 'hotkeys' | 'declared_variables';
 
+export type AppSettings = {
+  api_token: string;
+  allow_exec_command: boolean;
+  allow_webfetch_command: boolean;
+  language: 'en' | 'ru';
+};
+
+export type MutableAppSettingKey = 'allow_exec_command' | 'allow_webfetch_command' | 'language';
+
 export type MCPSettings = {
   enabled: boolean;
   requested_enabled: boolean;
@@ -83,8 +92,10 @@ export async function fetchColors() {
   if (!res.ok) return [];
   return await res.json();
 }
-export const fetchAppSettings = () => getJSON('/api/app/settings');
-export const saveAppSettingsRequest = (settings: any) => putJSON('/api/app/settings', settings);
+export const fetchAppSettings = () => getJSON<AppSettings>('/api/app/settings');
+export function saveAppSettingRequest<K extends MutableAppSettingKey>(key: K, value: AppSettings[K]) {
+  return putJSON('/api/app/settings', { [key]: value });
+}
 export const fetchMCPSettings = () => getJSON<MCPSettings>('/api/mcp/settings');
 export const saveMCPSettingsRequest = (enabled: boolean) => fetch('/api/mcp/settings', { method: 'PATCH', headers: apiHeaders(true), body: JSON.stringify({ enabled }) });
 export const rotateMCPTokenRequest = () => postNoBody('/api/mcp/settings/token');

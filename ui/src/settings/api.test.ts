@@ -7,7 +7,7 @@ import {
   fetchMCPSettings,
   fetchWebAuthSettings,
   fetchSessionHistory,
-  saveAppSettingsRequest,
+  saveAppSettingRequest,
   rotateMCPTokenRequest,
   saveMCPSettingsRequest,
   saveWebAuthSettingsRequest,
@@ -33,11 +33,11 @@ describe('settings api', () => {
     vi.restoreAllMocks();
   });
 
-  it('saves app local command toggles', async () => {
+  it('saves only the changed app setting so stale tabs cannot overwrite siblings', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
 
-    await saveAppSettingsRequest({ api_token: 'keep', allow_exec_command: true, allow_webfetch_command: false });
+    await saveAppSettingRequest('language', 'ru');
 
     expect(fetchMock).toHaveBeenCalledWith('/api/app/settings', {
       method: 'PUT',
@@ -45,7 +45,17 @@ describe('settings api', () => {
         'Content-Type': 'application/json',
         'X-Session-Token': '',
       },
-      body: JSON.stringify({ api_token: 'keep', allow_exec_command: true, allow_webfetch_command: false }),
+      body: JSON.stringify({ language: 'ru' }),
+    });
+
+    await saveAppSettingRequest('allow_exec_command', true);
+    expect(fetchMock).toHaveBeenLastCalledWith('/api/app/settings', {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Session-Token': '',
+      },
+      body: JSON.stringify({ allow_exec_command: true }),
     });
   });
 

@@ -26,6 +26,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"rubymud/go/internal/colorreg"
+	appi18n "rubymud/go/internal/i18n"
 	"rubymud/go/internal/session"
 	"rubymud/go/internal/storage"
 )
@@ -646,8 +647,7 @@ func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	if strings.HasSuffix(path, ".html") {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		tokenTag := "<script>window.API_TOKEN=\"" + s.apiToken + "\"</script>"
-		html := strings.Replace(string(content), "<!-- %TOKEN% -->", tokenTag, 1)
+		html := injectAppBoot(string(content), s.apiToken, s.appLanguage())
 		w.Write([]byte(html))
 		return
 	}
@@ -661,9 +661,24 @@ func (s *Server) handleSettingsIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	tokenTag := "<script>window.API_TOKEN=\"" + s.apiToken + "\"</script>"
-	html := strings.Replace(string(content), "<!-- %TOKEN% -->", tokenTag, 1)
+	html := injectAppBoot(string(content), s.apiToken, s.appLanguage())
 	w.Write([]byte(html))
+}
+
+func (s *Server) appLanguage() appi18n.Locale {
+	value, err := s.store.GetSetting("language")
+	if err != nil {
+		return appi18n.English
+	}
+	return appi18n.NormalizeLocale(value)
+}
+
+func injectAppBoot(html, apiToken string, locale appi18n.Locale) string {
+	tokenJSON, _ := json.Marshal(apiToken)
+	localeJSON, _ := json.Marshal(string(locale))
+	boot := "<script>window.API_TOKEN=" + string(tokenJSON) + ";window.APP_LANGUAGE=" + string(localeJSON) + "</script>"
+	html = strings.Replace(html, "<!-- %TOKEN% -->", boot, 1)
+	return strings.Replace(html, `<html lang="en">`, `<html lang="`+string(locale)+`">`, 1)
 }
 
 func sameOriginRequest(r *http.Request) bool {
@@ -731,6 +746,13 @@ type appSettingsJSON struct {
 	APIToken             string `json:"api_token"`
 	AllowExecCommand     bool   `json:"allow_exec_command"`
 	AllowWebFetchCommand bool   `json:"allow_webfetch_command"`
+	Language             string `json:"language"`
+}
+
+type appSettingsUpdateJSON struct {
+	AllowExecCommand     *bool   `json:"allow_exec_command"`
+	AllowWebFetchCommand *bool   `json:"allow_webfetch_command"`
+	Language             *string `json:"language"`
 }
 
 type mcpSettingsJSON struct {
@@ -1095,6 +1117,7 @@ func (s *Server) appSettingsPayload() appSettingsJSON {
 		APIToken:             apiToken,
 		AllowExecCommand:     parseSettingBool(allowExec),
 		AllowWebFetchCommand: parseSettingBool(allowWebFetch),
+		Language:             string(s.appLanguage()),
 	}
 }
 
@@ -1104,16 +1127,31 @@ func (s *Server) getAppSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) updateAppSettings(w http.ResponseWriter, r *http.Request) {
-	var payload appSettingsJSON
+	var payload appSettingsUpdateJSON
 	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.store.SetSetting("allow_exec_command", boolSettingValue(payload.AllowExecCommand)); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
+	var language appi18n.Locale
+	if payload.Language != nil {
+		var ok bool
+		language, ok = appi18n.ParseLocale(*payload.Language)
+		if !ok {
+			http.Error(w, "language must be en or ru", http.StatusBadRequest)
+			return
+		}
 	}
-	if err := s.store.SetSetting("allow_webfetch_command", boolSettingValue(payload.AllowWebFetchCommand)); err != nil {
+	updates := make(map[string]string, 3)
+	if payload.AllowExecCommand != nil {
+		updates["allow_exec_command"] = boolSettingValue(*payload.AllowExecCommand)
+	}
+	if payload.AllowWebFetchCommand != nil {
+		updates["allow_webfetch_command"] = boolSettingValue(*payload.AllowWebFetchCommand)
+	}
+	if payload.Language != nil {
+		updates["language"] = string(language)
+	}
+	if err := s.store.SetSettings(updates); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}

@@ -3,6 +3,7 @@ package storage
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"time"
 
 	"gorm.io/gorm"
@@ -45,6 +46,28 @@ func (s *Store) GetSetting(key string) (string, error) {
 func (s *Store) SetSetting(key, value string) error {
 	setting := AppSetting{Key: key, Value: value}
 	return s.db.Save(&setting).Error
+}
+
+// SetSettings persists a group of independent app settings atomically. Sorting
+// makes the write order deterministic for diagnostics without changing the
+// all-or-nothing contract.
+func (s *Store) SetSettings(values map[string]string) error {
+	if len(values) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(values))
+	for key := range values {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		for _, key := range keys {
+			if err := tx.Save(&AppSetting{Key: key, Value: values[key]}).Error; err != nil {
+				return fmt.Errorf("save app setting %q: %w", key, err)
+			}
+		}
+		return nil
+	})
 }
 
 func (s *Store) GetWebAuthSettings() (WebAuthSettings, error) {

@@ -46,6 +46,9 @@ func TestAppSettingsAPIIncludesAndPersistsLocalCommandToggles(t *testing.T) {
 	if initial.AllowExecCommand || initial.AllowWebFetchCommand {
 		t.Fatalf("app settings default toggles = exec:%v webfetch:%v, want false/false", initial.AllowExecCommand, initial.AllowWebFetchCommand)
 	}
+	if initial.Language != "en" {
+		t.Fatalf("app settings default language = %q, want en", initial.Language)
+	}
 
 	body := bytes.NewBufferString(`{"allow_exec_command":true,"allow_webfetch_command":true}`)
 	req, err = newAuthenticatedRequest(http.MethodPut, url, body, s.apiToken)
@@ -66,6 +69,172 @@ func TestAppSettingsAPIIncludesAndPersistsLocalCommandToggles(t *testing.T) {
 	}
 	if !updated.AllowExecCommand || !updated.AllowWebFetchCommand {
 		t.Fatalf("updated toggles = exec:%v webfetch:%v, want true/true", updated.AllowExecCommand, updated.AllowWebFetchCommand)
+	}
+	if updated.Language != "en" {
+		t.Fatalf("language after omitted update = %q, want preserved en", updated.Language)
+	}
+}
+
+func TestAppSettingsLanguagePersistsAndRejectsInvalidValues(t *testing.T) {
+	s, _ := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	url := ts.URL + "/api/app/settings"
+	put := func(body string) *http.Response {
+		t.Helper()
+		req, err := newAuthenticatedRequest(http.MethodPut, url, strings.NewReader(body), s.apiToken)
+		if err != nil {
+			t.Fatalf("newAuthenticatedRequest(PUT): %v", err)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("PUT app settings: %v", err)
+		}
+		return resp
+	}
+
+	resp := put(`{"language":"ru","allow_exec_command":true}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT ru status = %d, want 200", resp.StatusCode)
+	}
+	var updated appSettingsJSON
+	if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode PUT ru: %v", err)
+	}
+	if updated.Language != "ru" || !updated.AllowExecCommand {
+		t.Fatalf("PUT ru response = %+v", updated)
+	}
+
+	resp = put(`{"allow_webfetch_command":true}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT omitted language status = %d, want 200", resp.StatusCode)
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&updated); err != nil {
+		t.Fatalf("decode PUT omitted language: %v", err)
+	}
+	if updated.Language != "ru" {
+		t.Fatalf("language after omitted PUT = %q, want preserved ru", updated.Language)
+	}
+
+	resp = put(`{"language":"de","allow_exec_command":false}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("PUT invalid language status = %d, want 400", resp.StatusCode)
+	}
+	stored, err := s.store.GetSetting("language")
+	if err != nil {
+		t.Fatalf("GetSetting(language): %v", err)
+	}
+	if stored != "ru" {
+		t.Fatalf("stored language after rejected update = %q, want ru", stored)
+	}
+	allowExec, err := s.store.GetSetting("allow_exec_command")
+	if err != nil {
+		t.Fatalf("GetSetting(allow_exec_command): %v", err)
+	}
+	if allowExec != "true" {
+		t.Fatalf("allow_exec_command changed by rejected update = %q, want true", allowExec)
+	}
+}
+
+func TestAppSettingsUpdateRollsBackAllFieldsWhenOneWriteFails(t *testing.T) {
+	s, _ := setupTestServer(t)
+	if err := s.store.SetSetting("allow_exec_command", "false"); err != nil {
+		t.Fatalf("seed allow_exec_command: %v", err)
+	}
+	if err := s.store.SetSetting("allow_webfetch_command", "false"); err != nil {
+		t.Fatalf("seed allow_webfetch_command: %v", err)
+	}
+	if err := s.store.DB().Exec(`
+		CREATE TRIGGER reject_webfetch_app_setting
+		BEFORE UPDATE ON app_settings
+		WHEN NEW.key = 'allow_webfetch_command' AND NEW.value = 'true'
+		BEGIN
+			SELECT RAISE(ABORT, 'webfetch rejected');
+		END;
+	`).Error; err != nil {
+		t.Fatalf("create rejecting trigger: %v", err)
+	}
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	req, err := newAuthenticatedRequest(
+		http.MethodPut,
+		ts.URL+"/api/app/settings",
+		strings.NewReader(`{"allow_exec_command":true,"allow_webfetch_command":true}`),
+		s.apiToken,
+	)
+	if err != nil {
+		t.Fatalf("newAuthenticatedRequest(PUT): %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT app settings: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("PUT status = %d, want 500", resp.StatusCode)
+	}
+
+	for _, key := range []string{"allow_exec_command", "allow_webfetch_command"} {
+		got, getErr := s.store.GetSetting(key)
+		if getErr != nil {
+			t.Fatalf("GetSetting(%s): %v", key, getErr)
+		}
+		if got != "false" {
+			t.Fatalf("%s after failed request = %q, want false", key, got)
+		}
+	}
+}
+
+func TestHTMLBootInjectsNormalizedAppLanguage(t *testing.T) {
+	s, _ := setupTestServer(t)
+	if err := s.store.SetSetting("language", "ru"); err != nil {
+		t.Fatalf("SetSetting(language): %v", err)
+	}
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+
+	for _, path := range []string{"/", "/settings"} {
+		resp, err := http.Get(ts.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s: %v", path, err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		html := string(body)
+		if !strings.Contains(html, `<html lang="ru">`) {
+			t.Errorf("GET %s missing ru html lang", path)
+		}
+		if !strings.Contains(html, `window.APP_LANGUAGE="ru"`) {
+			t.Errorf("GET %s missing safe ru boot locale", path)
+		}
+	}
+
+	if err := s.store.SetSetting("language", `</script><script>alert(1)</script>`); err != nil {
+		t.Fatalf("SetSetting(invalid language): %v", err)
+	}
+	resp, err := http.Get(ts.URL + "/")
+	if err != nil {
+		t.Fatalf("GET / with invalid stored language: %v", err)
+	}
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		t.Fatalf("read invalid-language response: %v", err)
+	}
+	html := string(body)
+	if !strings.Contains(html, `<html lang="en">`) || !strings.Contains(html, `window.APP_LANGUAGE="en"`) {
+		t.Fatalf("invalid stored language did not fall back to en")
+	}
+	if strings.Contains(html, `alert(1)`) {
+		t.Fatalf("invalid stored language was interpolated into HTML")
 	}
 }
 

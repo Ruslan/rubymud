@@ -14,7 +14,8 @@
   import MapperProfilesSection from './settings/MapperProfilesSection.svelte';
   import MapSetsSection from './settings/MapSetsSection.svelte';
   import * as api from './settings/api';
-  import type { MCPSettings, MCPSettingsWriteResponse, WebAuthSettings } from './settings/api';
+  import type { AppSettings, MCPSettings, MCPSettingsWriteResponse, WebAuthSettings } from './settings/api';
+  import { persistAppSetting } from './settings/appSettingsSave';
   import {
     copyOfMapperProfile,
     emptyMapperProfileForm,
@@ -55,7 +56,8 @@
   let selectedSessionID: number | null = null;
   let selectedProfileID: number | null = null;
 
-  let appSettings: { api_token: string; allow_exec_command: boolean; allow_webfetch_command: boolean } = { api_token: '', allow_exec_command: false, allow_webfetch_command: false };
+  let appSettings: AppSettings = { api_token: '', allow_exec_command: false, allow_webfetch_command: false, language: 'en' };
+  let appSettingsBusy = false;
   let mcpSettings: MCPSettings = { enabled: false, requested_enabled: false, effective_enabled: false, token_configured: false, externally_managed: false, enabled_externally_managed: false, token_externally_managed: false, listener_exposure: 'loopback' };
   let mcpOneTimeToken = '';
   let mcpBusy = false;
@@ -1312,14 +1314,25 @@
   }
 
   async function saveAppCommandSetting(key: 'allow_exec_command' | 'allow_webfetch_command', enabled: boolean) {
-    const next = { ...appSettings, [key]: enabled };
-    const res = await api.saveAppSettingsRequest(next);
-    if (!res.ok) {
-      formError = await res.text() || 'Failed to save app settings.';
-      return;
-    }
-    appSettings = await res.json();
-    formError = '';
+    if (appSettingsBusy) return;
+    appSettingsBusy = true;
+    const result = await persistAppSetting(appSettings, key, enabled, 'Failed to save app settings.');
+    appSettings = result.settings;
+    formError = result.error;
+    appSettingsBusy = false;
+  }
+
+  async function saveAppLanguage(language: AppSettings['language']) {
+    if (appSettingsBusy || language === appSettings.language) return;
+    appSettingsBusy = true;
+    const result = await persistAppSetting(appSettings, 'language', language, 'Failed to save interface language. Reload the page to verify the current language.');
+    appSettings = result.settings;
+    formError = result.error;
+    appSettingsBusy = false;
+    if (!result.saved) return;
+    // The locale is injected into both HTML entry points at boot, keeping the
+    // game loop fetch-free. Reload this view; other open tabs apply it on reload.
+    window.location.reload();
   }
 
   async function saveMCPEnabled(enabled: boolean) {
@@ -2005,6 +2018,17 @@
         <header class="content-header"><h2>App Settings</h2><p class="description">Global application configuration.</p></header>
         {#if formError}<div class="form-error" role="alert">{formError}</div>{/if}
         <div class="editor-box">
+            <h3>Interface Language</h3>
+            <p class="description">Applies to RubyMUD interface text after reload. MUD output, map names and commands are never translated. Other open tabs update when reloaded.</p>
+            <label>
+                Language
+                <select value={appSettings.language} disabled={appSettingsBusy} on:change={(event) => saveAppLanguage((event.currentTarget as HTMLSelectElement).value as AppSettings['language'])}>
+                    <option value="en">English</option>
+                    <option value="ru">Русский</option>
+                </select>
+            </label>
+        </div>
+        <div class="editor-box">
             <h3>Wake Lock</h3>
             <p class="description">Keep the screen awake while the main client tab or installed app is visible. Local to this browser/PWA.</p>
             <label class="checkbox-label">
@@ -2016,11 +2040,11 @@
             <h3>Local Command Hooks</h3>
             <p class="description">Power-user local commands are disabled by default. Enable only if you trust your profiles and triggers.</p>
             <label class="checkbox-label">
-                <input type="checkbox" checked={appSettings.allow_exec_command} on:change={(event) => saveAppCommandSetting('allow_exec_command', (event.currentTarget as HTMLInputElement).checked)} />
+                <input type="checkbox" checked={appSettings.allow_exec_command} disabled={appSettingsBusy} on:change={(event) => saveAppCommandSetting('allow_exec_command', (event.currentTarget as HTMLInputElement).checked)} />
                 Allow #exec
             </label>
             <label class="checkbox-label">
-                <input type="checkbox" checked={appSettings.allow_webfetch_command} on:change={(event) => saveAppCommandSetting('allow_webfetch_command', (event.currentTarget as HTMLInputElement).checked)} />
+                <input type="checkbox" checked={appSettings.allow_webfetch_command} disabled={appSettingsBusy} on:change={(event) => saveAppCommandSetting('allow_webfetch_command', (event.currentTarget as HTMLInputElement).checked)} />
                 Allow #webfetch
             </label>
         </div>
