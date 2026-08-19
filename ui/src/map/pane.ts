@@ -1,4 +1,5 @@
 import { fetchWithToken } from "../dom";
+import { supportedLocale } from '../i18n';
 import { createMapperI18n, type MapperI18n } from './i18n';
 import {
   canRoute,
@@ -286,7 +287,7 @@ export class MapPaneController {
     this.i18n = createMapperI18n(config.locale);
     this.root = document.createElement("div");
     this.root.className = "map-pane";
-    this.knowledgeDialog = new RoomKnowledgeDialog(this.root);
+    this.knowledgeDialog = new RoomKnowledgeDialog(this.root, this.i18n.locale);
 
     // --- control bar -------------------------------------------------------
     const bar = document.createElement("div");
@@ -522,13 +523,16 @@ export class MapPaneController {
   // switchable makes an eventual live settings broadcast safe: static controls are
   // refreshed and coordinate-bound overlays are closed before they can mix locales.
   setLocale(locale: unknown): void {
-    const next = createMapperI18n(locale);
+    const accepted = supportedLocale(locale);
+    if (!accepted) return;
+    const next = createMapperI18n(accepted);
     if (next.locale === this.i18n.locale) return;
     const opener = this.searchPopover ? this.searchOpener
       : this.managerPopover ? this.managerOpener
         : this.zoneDialog ? this.zoneDialogOpener
           : this.reconciliationDialog ? this.reconciliationOpener : null;
     this.i18n = next;
+    this.knowledgeDialog.setLocale(accepted);
     this.closeCellMenu();
     this.closeSearchPopover(false);
     this.closeManagerPopover(false);

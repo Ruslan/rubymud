@@ -53,6 +53,8 @@ export interface LogEntry {
 
 export interface ServerMessage {
   type: string;
+  // Instance-wide UI locale pushed live after an administrator changes it.
+  app_language?: string;
   // Room-format status. `mapper_format` is the reference the session actually
   // honoured ("builtin:rmud", "db:7"); `mapper_profile_id` is the row id when
   // that reference is a db: one, and 0/absent for a compiled-in detector.

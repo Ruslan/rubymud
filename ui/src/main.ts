@@ -20,6 +20,7 @@ import { createSocket, sendSocketCommand } from "./socket";
 import type { Hotkey, LogEntry, ServerMessage } from "./types";
 import { parseRoomPosition, type RoomPositionMessage } from "./map/wsPosition";
 import { ActiveMapSetRefresh, cowNotificationMapSetID } from "./map/activeMapSetRefresh";
+import { applyAppLanguageMessage } from './liveLocale';
 
 type WakeLockSentinelLike = {
   release(): Promise<void>;
@@ -648,6 +649,8 @@ function attachSocketHandlers(target: WebSocket) {
     logBoot("socket message received", { length: event.data.length });
     const message: ServerMessage = JSON.parse(event.data);
     logBoot("socket message parsed", { type: message.type });
+
+    applyAppLanguageMessage(message, renderer);
 
     if (message.type === "status") {
       updateConnectionStatus(message.status || "connected");

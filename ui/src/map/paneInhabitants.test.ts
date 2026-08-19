@@ -94,11 +94,11 @@ describe("map room inhabitants knowledge dialog", () => {
     vi.restoreAllMocks();
   });
 
-  function clickRoom(): void {
+  function clickRoom(target: SlimRoom = room): void {
     const renderer = (pane as unknown as {
       renderer: { onRoomClick?: (room: SlimRoom, x: number, y: number) => void };
     }).renderer;
-    renderer.onRoomClick?.(room, 100, 120);
+    renderer.onRoomClick?.(target, 100, 120);
   }
 
   it("loads only after selecting Knowledge → Inhabitants and supports CRUD", async () => {
@@ -373,5 +373,65 @@ describe("map room inhabitants knowledge dialog", () => {
     await Promise.resolve();
     expect(dialog.querySelector(".map-inhabitant-form")).toBe(form);
     expect((form.elements.namedItem("name") as HTMLInputElement).value).toBe("Несохранённый NPC");
+  });
+
+  it("switches an open Knowledge form to Russian without losing unsaved or MUD text", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
+    clickRoom();
+    [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
+      .find((button) => button.textContent === "Knowledge…")!.click();
+    const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
+    expect(dialog.querySelector('.map-knowledge-dialog__room')?.textContent).toContain('Кузница');
+    await vi.waitFor(() => expect(dialog.textContent).toContain("Кузнец"));
+    [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Add new")!.click();
+    const original = dialog.querySelector<HTMLFormElement>(".map-inhabitant-form")!;
+    (original.elements.namedItem("name") as HTMLInputElement).value = "Несохранённый NPC";
+    (original.elements.namedItem("presence_text") as HTMLTextAreaElement).value = "Сырая строка MUD";
+
+    pane.setLocale("ru");
+    const translated = dialog.querySelector<HTMLFormElement>(".map-inhabitant-form")!;
+    expect(dialog.getAttribute("aria-label")).toBe("Знания");
+    expect(dialog.textContent).toContain("Добавить обитателя");
+    expect(dialog.querySelector('.map-knowledge-dialog__room')?.textContent).toContain('Кузница');
+    expect((translated.elements.namedItem("name") as HTMLInputElement).value).toBe("Несохранённый NPC");
+    expect((translated.elements.namedItem("presence_text") as HTMLTextAreaElement).value).toBe("Сырая строка MUD");
+
+    pane.setLocale("unsupported");
+    expect(dialog.getAttribute("aria-label")).toBe("Знания");
+    expect((translated.elements.namedItem("name") as HTMLInputElement).value).toBe("Несохранённый NPC");
+  });
+
+  it('recomputes an unnamed room fallback across EN → RU → EN', async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe('Город'));
+    clickRoom({ ...room, h: '' });
+    [...pane.root.querySelectorAll<HTMLButtonElement>('.map-cell-menu__item')]
+      .find((button) => button.textContent === 'Knowledge…')!.click();
+    const roomLine = pane.root.querySelector<HTMLElement>('.map-knowledge-dialog__room')!;
+    expect(roomLine.textContent).toBe('Room · Город (3,4,0)');
+
+    pane.setLocale('ru');
+    expect(roomLine.textContent).toBe('Комната · Город (3,4,0)');
+    pane.setLocale('en');
+    expect(roomLine.textContent).toBe('Room · Город (3,4,0)');
+  });
+
+  it("localizes a newly opened Russian list and catalog without translating NPC data or kind values", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
+    pane.setLocale('ru');
+    clickRoom();
+    [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
+      .find((button) => button.textContent === "Знания…")!.click();
+    const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
+    await vi.waitFor(() => expect(dialog.textContent).toContain("Кузнец"));
+    expect(dialog.textContent).toContain('Присутствие: Кузнец у наковальни.');
+    expect(dialog.textContent).toContain('npc');
+    expect(dialog.textContent).toContain('Седой мастер.');
+    [...dialog.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === 'Разместить существующего')!.click();
+    await vi.waitFor(() => expect(dialog.textContent).toContain('Странствующий лекарь · npc · 1 размещение'));
+    const place = dialog.querySelector<HTMLButtonElement>('.map-inhabitant-catalog__item button')!;
+    expect(place.textContent).toBe('Разместить');
+    expect(place.getAttribute('aria-label')).toBe('Разместить: Странствующий лекарь');
   });
 });

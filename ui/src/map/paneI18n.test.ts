@@ -77,6 +77,12 @@ describe.each([
     expect(pane.root.querySelector('.map-pane__recording-toggle')?.getAttribute('aria-label')).toBe(recordingLabel);
   });
 
+  it('ignores an unsupported live locale instead of falling back to English', async () => {
+    await vi.waitFor(() => expect(pane.root.querySelector('option')).not.toBeNull());
+    pane.setLocale('not-a-locale');
+    expect(pane.root.querySelector(`[aria-label="${findRoom}"]`)).not.toBeNull();
+  });
+
   it('localizes tracker and control fallback copy', async () => {
     await pane.onRoomPosition({
       valid: true, zone: 'Игровая зона', x: 0, y: 0, l: 0,

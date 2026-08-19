@@ -13,7 +13,7 @@ import { fetchWithToken } from "./dom";
 import { MapPaneController, MAP_BUFFER, type MapWalkState } from "./map/pane";
 import type { LiveRoom, MapRecordingState, PlayerPosition } from "./map/types";
 import { createMapperI18n } from './map/i18n';
-import { readBootLocale } from './i18n';
+import { readBootLocale, supportedLocale, type Locale } from './i18n';
 
 interface RendererState {
   activePanel: "keyboard" | "variables" | "groups" | null;
@@ -135,6 +135,7 @@ export function createRenderer({
   // buffer is MAP_BUFFER; the controller owns the canvas + its own state and is
   // excluded from every text path below.
   const mapControllers = new Map<string, MapPaneController>();
+  let mapperLocale: Locale = readBootLocale();
   // The most recent live tracker position, replayed into map panes mounted or
   // switched to `~map` after the broadcast arrived.
   let lastMapPosition: PlayerPosition | null = null;
@@ -505,7 +506,7 @@ export function createRenderer({
           sessionID,
           getActiveMapSetID: getActiveMapSetID ?? (() => null),
           setInputText,
-          locale: readBootLocale(),
+          locale: mapperLocale,
         });
         pane.mapController = controller;
         mapControllers.set(node.id, controller);
@@ -530,7 +531,7 @@ export function createRenderer({
         bodyEl.innerHTML = "";
         const notice = document.createElement("div");
         notice.className = "map-pane__unavailable";
-        notice.textContent = createMapperI18n(readBootLocale()).t('mapUnavailable');
+        notice.textContent = createMapperI18n(mapperLocale).t('mapUnavailable');
         bodyEl.appendChild(notice);
         el.appendChild(bodyEl);
         // Register the pane WITHOUT a controller so it is inert but valid; text
@@ -2340,6 +2341,19 @@ export function createRenderer({
     mapControllers.forEach((c) => void c.refreshRooms());
   }
 
+  function setMapperLocale(value: unknown): Locale | null {
+    const next = supportedLocale(value);
+    if (!next) return null;
+    mapperLocale = next;
+    mapControllers.forEach((controller) => controller.setLocale(next));
+    const copy = createMapperI18n(next);
+    renderedPanes.forEach((pane) => {
+      pane.el.querySelectorAll<HTMLElement>('.map-pane__unavailable')
+        .forEach((notice) => { notice.textContent = copy.t('mapUnavailable'); });
+    });
+    return next;
+  }
+
   // Expose API
   return {
     appendCommandHint,
@@ -2372,6 +2386,7 @@ export function createRenderer({
     clearLiveRoom,
     reloadMapPanes,
     refreshMapPanes,
+    setMapperLocale,
   };
 }
 function renderANSI(entryAnsiUp: AnsiUp, text: string): string {

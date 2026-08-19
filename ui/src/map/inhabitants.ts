@@ -1,4 +1,6 @@
 import { fetchWithToken } from "../dom";
+import { supportedLocale, type MessageValues } from "../i18n";
+import { createInhabitantsI18n, type InhabitantsI18n, type InhabitantsMessageKey, type InhabitantsPluralKey } from "./inhabitantsI18n";
 
 export type InhabitantKind = "npc" | "monster" | "other";
 
@@ -105,8 +107,70 @@ export class RoomKnowledgeDialog {
   private disposed = false;
   private pendingRefresh = false;
   private returnFocus: HTMLElement | null = null;
+  private i18n: InhabitantsI18n;
 
-  constructor(private readonly host: HTMLElement) {}
+  constructor(private readonly host: HTMLElement, locale?: unknown) {
+    this.i18n = createInhabitantsI18n(locale);
+  }
+
+  setLocale(locale: unknown): boolean {
+    const accepted = supportedLocale(locale);
+    if (!accepted || accepted === this.i18n.locale) return false;
+    this.i18n = createInhabitantsI18n(accepted);
+    // Every authored node in the dialog carries its catalog key and raw values.
+    // Updating those nodes in place preserves unsaved controls, pending writes,
+    // the current catalog query, and focus while avoiding mixed-language copy.
+    this.translateMarked();
+    return true;
+  }
+
+  private copy(element: HTMLElement, key: InhabitantsMessageKey, values: MessageValues = {}): void {
+    element.dataset.i18nKey = key;
+    element.dataset.i18nValues = JSON.stringify(values);
+    element.textContent = this.i18n.t(key, this.resolveValues(element, values));
+  }
+
+  private resolveValues(element: HTMLElement, values: MessageValues): MessageValues {
+    return element.dataset.i18nRoomFallback === 'true'
+      ? { ...values, room: this.i18n.t('roomFallback') }
+      : values;
+  }
+
+  private plural(element: HTMLElement, key: InhabitantsPluralKey, count: number): void {
+    element.dataset.i18nPlural = key;
+    element.dataset.i18nCount = String(count);
+    element.textContent = this.i18n.plural(key, count);
+  }
+
+  private translateMarked(): void {
+    if (!this.dialog) return;
+    for (const element of this.dialog.querySelectorAll<HTMLElement>('[data-i18n-key]')) {
+      const key = element.dataset.i18nKey as InhabitantsMessageKey;
+      const values = JSON.parse(element.dataset.i18nValues || '{}') as MessageValues;
+      element.textContent = this.i18n.t(key, this.resolveValues(element, values));
+    }
+    for (const element of this.dialog.querySelectorAll<HTMLElement>('[data-i18n-plural]')) {
+      element.textContent = this.i18n.plural(
+        element.dataset.i18nPlural as InhabitantsPluralKey,
+        Number(element.dataset.i18nCount),
+      );
+    }
+    this.dialog.setAttribute('aria-label', this.i18n.t('knowledge'));
+    for (const element of this.dialog.querySelectorAll<HTMLElement>('[data-i18n-aria]')) {
+      const key = element.dataset.i18nAria as InhabitantsMessageKey;
+      const values = JSON.parse(element.dataset.i18nAriaValues || '{}') as MessageValues;
+      element.setAttribute('aria-label', this.i18n.t(key, values));
+    }
+    for (const element of this.dialog.querySelectorAll<HTMLInputElement>('[data-i18n-placeholder]')) {
+      element.placeholder = this.i18n.t(element.dataset.i18nPlaceholder as InhabitantsMessageKey);
+    }
+  }
+
+  private labelled(key: InhabitantsMessageKey, control: HTMLElement): HTMLLabelElement {
+    const label = labelWrap('', control);
+    this.copy(label.firstElementChild as HTMLElement, key);
+    return label;
+  }
 
   open(room: KnowledgeRoom, returnFocus?: HTMLElement): void {
     if (this.disposed) return;
@@ -119,14 +183,15 @@ export class RoomKnowledgeDialog {
     dialog.className = "map-knowledge-dialog";
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
-    dialog.setAttribute("aria-label", "Knowledge");
+    dialog.setAttribute("aria-label", this.i18n.t('knowledge'));
     backdrop.appendChild(dialog);
 
     const title = document.createElement("h2");
-    title.textContent = "Knowledge";
+    this.copy(title, 'knowledge');
     const roomLine = document.createElement("div");
     roomLine.className = "map-knowledge-dialog__room";
-    roomLine.textContent = `${room.name || "Room"} · ${room.zone} (${room.x},${room.y},${room.l})`;
+    if (!room.name) roomLine.dataset.i18nRoomFallback = 'true';
+    this.copy(roomLine, 'roomLine', { room: room.name, zone: room.zone, x: room.x, y: room.y, l: room.l });
     const tabs = document.createElement("div");
     tabs.className = "map-knowledge-dialog__tabs";
     tabs.setAttribute("role", "tablist");
@@ -134,7 +199,7 @@ export class RoomKnowledgeDialog {
     inhabitantsTab.type = "button";
     inhabitantsTab.setAttribute("role", "tab");
     inhabitantsTab.setAttribute("aria-selected", "true");
-    inhabitantsTab.textContent = "Inhabitants";
+    this.copy(inhabitantsTab, 'inhabitants');
     tabs.appendChild(inhabitantsTab);
 
     const panel = document.createElement("div");
@@ -155,15 +220,15 @@ export class RoomKnowledgeDialog {
     actions.className = "map-knowledge-dialog__actions";
     this.addButton = document.createElement("button");
     this.addButton.type = "button";
-    this.addButton.textContent = "Add new";
+    this.copy(this.addButton, 'addNew');
     this.addButton.addEventListener("click", () => this.openForm(null));
 	this.placeExistingButton = document.createElement("button");
 	this.placeExistingButton.type = "button";
-	this.placeExistingButton.textContent = "Place existing";
+	this.copy(this.placeExistingButton, 'placeExisting');
 	this.placeExistingButton.addEventListener("click", () => this.openCatalog());
     const close = document.createElement("button");
     close.type = "button";
-    close.textContent = "Close";
+    this.copy(close, 'close');
     close.addEventListener("click", () => this.close());
     actions.append(this.addButton, this.placeExistingButton, close);
     panel.append(this.message, this.list, actions);
@@ -250,7 +315,7 @@ export class RoomKnowledgeDialog {
     // latest server state is fetched as soon as this form is saved or cancelled.
     if (this.form) {
       this.pendingRefresh = true;
-      this.setMessage("Room data changed; the list will refresh after the form closes.");
+      this.setMessageKey('changedPending');
       return;
     }
     void this.load();
@@ -260,7 +325,7 @@ export class RoomKnowledgeDialog {
     if (!this.room || this.room.mapSetID !== mapSetID) return;
     if (this.form) {
       this.pendingRefresh = true;
-      this.setMessage("Room data changed; the list will refresh after the form closes.");
+      this.setMessageKey('changedPending');
       return;
     }
     void this.load();
@@ -273,7 +338,7 @@ export class RoomKnowledgeDialog {
     const controller = new AbortController();
     this.loadRequest = controller;
     const generation = ++this.generation;
-    this.setMessage("Loading…");
+    this.setMessageKey('loading');
     try {
       const response = await fetchWithToken(
         `/api/map-sets/${room.mapSetID}/inhabitants?${roomParams(room)}`,
@@ -283,11 +348,12 @@ export class RoomKnowledgeDialog {
       const rows = await response.json() as RoomInhabitant[];
       if (!this.isCurrent(room, generation, controller)) return;
       this.rows = Array.isArray(rows) ? rows : [];
-      this.setMessage(this.rows.length === 0 ? "No inhabitants have been recorded for this room." : "");
+      if (this.rows.length === 0) this.setMessageKey('noInhabitants');
+      else this.setMessage('');
       this.renderList();
     } catch (error) {
       if (!this.isCurrent(room, generation, controller)) return;
-      this.setMessage(`Failed to load inhabitants: ${error instanceof Error ? error.message : String(error)}`, true);
+      this.setMessageKey('loadFailed', { error: error instanceof Error ? error.message : String(error) }, true);
     } finally {
       if (this.loadRequest === controller) this.loadRequest = null;
     }
@@ -299,7 +365,15 @@ export class RoomKnowledgeDialog {
 
   private setMessage(text: string, error = false): void {
     if (!this.message) return;
+    delete this.message.dataset.i18nKey;
+    delete this.message.dataset.i18nValues;
     this.message.textContent = text;
+    this.message.dataset.error = String(error);
+  }
+
+  private setMessageKey(key: InhabitantsMessageKey, values: MessageValues = {}, error = false): void {
+    if (!this.message) return;
+    this.copy(this.message, key, values);
     this.message.dataset.error = String(error);
   }
 
@@ -336,37 +410,37 @@ export class RoomKnowledgeDialog {
     if (row.resident) {
       const resident = document.createElement("span");
       resident.className = "map-inhabitant-card__resident";
-      resident.textContent = "resident";
+      this.copy(resident, 'residentBadge');
       header.appendChild(resident);
     }
     card.appendChild(header);
-    this.appendDetail(card, "Presence", row.presence_text);
-    this.appendDetail(card, "Look target", row.look_target);
-    this.appendDetail(card, "Look result", row.look_text);
-    this.appendDetail(card, "Note", row.note);
-    this.appendDetail(card, "Strategy", row.strategy);
+    this.appendDetail(card, 'presence', row.presence_text);
+    this.appendDetail(card, 'lookTarget', row.look_target);
+    this.appendDetail(card, 'lookResult', row.look_text);
+    this.appendDetail(card, 'note', row.note);
+    this.appendDetail(card, 'strategy', row.strategy);
     const actions = document.createElement("div");
     actions.className = "map-inhabitant-card__actions";
     const edit = document.createElement("button");
     edit.type = "button";
-    edit.textContent = "Edit";
+    this.copy(edit, 'edit');
     edit.addEventListener("click", () => this.openForm(row));
     const remove = document.createElement("button");
     remove.type = "button";
-    remove.textContent = "Delete";
+    this.copy(remove, 'delete');
     remove.addEventListener("click", () => void this.remove(row));
     actions.append(edit, remove);
     card.appendChild(actions);
     return card;
   }
 
-  private appendDetail(card: HTMLElement, label: string, value: string): void {
+  private appendDetail(card: HTMLElement, key: InhabitantsMessageKey, value: string): void {
     if (!value) return;
     const line = document.createElement("div");
     line.className = "map-inhabitant-card__detail";
     const caption = document.createElement("span");
-    caption.textContent = `${label}: `;
-    line.append(caption, document.createTextNode(value));
+    this.copy(caption, key);
+    line.append(caption, document.createTextNode(': '), document.createTextNode(value));
     card.appendChild(line);
   }
 
@@ -388,17 +462,17 @@ export class RoomKnowledgeDialog {
     const form = document.createElement("form");
     form.className = "map-inhabitant-form";
     const heading = document.createElement("h3");
-    heading.textContent = row ? "Edit inhabitant" : "Add inhabitant";
+    this.copy(heading, row ? 'editInhabitant' : 'addInhabitant');
     form.appendChild(heading);
 
     const name = textInput("name", row?.name ?? "", nameLimit);
     name.required = true;
     const kind = document.createElement("select");
     kind.name = "kind";
-    for (const [value, label] of [["npc", "NPC"], ["monster", "Monster"], ["other", "Other"]] as const) {
+    for (const [value, key] of [["npc", "kindNPC"], ["monster", "kindMonster"], ["other", "kindOther"]] as const) {
       const option = document.createElement("option");
       option.value = value;
-      option.textContent = label;
+      this.copy(option, key);
       kind.appendChild(option);
     }
     kind.value = row?.kind ?? "npc";
@@ -413,11 +487,13 @@ export class RoomKnowledgeDialog {
     resident.checked = row?.resident ?? false;
     const residentLabel = document.createElement("label");
     residentLabel.className = "map-inhabitant-form__resident";
-    residentLabel.append(resident, document.createTextNode(" Permanent resident of this room"));
+    const residentCaption = document.createElement('span');
+    this.copy(residentCaption, 'permanentResident');
+    residentLabel.append(resident, document.createTextNode(' '), residentCaption);
     form.append(
-      labelWrap("Name", name), labelWrap("Type", kind), labelWrap("Look target", target),
-      labelWrap("Look result", look), labelWrap("Note", note),
-      labelWrap("Interaction strategy", strategy), labelWrap("Presence text", presence),
+      this.labelled('name', name), this.labelled('type', kind), this.labelled('lookTarget', target),
+      this.labelled('lookResult', look), this.labelled('note', note),
+      this.labelled('interactionStrategy', strategy), this.labelled('presenceText', presence),
       residentLabel,
     );
     const message = document.createElement("div");
@@ -428,11 +504,11 @@ export class RoomKnowledgeDialog {
     actions.className = "map-inhabitant-form__actions";
     const cancel = document.createElement("button");
     cancel.type = "button";
-    cancel.textContent = "Cancel";
+    this.copy(cancel, 'cancel');
     cancel.addEventListener("click", () => this.renderList());
     const save = document.createElement("button");
     save.type = "submit";
-    save.textContent = "Save";
+    this.copy(save, 'save');
     actions.append(cancel, save);
     form.appendChild(actions);
     form.addEventListener("submit", (event) => {
@@ -466,9 +542,10 @@ export class RoomKnowledgeDialog {
 	  panel.className = "map-inhabitant-catalog";
 	  this.catalog = panel;
 	  const heading = document.createElement("h3");
-	  heading.textContent = "Place existing inhabitant";
+	  this.copy(heading, 'catalogHeading');
 	  const search = textInput("catalog_query", "", nameLimit);
-	  search.placeholder = "Search by name or look target";
+	  search.dataset.i18nPlaceholder = 'catalogSearchPlaceholder';
+	  search.placeholder = this.i18n.t('catalogSearchPlaceholder');
 	  const results = document.createElement("div");
 	  results.className = "map-inhabitant-catalog__results";
 	  const status = document.createElement("div");
@@ -476,12 +553,12 @@ export class RoomKnowledgeDialog {
 	  status.setAttribute("role", "status");
 	  const cancel = document.createElement("button");
 	  cancel.type = "button";
-	  cancel.textContent = "Cancel";
+	  this.copy(cancel, 'cancel');
 	  cancel.addEventListener("click", () => {
 		this.renderList();
 		this.placeExistingButton?.focus();
 	  });
-	  panel.append(heading, labelWrap("Search catalog", search), status, results, cancel);
+	  panel.append(heading, this.labelled('catalogSearch', search), status, results, cancel);
 	  this.list.after(panel);
 
 	  const loadCatalog = async (): Promise<void> => {
@@ -490,7 +567,7 @@ export class RoomKnowledgeDialog {
 		this.catalogRequest?.abort();
 		const controller = new AbortController();
 		this.catalogRequest = controller;
-		status.textContent = "Searching…";
+		this.copy(status, 'searching');
 		const params = new URLSearchParams({
 		  query: search.value.trim(), limit: "50",
 		  exclude_zone: room.zone, exclude_x: String(room.x), exclude_y: String(room.y), exclude_l: String(room.l),
@@ -506,21 +583,26 @@ export class RoomKnowledgeDialog {
 			const card = document.createElement("article");
 			card.className = "map-inhabitant-catalog__item";
 			const label = document.createElement("div");
-			label.textContent = `${item.name} · ${item.kind} · ${item.placement_count} placement${item.placement_count === 1 ? "" : "s"}`;
+			label.append(document.createTextNode(`${item.name} · ${item.kind} · `));
+			const placements = document.createElement('span');
+			this.plural(placements, 'placement', item.placement_count);
+			label.appendChild(placements);
 			const place = document.createElement("button");
 			place.type = "button";
-			place.textContent = "Place";
-			place.setAttribute("aria-label", `Place ${item.name}`);
+			this.copy(place, 'place');
+			place.dataset.i18nAria = 'placeAria';
+			place.dataset.i18nAriaValues = JSON.stringify({ name: item.name });
+			place.setAttribute("aria-label", this.i18n.t('placeAria', { name: item.name }));
 			place.addEventListener("click", () => this.openPlacementForm(item, panel, place));
 			card.append(label, place);
 			results.appendChild(card);
 		  }
-		  status.textContent = items.length === 0
-			? "No reusable inhabitants found."
-			: (payload.truncated ? "Showing the first 50 matches; refine the search." : "");
+		  if (items.length === 0) this.copy(status, 'noReusable');
+		  else if (payload.truncated) this.copy(status, 'catalogTruncated');
+		  else { delete status.dataset.i18nKey; delete status.dataset.i18nValues; status.textContent = ''; }
 		} catch (error) {
 		  if (!controller.signal.aborted && this.room === room && panel.isConnected) {
-			status.textContent = `Failed to search catalog: ${error instanceof Error ? error.message : String(error)}`;
+			this.copy(status, 'catalogFailed', { error: error instanceof Error ? error.message : String(error) });
 		  }
 		} finally {
 		  if (this.catalogRequest === controller) this.catalogRequest = null;
@@ -547,14 +629,16 @@ export class RoomKnowledgeDialog {
 	  const form = document.createElement("form");
 	  form.className = "map-inhabitant-form map-inhabitant-placement-form";
 	  const heading = document.createElement("h3");
-	  heading.textContent = `Place ${item.name}`;
+	  this.copy(heading, 'placeHeading', { name: item.name });
 	  const presence = textArea("presence_text", "");
 	  const resident = document.createElement("input");
 	  resident.type = "checkbox";
 	  resident.name = "resident";
 	  const residentLabel = document.createElement("label");
 	  residentLabel.className = "map-inhabitant-form__resident";
-	  residentLabel.append(resident, document.createTextNode(" Permanent resident of this room"));
+	  const residentCaption = document.createElement('span');
+	  this.copy(residentCaption, 'permanentResident');
+	  residentLabel.append(resident, document.createTextNode(' '), residentCaption);
 	  const message = document.createElement("div");
 	  message.className = "map-inhabitant-form__message";
 	  message.setAttribute("role", "status");
@@ -562,7 +646,7 @@ export class RoomKnowledgeDialog {
 	  actions.className = "map-inhabitant-form__actions";
 	  const back = document.createElement("button");
 	  back.type = "button";
-	  back.textContent = "Back";
+	  this.copy(back, 'back');
 	  back.addEventListener("click", () => {
 		if (this.pendingRefresh) {
 		  this.renderList();
@@ -576,9 +660,9 @@ export class RoomKnowledgeDialog {
 	  });
 	  const save = document.createElement("button");
 	  save.type = "submit";
-	  save.textContent = "Place";
+	  this.copy(save, 'place');
 	  actions.append(back, save);
-	  form.append(heading, labelWrap("Presence text", presence), residentLabel, message, actions);
+	  form.append(heading, this.labelled('presenceText', presence), residentLabel, message, actions);
 	  form.addEventListener("submit", (event) => {
 		event.preventDefault();
 		void this.placeExisting(item, form, message);
@@ -596,7 +680,7 @@ export class RoomKnowledgeDialog {
 	  const controller = new AbortController();
 	  this.writeRequest?.abort();
 	  this.writeRequest = controller;
-	  message.textContent = "Placing…";
+	  this.copy(message, 'placing');
 	  try {
 		const response = await fetchWithToken(`/api/map-sets/${room.mapSetID}/inhabitants`, {
 		  method: "POST", headers: { "Content-Type": "application/json" }, signal: controller.signal,
@@ -616,7 +700,7 @@ export class RoomKnowledgeDialog {
 		this.list?.querySelector<HTMLButtonElement>(`[data-inhabitant-id="${saved.id}"] button`)?.focus();
 	  } catch (error) {
 		if (controller.signal.aborted || this.room !== room || this.form !== form) return;
-		message.textContent = `Failed to place: ${error instanceof Error ? error.message : String(error)}`;
+		this.copy(message, 'placeFailed', { error: error instanceof Error ? error.message : String(error) });
 		controls.forEach((control) => { control.disabled = false; });
 	  } finally {
 		if (this.writeRequest === controller) this.writeRequest = null;
@@ -653,7 +737,7 @@ export class RoomKnowledgeDialog {
     this.writeRequest = controller;
     const controls = [...form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement>("input, textarea, select, button")];
     controls.forEach((control) => { control.disabled = true; });
-    message.textContent = "Saving…";
+    this.copy(message, 'saving');
     const path = row
       ? `/api/map-sets/${room.mapSetID}/inhabitants/${row.id}`
       : `/api/map-sets/${room.mapSetID}/inhabitants`;
@@ -675,7 +759,7 @@ export class RoomKnowledgeDialog {
       this.renderList();
     } catch (error) {
       if (controller.signal.aborted || this.room !== room || this.form !== form) return;
-      message.textContent = `Failed to save: ${error instanceof Error ? error.message : String(error)}`;
+      this.copy(message, 'saveFailed', { error: error instanceof Error ? error.message : String(error) });
       controls.forEach((control) => { control.disabled = false; });
     } finally {
       if (this.writeRequest === controller) this.writeRequest = null;
@@ -684,11 +768,11 @@ export class RoomKnowledgeDialog {
 
   private async remove(row: RoomInhabitant): Promise<void> {
     const room = this.room;
-    if (!room || !this.dialog || !window.confirm(`Remove "${row.name}" from this room?`)) return;
+    if (!room || !this.dialog || !window.confirm(this.i18n.t('removeConfirm', { name: row.name }))) return;
     this.writeRequest?.abort();
     const controller = new AbortController();
     this.writeRequest = controller;
-    this.setMessage("Deleting…");
+    this.setMessageKey('deleting');
     try {
       const response = await fetchWithToken(
         `/api/map-sets/${room.mapSetID}/inhabitants/${row.id}?${roomParams(room)}`,
@@ -697,11 +781,12 @@ export class RoomKnowledgeDialog {
       if (!response.ok) throw new Error(await response.text());
       if (controller.signal.aborted || this.room !== room) return;
       this.rows = this.rows.filter((candidate) => candidate.id !== row.id);
-      this.setMessage(this.rows.length === 0 ? "No inhabitants have been recorded for this room." : "");
+      if (this.rows.length === 0) this.setMessageKey('noInhabitants');
+      else this.setMessage('');
       this.renderList();
     } catch (error) {
       if (controller.signal.aborted || this.room !== room) return;
-      this.setMessage(`Failed to delete: ${error instanceof Error ? error.message : String(error)}`, true);
+      this.setMessageKey('deleteFailed', { error: error instanceof Error ? error.message : String(error) }, true);
     } finally {
       if (this.writeRequest === controller) this.writeRequest = null;
     }

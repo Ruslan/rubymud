@@ -1026,4 +1026,19 @@ describe('map pane (~map buffer) mount + coexistence', () => {
       }),
     ).not.toThrow();
   });
+
+  it('updates degraded mapper copy immediately and ignores unsupported locales', () => {
+    window.APP_LANGUAGE = 'en';
+    localStorage.setItem('pane-layout', JSON.stringify({
+      columns: [{ id: 'col-1', panes: [{ id: 'pane-map', buffer: '~map' }], rowSizes: [100] }],
+      colSizes: [100],
+    }));
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    expect(document.querySelector('.map-pane__unavailable')?.textContent).toBe('Map unavailable');
+    expect(renderer.setMapperLocale('ru')).toBe('ru');
+    expect(document.querySelector('.map-pane__unavailable')?.textContent).toBe('Карта недоступна');
+    expect(renderer.setMapperLocale('unsupported')).toBeNull();
+    expect(document.querySelector('.map-pane__unavailable')?.textContent).toBe('Карта недоступна');
+  });
 });
