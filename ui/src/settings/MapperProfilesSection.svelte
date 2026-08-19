@@ -4,6 +4,8 @@
   import type { MapperProfileForm } from './mapperProfileForm';
   import { mapperProfileEditable, mapperProfileRef } from './types';
   import type { MapperProfile, MapperReplayResult, Session } from './types';
+  import { readBootLocale, type Locale } from '../i18n';
+  import { createSettingsMapperI18n } from './mapperI18n';
 
   // A ROOM FORMAT describes how to parse a room block out of the MUD's output.
   // It has nothing to do with the alias/trigger Profiles tab — see the note in
@@ -19,6 +21,8 @@
   export let mapperReplayResult: MapperReplayResult | null = null;
   export let mapperReplayError = '';
   export let mapperReplayBusy = false;
+  export let locale: Locale = readBootLocale();
+  $: i18n = createSettingsMapperI18n(locale);
 
   export let saveMapperProfile: () => void | Promise<void>;
   export let validateMapperProfileDraft: () => void | Promise<void>;
@@ -67,18 +71,12 @@
 
 <section class="settings-section">
   <header class="content-header">
-    <h2>Room Formats</h2>
+    <h2>{i18n.t('roomFormatsTitle')}</h2>
     <p class="description">
-      A room format tells the mapper how to recognize a room block in the MUD's output:
-      the exits line, where the block starts and ends, how the left column (the ASCII
-      minimap) is cut off, and which line is the room name. Each session picks one on
-      the Sessions tab; the builtin <code>rmud</code> format is used when none is chosen.
+      {i18n.t('formatsDescriptionA')} <code>rmud</code> {i18n.t('formatsDescriptionB')}
     </p>
     <p class="description">
-      Text rules and ANSI-delimited room names can be configured here. Formats that need
-      a custom state machine can use a <em>contributed Go detector</em>: a small reviewed
-      file compiled into rubymud. Such a detector is listed here read-only, because
-      there is no editable spec behind it.
+      {i18n.t('formatsCustomBefore')} <em>{i18n.t('formatsCustomDetector')}</em>{i18n.t('formatsCustomAfter')}
     </p>
   </header>
 
@@ -86,7 +84,7 @@
     {#if mapperProfileError}
       <div class="form-error">{mapperProfileError}</div>
     {:else if mapperProfileValidated}
-      <div class="validated-ok">Format is valid.</div>
+      <div class="validated-ok">{i18n.t('formatValid')}</div>
     {/if}
 
     <div class="form-grid">
@@ -95,74 +93,74 @@
           type="text"
           bind:value={mapperForm.name}
           on:blur={validateMapperProfileDraft}
-          placeholder="Format name (e.g. rmud-custom)"
-          aria-label="Room format name"
+          placeholder={i18n.t('formatNamePlaceholder')}
+          aria-label={i18n.t('formatNameAria')}
         />
         <span class="editing-indicator">
-          {editingMapperProfileID === null ? 'New format' : `Editing #${editingMapperProfileID}`}
+          {editingMapperProfileID === null ? i18n.t('newFormat') : i18n.t('editingNumber', { id: editingMapperProfileID })}
         </span>
       </div>
 
-      <h4 class="group-title">Exits</h4>
+      <h4 class="group-title">{i18n.t('exits')}</h4>
       <div class="form-row">
         <label class="field">
-          Guard (literal prefix)
+          {i18n.t('guardLabel')}
           <input
             type="text"
             bind:value={mapperForm.guard}
             on:blur={validateMapperProfileDraft}
             placeholder="[ Exits:"
-            aria-label="Exits guard"
+            aria-label={i18n.t('exitsGuardAria')}
           />
         </label>
         <label class="field">
-          None token
+          {i18n.t('noneToken')}
           <input
             type="text"
             bind:value={mapperForm.none_token}
             on:blur={validateMapperProfileDraft}
             placeholder="none"
-            aria-label="Exits none token"
+            aria-label={i18n.t('exitsNoneAria')}
           />
         </label>
       </div>
       <div class="form-row">
         <label class="field wide">
-          Exits pattern (regex, exactly one capture group)
+          {i18n.t('exitsPatternLabel')}
           <input
             type="text"
             bind:value={mapperForm.pattern}
             on:blur={validateMapperProfileDraft}
             placeholder="^\[ Exits:\s*(.*?)\s*\]$"
-            aria-label="Exits pattern"
+            aria-label={i18n.t('exitsPatternAria')}
           />
         </label>
       </div>
       {#each mapperForm.exits_alt as rule, index}
         <div class="form-row" data-testid="exits-alternative">
           <label class="field">
-            Alternative guard
+            {i18n.t('alternativeGuard')}
             <input
               type="text"
               bind:value={rule.guard}
               on:blur={validateMapperProfileDraft}
-              aria-label={`Alternative exits guard ${index + 1}`}
+              aria-label={i18n.t('alternativeGuardAria', { index: index + 1 })}
             />
           </label>
           <label class="field wide">
-            Alternative pattern
+            {i18n.t('alternativePattern')}
             <input
               type="text"
               bind:value={rule.pattern}
               on:blur={validateMapperProfileDraft}
-              aria-label={`Alternative exits pattern ${index + 1}`}
+              aria-label={i18n.t('alternativePatternAria', { index: index + 1 })}
             />
           </label>
           <button
             type="button"
             class="btn-secondary"
-            title="Remove exits alternative"
-            aria-label={`Remove exits alternative ${index + 1}`}
+            title={i18n.t('removeAlternative')}
+            aria-label={i18n.t('removeAlternativeAria', { index: index + 1 })}
             on:click={() => removeExitsAlternative(index)}
           >×</button>
         </div>
@@ -172,147 +170,145 @@
           type="button"
           class="btn-secondary"
           disabled={mapperForm.exits_alt.length >= maxMapperExitsAlternatives}
-          title={`Maximum ${maxMapperExitsAlternatives} alternative exits wordings`}
+          title={i18n.t('maxAlternativesTitle', { count: maxMapperExitsAlternatives })}
           on:click={addExitsAlternative}
-        >+ Alternative exits wording</button>
+        >{i18n.t('addAlternative')}</button>
         {#if mapperForm.exits_alt.length >= maxMapperExitsAlternatives}
-          <span class="field-note">Maximum {maxMapperExitsAlternatives} alternative exits wordings reached.</span>
+          <span class="field-note">{i18n.t('maxAlternativesReached', { count: maxMapperExitsAlternatives })}</span>
         {/if}
       </div>
 
-      <h4 class="group-title">Block</h4>
+      <h4 class="group-title">{i18n.t('block')}</h4>
       <div class="form-row options-row">
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={mapperForm.stop_blank} on:change={validateMapperProfileDraft} />
-          Stop at a blank line
+          {i18n.t('stopBlank')}
         </label>
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={mapperForm.stop_prompt} on:change={validateMapperProfileDraft} />
-          Stop at the prompt
+          {i18n.t('stopPrompt')}
         </label>
         <label class="checkbox-label">
           <input type="checkbox" bind:checked={mapperForm.stop_max_lines} on:change={validateMapperProfileDraft} />
-          Stop at max lines
+          {i18n.t('stopMax')}
         </label>
       </div>
       <div class="form-row">
         <label class="field">
-          Max lines
+          {i18n.t('maxLines')}
           <input
             type="number"
             min="1"
             bind:value={mapperForm.max_lines}
             on:blur={validateMapperProfileDraft}
-            aria-label="Block max lines"
+            aria-label={i18n.t('blockMaxAria')}
           />
         </label>
         <label class="field wide">
-          Prompt pattern (regex; required when stopping at the prompt)
+          {i18n.t('promptPatternLabel')}
           <input
             type="text"
             bind:value={mapperForm.prompt}
             on:blur={validateMapperProfileDraft}
-            placeholder="(empty — RMUD's boundary is the blank line)"
-            aria-label="Prompt pattern"
+            placeholder={i18n.t('promptPlaceholder')}
+            aria-label={i18n.t('promptAria')}
           />
         </label>
         <label class="field wide">
-          Door-opening command (sent by a computed route before a door hop)
+          {i18n.t('doorCommandLabel')}
           <input
             type="text"
             bind:value={mapperForm.door_open}
             on:blur={validateMapperProfileDraft}
-            placeholder="(empty — routes send nothing and doors are opened by hand)"
-            aria-label="Door-opening command"
+            placeholder={i18n.t('doorPlaceholder')}
+            aria-label={i18n.t('doorAria')}
           />
           <small
-            >Use <code>&#123;dir&#125;</code> for the Russian direction word or
-            <code>&#123;dir_en&#125;</code> for the letter (n/s/e/w/u/d) — e.g.
-            <code>откр две &#123;dir&#125;</code> on RMUD,
-            <code>open door &#123;dir_en&#125;</code> on an English MUD. This is a command
-            sent to the SERVER, so it follows the MUD, not the interface language. A
-            per-edge command set in the map's edge editor always wins over it.</small
+            >{i18n.t('doorHelpA')} <code>&#123;dir&#125;</code> {i18n.t('doorHelpB')}
+            <code>&#123;dir_en&#125;</code> {i18n.t('doorHelpC')}
+            <code>откр две &#123;dir&#125;</code> {i18n.t('doorHelpD')}
+            <code>open door &#123;dir_en&#125;</code> {i18n.t('doorHelpE')}</small
           >
         </label>
       </div>
 
-      <h4 class="group-title">Left-column strip</h4>
+      <h4 class="group-title">{i18n.t('strip')}</h4>
       <div class="form-row">
         <label class="field">
-          Mode
-          <select bind:value={mapperForm.strip_mode} on:change={validateMapperProfileDraft} aria-label="Strip mode">
-            <option value="greedy">greedy — cut the whole leading glyph run</option>
-            <option value="min_run">min_run — cut it only when long enough</option>
-            <option value="fixed_width">fixed_width — cut at a fixed column</option>
+          {i18n.t('mode')}
+          <select bind:value={mapperForm.strip_mode} on:change={validateMapperProfileDraft} aria-label={i18n.t('stripModeAria')}>
+            <option value="greedy">{i18n.t('greedyOption')}</option>
+            <option value="min_run">{i18n.t('minRunOption')}</option>
+            <option value="fixed_width">{i18n.t('fixedWidthOption')}</option>
           </select>
         </label>
         <label class="field">
-          Glyphs{#if mapperForm.strip_mode === 'fixed_width' && glyphsDriveHeader}
-            <span class="field-note"> — not used by the fixed_width cut, but the header rule finds the room name through them</span>
+          {i18n.t('glyphs')}{#if mapperForm.strip_mode === 'fixed_width' && glyphsDriveHeader}
+            <span class="field-note">{i18n.t('glyphsFixedNote')}</span>
           {/if}
           <input
             type="text"
             bind:value={mapperForm.glyphs}
             on:blur={validateMapperProfileDraft}
-            aria-label="Left column glyphs"
+            aria-label={i18n.t('glyphsAria')}
           />
         </label>
         {#if mapperForm.strip_mode === 'min_run'}
           <label class="field narrow">
-            Min run
+            {i18n.t('minRun')}
             <input
               type="number"
               min="1"
               bind:value={mapperForm.min_run}
               on:blur={validateMapperProfileDraft}
-              aria-label="Strip min run"
+              aria-label={i18n.t('stripMinRunAria')}
             />
           </label>
         {/if}
         {#if mapperForm.strip_mode === 'fixed_width'}
           <label class="field narrow">
-            Width
+            {i18n.t('width')}
             <input
               type="number"
               min="1"
               bind:value={mapperForm.width}
               on:blur={validateMapperProfileDraft}
-              aria-label="Strip width"
+              aria-label={i18n.t('stripWidthAria')}
             />
           </label>
         {/if}
       </div>
 
-      <h4 class="group-title">Header</h4>
+      <h4 class="group-title">{i18n.t('header')}</h4>
       <div class="form-row">
         <label class="field">
-          Rule
-          <select bind:value={mapperForm.header_rule} on:change={validateMapperProfileDraft} aria-label="Header rule">
-            <option value="last_before_stripped">last_before_stripped — last line above the column</option>
-            <option value="first">first — the first non-blank line</option>
-            <option value="ansi_delimited">ansi_delimited — text marked by an ANSI SGR</option>
+          {i18n.t('rule')}
+          <select bind:value={mapperForm.header_rule} on:change={validateMapperProfileDraft} aria-label={i18n.t('headerRuleAria')}>
+            <option value="last_before_stripped">{i18n.t('lastBeforeOption')}</option>
+            <option value="first">{i18n.t('firstOption')}</option>
+            <option value="ansi_delimited">{i18n.t('ansiOption')}</option>
           </select>
         </label>
         {#if mapperForm.header_rule === 'last_before_stripped'}
           <label class="field narrow">
-            Column run
+            {i18n.t('columnRun')}
             <input
               type="number"
               min="1"
               bind:value={mapperForm.column_run}
               on:blur={validateMapperProfileDraft}
-              aria-label="Header column run"
+              aria-label={i18n.t('headerColumnAria')}
             />
           </label>
         {:else if mapperForm.header_rule === 'ansi_delimited'}
           <label class="field">
-            Start SGR parameters
+            {i18n.t('startSGR')}
             <input
               type="text"
               bind:value={mapperForm.ansi_start}
               on:blur={validateMapperProfileDraft}
               placeholder="1;36"
-              aria-label="Header ANSI start SGR parameters"
+              aria-label={i18n.t('headerSGRAria')}
             />
           </label>
         {/if}
@@ -320,30 +316,30 @@
 
       <div class="form-row options-row">
         <button class="btn-primary" on:click={saveMapperProfile}>
-          {editingMapperProfileID === null ? 'Add' : 'Save'}
+          {editingMapperProfileID === null ? i18n.t('add') : i18n.t('save')}
         </button>
-        <button class="btn-link" on:click={cancelMapperProfileEdit}>Clear</button>
+        <button class="btn-link" on:click={cancelMapperProfileEdit}>{i18n.t('clear')}</button>
       </div>
 
-      <h4 class="group-title">Replay</h4>
+      <h4 class="group-title">{i18n.t('replay')}</h4>
       <div class="form-row replay-controls">
         <label class="field wide">
-          Session
-          <select bind:value={mapperReplaySessionID} on:change={replayMapperProfileChanged} aria-label="Replay session">
+          {i18n.t('session')}
+          <select bind:value={mapperReplaySessionID} on:change={replayMapperProfileChanged} aria-label={i18n.t('replaySessionAria')}>
             {#each sessions as session}
               <option value={session.id}>{session.name}</option>
             {/each}
           </select>
         </label>
         <label class="field narrow">
-          Recent lines
+          {i18n.t('recentLines')}
           <input
             type="number"
             min="1"
             max="5000"
             bind:value={mapperReplayLimit}
             on:input={replayMapperProfileChanged}
-            aria-label="Replay line limit"
+            aria-label={i18n.t('replayLimitAria')}
           />
         </label>
         <button
@@ -351,20 +347,23 @@
           class="btn-secondary"
           disabled={mapperReplaySessionID === null || mapperReplayBusy}
           on:click={replayMapperProfileDraft}
-        >{mapperReplayBusy ? 'Running…' : 'Run replay'}</button>
+        >{mapperReplayBusy ? i18n.t('running') : i18n.t('runReplay')}</button>
       </div>
       {#if mapperReplayError}
         <div class="form-error replay-status">{mapperReplayError}</div>
       {:else if mapperReplayResult}
         <div class="replay-status">
-          {mapperReplayResult.matched_blocks} rooms from {mapperReplayResult.scanned_lines} lines;
-          {mapperReplayResult.candidate_lines} exits candidates.
+          {i18n.t('replaySummary', {
+            rooms: i18n.plural('room', mapperReplayResult.matched_blocks),
+            lines: i18n.plural('lineAfterFrom', mapperReplayResult.scanned_lines),
+            candidates: i18n.plural('exitsCandidate', mapperReplayResult.candidate_lines),
+          })}
         </div>
         {#if mapperReplayResult.samples.length > 0}
-          <div class="replay-results" aria-label="Replay matches">
+          <div class="replay-results" aria-label={i18n.t('replayMatchesAria')}>
             {#each mapperReplayResult.samples as sample}
               <div class="replay-result">
-                <div class="key-cell">{sample.hint || '(no room title)'}</div>
+                <div class="key-cell">{sample.hint || i18n.t('noRoomTitle')}</div>
                 <div class="value-cell">{sample.exits}</div>
                 {#if sample.desc}<div class="comment-text">{sample.desc}</div>{/if}
               </div>
@@ -378,27 +377,27 @@
   <table class="data-table">
     <thead>
       <tr>
-        <th>Name</th>
+        <th>{i18n.t('name')}</th>
         <!-- The reference column. Warnings and the mapper_profile status quote a
              machine reference ("builtin:diku-en", "db:7"); without this column the
              user had no way to map that string back to a row in this table. -->
-        <th style="width: 150px">Reference</th>
-        <th>Exits guard</th>
-        <th>Strip</th>
-        <th>Header</th>
-        <th style="width: 200px">Actions</th>
+        <th style="width: 150px">{i18n.t('reference')}</th>
+        <th>{i18n.t('exitsGuard')}</th>
+        <th>{i18n.t('stripColumn')}</th>
+        <th>{i18n.t('headerColumn')}</th>
+        <th style="width: 200px">{i18n.t('actions')}</th>
       </tr>
     </thead>
     <tbody>
       {#each mapperProfiles as p}
         <tr>
           <td>
-            <div class="key-cell">{mapperProfileLabel(p)}</div>
+            <div class="key-cell">{mapperProfileLabel(p, i18n)}</div>
             {#if p.provenance}
-              <div class="comment-text">{mapperProvenanceNote(p)}</div>
+              <div class="comment-text">{mapperProvenanceNote(p, i18n)}</div>
             {/if}
             {#if p.mud}
-              <div class="comment-text">For: {p.mud}</div>
+              <div class="comment-text">{i18n.t('forMud', { mud: p.mud })}</div>
             {/if}
             {#if p.description}
               <div class="comment-text">{p.description}</div>
@@ -407,11 +406,10 @@
               <!-- A Go detector cannot be turned into an editable format, and offering
                    a copy would produce an empty one rather than something that works. -->
               <div class="comment-text">
-                Go detector compiled into rubymud — read-only, and it cannot be copied
-                into an editable format.
+                {i18n.t('goDetectorReadOnly')}
               </div>
             {:else if p.builtin}
-              <div class="comment-text">read-only — copy it to make changes</div>
+              <div class="comment-text">{i18n.t('builtinReadOnly')}</div>
             {/if}
           </td>
           <td class="value-cell"><code>{mapperProfileRef(p)}</code></td>
@@ -422,13 +420,13 @@
             {#if !mapperProfileEditable(p)}
               <span class="dim-cell">-</span>
             {:else if p.builtin}
-              <button class="btn-link" on:click={() => copyMapperProfile(p)}>Make a copy</button>
+              <button class="btn-link" on:click={() => copyMapperProfile(p)}>{i18n.t('makeCopy')}</button>
             {:else if editingMapperProfileID === p.id}
-              <span class="editing-indicator">Editing…</span>
+              <span class="editing-indicator">{i18n.t('editing')}</span>
             {:else}
-              <button class="btn-link" on:click={() => startMapperProfileEdit(p)}>Edit</button>
-              <button class="btn-link" on:click={() => copyMapperProfile(p)}>Copy</button>
-              <button class="btn-link btn-danger" on:click={() => deleteMapperProfileRow(p.id)}>Delete</button>
+              <button class="btn-link" on:click={() => startMapperProfileEdit(p)}>{i18n.t('edit')}</button>
+              <button class="btn-link" on:click={() => copyMapperProfile(p)}>{i18n.t('copy')}</button>
+              <button class="btn-link btn-danger" on:click={() => deleteMapperProfileRow(p.id)}>{i18n.t('delete')}</button>
             {/if}
           </td>
         </tr>

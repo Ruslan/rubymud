@@ -115,4 +115,18 @@ describe('MapSetsSection', () => {
     expect(target.textContent).toContain('World');
     expect(target.textContent).not.toContain('No map sets imported yet.');
   });
+
+  it('renders Russian mapper administration copy without translating map or archive names', async () => {
+    api.fetchMapSets.mockResolvedValue([mapSet]);
+    target = document.createElement('div');
+    document.body.append(target);
+    component = mount(MapSetsSection, { target, props: { locale: 'ru' } });
+    await settle();
+
+    expect(target.textContent).toContain('Наборы карт');
+    expect(target.textContent).toContain('2 зоны, 3 комнаты, 1 переход');
+    expect(target.textContent).toContain('World');
+    expect(target.textContent).toContain('world.zip');
+    expect(target.querySelector('input[type=file]')?.getAttribute('aria-label')).toBe('ZIP-архив карты');
+  });
 });

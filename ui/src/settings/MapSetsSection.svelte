@@ -11,6 +11,11 @@
     MapSet,
   } from './api';
   import { formatMapImportConflict, importFailureMessage, mapArchiveFileError, MapSetListRevision } from './mapSets';
+  import { readBootLocale, type Locale } from '../i18n';
+  import { createSettingsMapperI18n } from './mapperI18n';
+
+  export let locale: Locale = readBootLocale();
+  $: i18n = createSettingsMapperI18n(locale);
 
   let mapSets: MapSet[] = [];
   let selectedFile: File | null = null;
@@ -44,13 +49,13 @@
 
   function onFileChange(event: Event) {
     selectedFile = (event.currentTarget as HTMLInputElement).files?.[0] ?? null;
-    error = mapArchiveFileError(selectedFile);
+    error = mapArchiveFileError(selectedFile, i18n);
     summary = null;
     importFailure = null;
   }
 
   async function upload() {
-    const validationError = mapArchiveFileError(selectedFile);
+    const validationError = mapArchiveFileError(selectedFile, i18n);
     if (validationError || !selectedFile) {
       error = validationError;
       return;
@@ -64,7 +69,7 @@
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
         importFailure = {
-          error: importFailureMessage(payload, `Upload failed (${response.status})`),
+          error: importFailureMessage(payload, i18n.t('uploadFailed', { status: response.status })),
           conflicts: Array.isArray(payload?.conflicts) ? payload.conflicts : [],
           conflicts_truncated: payload?.conflicts_truncated === true,
         };
@@ -83,7 +88,7 @@
   }
 
   async function remove(set: MapSet) {
-    if (!window.confirm(`Delete map set "${set.name}"? This also removes its rooms and generated room images.`)) return;
+    if (!window.confirm(i18n.t('deleteMapSetConfirm', { name: set.name }))) return;
     deletingID = set.id;
     error = '';
     cleanupWarning = '';
@@ -91,10 +96,10 @@
       const response = await deleteMapSet(set.id);
       const payload = await response.json().catch(() => ({}));
       if (!response.ok) {
-        throw new Error(importFailureMessage(payload, `Delete failed (${response.status})`));
+        throw new Error(importFailureMessage(payload, i18n.t('deleteFailed', { status: response.status })));
       }
       if (typeof payload?.image_cleanup_error === 'string' && payload.image_cleanup_error) {
-        cleanupWarning = `Map set was deleted, but image cleanup needs attention: ${payload.image_cleanup_error}`;
+        cleanupWarning = i18n.t('cleanupWarning', { error: payload.image_cleanup_error });
       }
       mapSets = mapSets.filter((item) => item.id !== set.id);
       window.dispatchEvent(new CustomEvent('map-sets-changed'));
@@ -108,15 +113,15 @@
 
 <section class="settings-section map-sets-section">
   <header class="content-header">
-    <h2>Map Sets</h2>
-    <p class="description">Import a ZIP archive as a new map set, then choose it for a session on the Sessions tab.</p>
+    <h2>{i18n.t('mapSetsTitle')}</h2>
+    <p class="description">{i18n.t('mapSetsDescription')}</p>
   </header>
 
   <div class="editor-box map-set-upload">
     <div class="form-row map-set-upload-row">
-      <input bind:this={fileInput} type="file" accept=".zip,application/zip" aria-label="Map ZIP archive" on:change={onFileChange} disabled={uploading || deletingID !== null} />
+      <input bind:this={fileInput} type="file" accept=".zip,application/zip" aria-label={i18n.t('mapZipAria')} on:change={onFileChange} disabled={uploading || deletingID !== null} />
       <button class="btn-primary" on:click={upload} disabled={uploading || deletingID !== null || !selectedFile}>
-        {uploading ? 'Importing...' : 'Import ZIP'}
+        {uploading ? i18n.t('importing') : i18n.t('importZip')}
       </button>
     </div>
     {#if error}<p class="form-error">{error}</p>{/if}
@@ -126,14 +131,14 @@
   {#if summary}
     <section class="map-import-result" aria-live="polite">
       <strong>{summary.name}</strong>
-      <span>{summary.zone_count} zones</span>
-      <span>{summary.room_count} rooms</span>
-      <span>{summary.seam_count} seams</span>
-      {#if summary.unresolved.length}<p>Unresolved seams: {summary.unresolved.join('; ')}</p>{/if}
+      <span>{i18n.plural('zone', summary.zone_count)}</span>
+      <span>{i18n.plural('room', summary.room_count)}</span>
+      <span>{i18n.plural('seam', summary.seam_count)}</span>
+      {#if summary.unresolved.length}<p>{i18n.t('unresolvedSeams', { seams: summary.unresolved.join('; ') })}</p>{/if}
       {#if summary.conflicts.length}
-        <p>Conflicts: {summary.conflicts.map(formatMapImportConflict).join('; ')}</p>
+        <p>{i18n.t('conflicts', { conflicts: summary.conflicts.map((conflict) => formatMapImportConflict(conflict, i18n)).join('; ') })}</p>
       {/if}
-      {#if summary.conflicts_truncated}<p>Conflict report was truncated.</p>{/if}
+      {#if summary.conflicts_truncated}<p>{i18n.t('conflictTruncated')}</p>{/if}
     </section>
   {/if}
 
@@ -143,30 +148,30 @@
       {#if importFailure.conflicts.length}
         <ul>
           {#each importFailure.conflicts as conflict}
-            <li>{formatMapImportConflict(conflict)}</li>
+            <li>{formatMapImportConflict(conflict, i18n)}</li>
           {/each}
         </ul>
       {/if}
-      {#if importFailure.conflicts_truncated}<p>Conflict report was truncated.</p>{/if}
+      {#if importFailure.conflicts_truncated}<p>{i18n.t('conflictTruncated')}</p>{/if}
     </section>
   {/if}
 
   <table class="data-table map-sets-table">
-    <thead><tr><th>Name</th><th>Map</th><th>Import</th><th>Actions</th></tr></thead>
+    <thead><tr><th>{i18n.t('name')}</th><th>{i18n.t('map')}</th><th>{i18n.t('import')}</th><th>{i18n.t('actions')}</th></tr></thead>
     <tbody>
       {#each mapSets as set}
         <tr>
           <td class="key-cell">{set.name}</td>
-          <td>{set.zone_count} zones, {set.room_count} rooms, {set.seam_count} seams</td>
-          <td class="dim-cell">{set.source_archive || 'manual'}{set.imported_at ? `\n${new Date(set.imported_at).toLocaleString()}` : ''}</td>
-          <td class="actions-cell"><button class="btn-link btn-danger" on:click={() => remove(set)} disabled={uploading || deletingID !== null}>{deletingID === set.id ? 'Deleting...' : 'Delete'}</button></td>
+          <td>{i18n.plural('zone', set.zone_count)}, {i18n.plural('room', set.room_count)}, {i18n.plural('seam', set.seam_count)}</td>
+          <td class="dim-cell">{set.source_archive || i18n.t('manual')}{set.imported_at ? `\n${new Date(set.imported_at).toLocaleString(i18n.locale)}` : ''}</td>
+          <td class="actions-cell"><button class="btn-link btn-danger" on:click={() => remove(set)} disabled={uploading || deletingID !== null}>{deletingID === set.id ? i18n.t('deleting') : i18n.t('delete')}</button></td>
         </tr>
       {/each}
       {#if !loading && mapSets.length === 0}
-        <tr><td colspan="4" class="dim-cell">No map sets imported yet.</td></tr>
+        <tr><td colspan="4" class="dim-cell">{i18n.t('noMapSets')}</td></tr>
       {/if}
       {#if loading}
-        <tr><td colspan="4" class="dim-cell">Loading map sets...</td></tr>
+        <tr><td colspan="4" class="dim-cell">{i18n.t('loadingMapSets')}</td></tr>
       {/if}
     </tbody>
   </table>

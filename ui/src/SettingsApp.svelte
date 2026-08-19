@@ -24,8 +24,11 @@
   } from './settings/mapperProfileForm';
   import type { MapperProfileForm } from './settings/mapperProfileForm';
   import { MapperReplayRequest } from './settings/mapperReplayRequest';
+  import { readResponseError } from './settings/responseError';
   import { localDateTimeISO } from './settings/logRange';
   import { normalizeAnsiTheme } from './ansi';
+  import { readBootLocale } from './i18n';
+  import { createSettingsMapperI18n } from './settings/mapperI18n';
   import { duplicateHotkeyShortcutError } from './settings/hotkeyValidation';
   import type {
     Alias,
@@ -49,6 +52,8 @@
   } from './settings/types';
 
   let currentTab = window.location.hash.slice(1) || 'variables';
+  const settingsLocale = readBootLocale();
+  const mapperI18n = createSettingsMapperI18n(settingsLocale);
   let loading = true;
   let formError = '';
   let lastFetchKey: string | null = null;
@@ -104,8 +109,8 @@
     { id: 'hotkeys', label: 'Hotkeys' },
     { id: 'timers', label: 'Tickers' },
     { id: 'groups', label: 'Groups' },
-    { id: 'room_formats', label: 'Room Formats' },
-    { id: 'map_sets', label: 'Map Sets' },
+    { id: 'room_formats', label: mapperI18n.t('tabRoomFormats') },
+    { id: 'map_sets', label: mapperI18n.t('tabMapSets') },
     { id: 'history', label: 'History' },
     { id: 'logs', label: 'Logs' },
     { id: 'app', label: 'App' },
@@ -478,7 +483,7 @@
       if (!resp.ok) {
         // A non-2xx (401 after a token rotation, 500) has no JSON body to parse;
         // parsing it anyway surfaced a raw SyntaxError to the user.
-        mapperProfileError = (await resp.text()) || `Validation failed (HTTP ${resp.status}).`;
+        mapperProfileError = (await resp.text()) || mapperI18n.t('validationFailed', { status: resp.status });
         return;
       }
       const out = await resp.json();
@@ -486,7 +491,7 @@
       if (out.ok) {
         mapperProfileValidated = true;
       } else {
-        mapperProfileError = out.error || 'Room format is not valid.';
+        mapperProfileError = out.error || mapperI18n.t('formatInvalid');
       }
     } catch (e) {
       if (seq !== mapperValidateSeq) return;
@@ -507,7 +512,7 @@
       );
       if (!mapperReplayRequest.isCurrent(request, mapperForm, mapperReplaySessionID, mapperReplayLimit)) return;
       if (!resp.ok) {
-        const replayError = (await resp.text()) || `Replay failed (HTTP ${resp.status}).`;
+        const replayError = await readResponseError(resp, mapperI18n.t('replayFailed', { status: resp.status }));
         if (!mapperReplayRequest.isCurrent(request, mapperForm, mapperReplaySessionID, mapperReplayLimit)) return;
         mapperReplayState = mapperReplayRequest.fail(request, mapperForm, mapperReplaySessionID, mapperReplayLimit, replayError);
         return;
@@ -526,7 +531,7 @@
   async function saveMapperProfile() {
     const name = mapperForm.name.trim();
     if (!name) {
-      mapperProfileError = 'A format name is required.';
+      mapperProfileError = mapperI18n.t('formatNameRequired');
       return;
     }
     mapperProfileError = '';
@@ -543,7 +548,7 @@
       if (!resp.ok) {
         // The body is mapper.Compile's message (or the name-conflict / version
         // -conflict message) — shown verbatim, the backend is the validation truth.
-        mapperProfileError = (await resp.text()) || `Could not save the room format (HTTP ${resp.status}).`;
+        mapperProfileError = (await resp.text()) || mapperI18n.t('saveFormatFailed', { status: resp.status });
         return;
       }
       cancelMapperProfileEdit();
@@ -564,7 +569,7 @@
     if (profile.builtin || !profile.spec) return;
     // Matches the eight neighbouring editors: never destroy a draft silently.
     if (editingMapperProfileID !== profile.id && mapperFormDirty
-        && !confirm('Discard unsaved room format changes?')) return;
+        && !confirm(mapperI18n.t('discardFormatConfirm'))) return;
     mapperProfileError = '';
     mapperProfileValidated = false;
     clearMapperReplay();
@@ -575,7 +580,7 @@
   // copyMapperProfile is the ONLY way to base a format on the builtin, which has
   // no row to edit: it pre-fills the create form from the source's spec.
   function copyMapperProfile(profile: MapperProfile) {
-    if (mapperFormDirty && !confirm('Discard unsaved room format changes?')) return;
+    if (mapperFormDirty && !confirm(mapperI18n.t('discardFormatConfirm'))) return;
     mapperProfileError = '';
     mapperProfileValidated = false;
     clearMapperReplay();
@@ -592,11 +597,11 @@
   }
 
   async function deleteMapperProfileRow(id: number) {
-    if (!confirm('Delete this room format? Sessions using it will fall back to the builtin.')) return;
+    if (!confirm(mapperI18n.t('deleteFormatConfirm'))) return;
     try {
       const resp = await api.deleteMapperProfile(id);
       if (!resp.ok) {
-        mapperProfileError = (await resp.text()) || `Could not delete the room format (HTTP ${resp.status}).`;
+        mapperProfileError = (await resp.text()) || mapperI18n.t('deleteFormatFailed', { status: resp.status });
         return;
       }
       if (editingMapperProfileID === id) cancelMapperProfileEdit();
@@ -1756,6 +1761,7 @@
 
     {:else if currentTab === 'room_formats'}
       <MapperProfilesSection
+        locale={settingsLocale}
         {mapperProfiles}
         {sessions}
         bind:mapperForm
@@ -1778,7 +1784,7 @@
       />
 
     {:else if currentTab === 'map_sets'}
-      <MapSetsSection />
+      <MapSetsSection locale={settingsLocale} />
 
     {:else if currentTab === 'profiles'}
       <ProfilesSection
@@ -1802,6 +1808,7 @@
 
     {:else if currentTab === 'sessions'}
       <SessionsSection
+        locale={settingsLocale}
         {formError}
         {sessions}
         bind:sessionEditor

@@ -6,6 +6,7 @@ import type {
   MapperSpec,
   MapperStripMode,
 } from './types';
+import { settingsMapperI18n, type SettingsMapperI18n } from './mapperI18n';
 
 // ---------------------------------------------------------------------------
 // Room-format ("mapper profile") form model.
@@ -203,25 +204,35 @@ export function copyOfMapperProfile(profile: MapperProfile): MapperProfileForm {
 // and "diku-en" does not. The key is not lost: the Room Formats table has a
 // Reference column and the session selector appends the reference to each option,
 // so a warning quoting "builtin:diku-en" is traceable back to a row.
-export function mapperProfileLabel(profile: MapperProfile): string {
+export function mapperProfileLabel(profile: MapperProfile, i18n: SettingsMapperI18n = settingsMapperI18n): string {
   const label = profile.title && profile.title !== profile.name ? profile.title : profile.name;
-  return profile.builtin ? `${label} (builtin)` : label;
+  return profile.builtin ? `${label} ${i18n.t('builtinSuffix')}` : label;
+}
+
+export function mapperProvenanceLabel(profile: MapperProfile, i18n: SettingsMapperI18n = settingsMapperI18n): string {
+  switch (profile.provenance) {
+    case 'Verified': return i18n.t('verifiedLabel');
+    case 'Starter': return i18n.t('starterLabel');
+    case 'Contributed': return i18n.t('contributedLabel');
+    case 'User': return i18n.t('userLabel');
+    default: return profile.provenance ?? '';
+  }
 }
 
 // mapperProvenanceNote is the one-line honesty label next to a format's name.
 // These strings are the UI half of mapper.Provenance and must keep saying what
 // the Go constants say — a user picking a format needs to know whether anyone
 // has ever run it against a real server.
-export function mapperProvenanceNote(profile: MapperProfile): string {
+export function mapperProvenanceNote(profile: MapperProfile, i18n: SettingsMapperI18n = settingsMapperI18n): string {
   switch (profile.provenance) {
     case 'Verified':
-      return 'Verified — field-tested against a live server.';
+      return `${mapperProvenanceLabel(profile, i18n)} — ${i18n.t('verifiedNote')}`;
     case 'Starter':
-      return 'Starter — a plausible format nobody has run against a live server. Copy it and adjust.';
+      return `${mapperProvenanceLabel(profile, i18n)} — ${i18n.t('starterNote')}`;
     case 'Contributed':
-      return 'Contributed Go detector — correctness is exactly its test fixtures\'.';
+      return `${mapperProvenanceLabel(profile, i18n)} — ${i18n.t('contributedNote')}`;
     case 'User':
-      return 'Your own format.';
+      return i18n.t('userNote');
     default:
       return '';
   }

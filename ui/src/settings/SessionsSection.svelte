@@ -11,9 +11,11 @@
     fetchSessionMapperProfile,
     saveSessionMapperProfile,
   } from './api';
-  import { mapperProfileLabel, mapperProvenanceNote } from './mapperProfileForm';
+  import { mapperProfileLabel, mapperProvenanceLabel, mapperProvenanceNote } from './mapperProfileForm';
   import { mapperProfileRef } from './types';
   import type { MapperProfile } from './types';
+  import { readBootLocale, type Locale } from '../i18n';
+  import { createSettingsMapperI18n } from './mapperI18n';
 
   export let formError = '';
   export let sessions: Session[] = [];
@@ -25,6 +27,8 @@
   export let sessionProfiles: SessionProfile[] = [];
   export let profiles: Profile[] = [];
   export let sessionProfileToAddID: number | undefined;
+  export let locale: Locale = readBootLocale();
+  $: mapperI18n = createSettingsMapperI18n(locale);
 
   export let addSession: () => void | Promise<void>;
   export let sessionAction: (action: 'connect' | 'disconnect', id: number) => void | Promise<void>;
@@ -194,7 +198,7 @@
   // select, including the "cannot be copied" note for a Go detector.
   $: builtinFormats = mapperProfiles.filter((p) => p.builtin);
   $: storedFormats = mapperProfiles.filter((p) => !p.builtin);
-  $: defaultFormatLabel = builtinFormats[0] ? mapperProfileLabel(builtinFormats[0]) : 'rmud (builtin)';
+  $: defaultFormatLabel = builtinFormats[0] ? mapperProfileLabel(builtinFormats[0], mapperI18n) : `rmud ${mapperI18n.t('builtinSuffix')}`;
   $: selectedFormat =
     mapperProfiles.find((p) => mapperProfileRef(p) === mapperFormat) ??
     (mapperFormat === '' ? builtinFormats[0] : undefined);
@@ -358,33 +362,33 @@
       <button class="btn-primary" disabled={!sessionProfileToAddID} on:click={() => { if (sessionProfileToAddID) addProfileToSession(sessionProfileToAddID); sessionProfileToAddID = undefined; }}>Add</button>
   </div>
 
-  <h3 style="margin-top: 40px; border-bottom: 1px solid #2d333b; padding-bottom: 8px;">Map Set for {currentSession.name}</h3>
-  <p class="description">Choose the world map this session follows. The <code>~map</code> buffer renders it and tracks the player's position.</p>
+  <h3 style="margin-top: 40px; border-bottom: 1px solid #2d333b; padding-bottom: 8px;">{mapperI18n.t('sessionMapSetHeading', { session: currentSession.name })}</h3>
+  <p class="description">{mapperI18n.t('sessionMapSetDescriptionBefore')} <code>~map</code> {mapperI18n.t('sessionMapSetDescriptionAfter')}</p>
   <div class="form-row" style="max-width: 400px">
     <select
       style="flex: 1; background: #0d1117; border: 1px solid #30363d; color: #e8edf2; padding: 8px; border-radius: 6px;"
       disabled={mapSetSaving}
       value={activeMapSetID === null ? '' : String(activeMapSetID)}
       on:change={(e) => currentSession && onMapSetChange(currentSession.id, (e.currentTarget as HTMLSelectElement).value)}
+      aria-label={mapperI18n.t('mapSetAria')}
     >
-      <option value="">(none)</option>
+      <option value="">{mapperI18n.t('none')}</option>
       {#each mapSets as ms}
-        <option value={String(ms.id)}>{ms.name} — {ms.zone_count} zones, {ms.room_count} rooms</option>
+        <option value={String(ms.id)}>{ms.name} — {mapperI18n.plural('zone', ms.zone_count)}, {mapperI18n.plural('room', ms.room_count)}</option>
       {/each}
     </select>
   </div>
   {#if mapSets.length === 0}
-    <p class="description">No map sets imported yet.</p>
+    <p class="description">{mapperI18n.t('noMapSets')}</p>
   {/if}
   {#if mapSetError}
-    <p class="description" style="color: #e74c3c;">Map set error: {mapSetError}</p>
+    <p class="description" style="color: #e74c3c;">{mapperI18n.t('mapSetError', { error: mapSetError })}</p>
   {/if}
 
-  <h3 style="margin-top: 40px; border-bottom: 1px solid #2d333b; padding-bottom: 8px;">Room Format for {currentSession.name}</h3>
+  <h3 style="margin-top: 40px; border-bottom: 1px solid #2d333b; padding-bottom: 8px;">{mapperI18n.t('sessionRoomFormatHeading', { session: currentSession.name })}</h3>
   <p class="description">
-    How this session's output is parsed into rooms. Manage the formats on the
-    <a href="#room_formats">Room Formats</a> tab. Changing this applies to a running
-    session immediately.
+    {mapperI18n.t('sessionFormatDescriptionA')}
+    <a href="#room_formats">{mapperI18n.t('tabRoomFormats')}</a>. {mapperI18n.t('sessionFormatDescriptionB')}
   </p>
   <div class="form-row" style="max-width: 400px">
     <select
@@ -392,7 +396,7 @@
       disabled={mapperSaving}
       value={mapperFormat}
       on:change={(e) => currentSession && onMapperProfileChange(currentSession.id, (e.currentTarget as HTMLSelectElement).value)}
-      aria-label="Room format"
+      aria-label={mapperI18n.t('roomFormatAria')}
     >
       <!-- Grouped so a user can see at a glance which formats ship with rubymud
            and which they wrote.
@@ -402,42 +406,41 @@
            even if the default ever changes. Two controls that differ only in a
            consequence nobody can see is a trap, so the difference is spelled out
            in both labels rather than left implicit. -->
-      <option value="">Default — follow whichever format ships as the default (currently {defaultFormatLabel})</option>
-      <optgroup label="Built in — pinned to this exact format">
+      <option value="">{mapperI18n.t('defaultFormat', { format: defaultFormatLabel })}</option>
+      <optgroup label={mapperI18n.t('builtInPinned')}>
         {#each builtinFormats as mp}
           <option value={mapperProfileRef(mp)}>
-            {mapperProfileLabel(mp)} — {mp.provenance ?? ''} — {mapperProfileRef(mp)}
+            {mapperProfileLabel(mp, mapperI18n)} — {mapperProvenanceLabel(mp, mapperI18n)} — {mapperProfileRef(mp)}
           </option>
         {/each}
       </optgroup>
       {#if storedFormats.length}
-        <optgroup label="Your formats">
+        <optgroup label={mapperI18n.t('yourFormats')}>
           {#each storedFormats as mp}
-            <option value={mapperProfileRef(mp)}>{mapperProfileLabel(mp)} — {mapperProfileRef(mp)}</option>
+            <option value={mapperProfileRef(mp)}>{mapperProfileLabel(mp, mapperI18n)} — {mapperProfileRef(mp)}</option>
           {/each}
         </optgroup>
       {/if}
     </select>
   </div>
   {#if selectedFormat}
-    <p class="description">{mapperProvenanceNote(selectedFormat)}</p>
+    <p class="description">{mapperProvenanceNote(selectedFormat, mapperI18n)}</p>
     {#if selectedFormat.description}
       <p class="description">{selectedFormat.description}</p>
     {/if}
     {#if selectedFormat.go_detector}
       <p class="description">
-        This is a Go detector compiled into rubymud. It is read-only and cannot be
-        copied into an editable format — there is no regex spec behind it.
+        {mapperI18n.t('sessionGoDetector')}
       </p>
     {/if}
   {/if}
   {#if mapperActiveError}
-    <p class="description" style="color: #e74c3c;">Room format not applied: {mapperActiveError}</p>
+    <p class="description" style="color: #e74c3c;">{mapperI18n.t('formatNotApplied', { error: mapperActiveError })}</p>
   {:else if mapperActiveName}
-    <p class="description">Currently using: <code>{mapperActiveName}</code></p>
+    <p class="description">{mapperI18n.t('currentlyUsing')} <code>{mapperActiveName}</code></p>
   {/if}
   {#if mapperError}
-    <p class="description" style="color: #e74c3c;">Room format error: {mapperError}</p>
+    <p class="description" style="color: #e74c3c;">{mapperI18n.t('roomFormatError', { error: mapperError })}</p>
   {/if}
 {/if}
 </section>

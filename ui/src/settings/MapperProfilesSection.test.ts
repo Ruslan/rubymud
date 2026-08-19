@@ -3,6 +3,7 @@ import { mount, tick, unmount } from 'svelte';
 
 import MapperProfilesSection from './MapperProfilesSection.svelte';
 import { emptyMapperProfileForm } from './mapperProfileForm';
+import { readResponseError } from './responseError';
 
 describe('MapperProfilesSection', () => {
   let target: HTMLDivElement;
@@ -72,5 +73,54 @@ describe('MapperProfilesSection', () => {
     await tick();
 
     expect(replayMapperProfileChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it('renders Russian labels and aria copy while leaving patterns and commands untouched', async () => {
+    const form = emptyMapperProfileForm();
+    form.pattern = '^\\[ Exits:\\s*(.*?)\\s*\\]$';
+    form.door_open = 'open door {dir_en}';
+    target = document.createElement('div');
+    document.body.append(target);
+    component = mount(MapperProfilesSection, {
+      target,
+      props: {
+        locale: 'ru', mapperForm: form,
+        saveMapperProfile: vi.fn(), validateMapperProfileDraft: vi.fn(),
+        startMapperProfileEdit: vi.fn(), copyMapperProfile: vi.fn(), cancelMapperProfileEdit: vi.fn(),
+        deleteMapperProfileRow: vi.fn(), replayMapperProfileDraft: vi.fn(), replayMapperProfileChanged: vi.fn(),
+      },
+    });
+    await tick();
+
+    expect(target.textContent).toContain('Форматы комнат');
+    expect(target.querySelector('em')?.textContent).toBe('внесённый в проект Go-детектор');
+    expect(target.querySelector('[aria-label="Шаблон выходов"]')).not.toBeNull();
+    expect(target.querySelector<HTMLInputElement>('[name="not-present"]')).toBeNull();
+    expect(target.querySelector<HTMLInputElement>('[aria-label="Шаблон выходов"]')?.value).toBe(form.pattern);
+    expect(target.querySelector<HTMLInputElement>('[aria-label="Команда открытия двери"]')?.value).toBe('open door {dir_en}');
+  });
+
+  it.each([
+    ['en', 'exits pattern must contain exactly one capture group'],
+    ['ru', 'шаблон выходов должен содержать ровно одну группу захвата'],
+  ] as const)('shows the replay validation envelope error in %s', async (locale, error) => {
+    const mapperReplayError = await readResponseError(
+      new Response(JSON.stringify({ ok: false, error }), { status: 400 }),
+      'fallback',
+    );
+    target = document.createElement('div');
+    document.body.append(target);
+    component = mount(MapperProfilesSection, {
+      target,
+      props: {
+        locale, mapperForm: emptyMapperProfileForm(), mapperReplayError,
+        saveMapperProfile: vi.fn(), validateMapperProfileDraft: vi.fn(),
+        startMapperProfileEdit: vi.fn(), copyMapperProfile: vi.fn(), cancelMapperProfileEdit: vi.fn(),
+        deleteMapperProfileRow: vi.fn(), replayMapperProfileDraft: vi.fn(), replayMapperProfileChanged: vi.fn(),
+      },
+    });
+    await tick();
+
+    expect(target.querySelector('.replay-status')?.textContent).toBe(error);
   });
 });
