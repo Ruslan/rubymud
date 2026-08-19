@@ -1,4 +1,5 @@
 import { fetchWithToken } from "../dom";
+import { createMapperI18n, type MapperI18n } from './i18n';
 import {
   canRoute,
   cellPatchPayload,
@@ -120,35 +121,35 @@ function describeAttrPatch(
   patch: AttrPatch,
   dir: string,
   doorOpen: string,
+  i18n: MapperI18n,
 ): string {
   if (patch.phrase !== undefined) {
     return patch.phrase
-      ? `passage uses '${patch.phrase}' instead of the direction`
-      : "traversal phrase removed — the edge uses its direction again";
+      ? i18n.t('phraseSet', { phrase: patch.phrase })
+      : i18n.t('phraseRemoved');
   }
   if (patch.door !== undefined) {
     return patch.door
-      ? "door marked — the route sends an opening command before the step"
-      : "door mark removed";
+      ? i18n.t('doorSet')
+      : i18n.t('doorRemoved');
   }
   if (patch.locked !== undefined) {
     return patch.locked
-      ? "door marked locked by default from this side"
-      : "locked mark removed";
+      ? i18n.t('lockedSet')
+      : i18n.t('lockedRemoved');
   }
   if (patch.open_cmd !== undefined) {
-    if (patch.open_cmd) return `opening command: '${patch.open_cmd}'`;
+    if (patch.open_cmd) return i18n.t('openSet', { command: patch.open_cmd });
     return doorOpen
-      ? `opening command reset — the route sends '${renderDefaultOpen(doorOpen, dir)}'`
-      : "opening command reset — this MUD's room format does not open doors," +
-        " so the route sends nothing";
+      ? i18n.t('openReset', { command: renderDefaultOpen(doorOpen, dir) })
+      : i18n.t('openResetEmpty');
   }
   if (patch.no_route !== undefined) {
     return patch.no_route
-      ? "routes will avoid this edge (manual movement still works)"
-      : "routing through this edge is allowed again";
+      ? i18n.t('noRouteSet')
+      : i18n.t('noRouteRemoved');
   }
-  return "edge attribute saved";
+  return i18n.t('attrSaved');
 }
 
 interface MapPaneConfig {
@@ -158,6 +159,7 @@ interface MapPaneConfig {
   // menu's "Вставить путь в чат" action. Optional so the map module stays
   // decoupled from the input DOM.
   setInputText?: (text: string) => void;
+  locale?: unknown;
 }
 
 // Endpoint response for POST /api/sessions/{id}/map-path.
@@ -278,8 +280,10 @@ export class MapPaneController {
   private zoneOperationBusy = false;
   private keyboardListeners = new AbortController();
   private knowledgeDialog: RoomKnowledgeDialog;
+  private i18n: MapperI18n;
 
   constructor(private config: MapPaneConfig) {
+    this.i18n = createMapperI18n(config.locale);
     this.root = document.createElement("div");
     this.root.className = "map-pane";
     this.knowledgeDialog = new RoomKnowledgeDialog(this.root);
@@ -290,27 +294,27 @@ export class MapPaneController {
 
     this.zoneSelect = document.createElement("select");
     this.zoneSelect.className = "map-pane__zone";
-    this.zoneSelect.title = "Zone";
+    this.zoneSelect.title = this.i18n.t('zone');
     this.zoneSelect.addEventListener("change", () => {
       void this.showZone(this.zoneSelect.value, { resetView: true }, this.nextLoadGeneration());
     });
     bar.appendChild(this.zoneSelect);
 
-    this.searchButton = this.iconButton("🔍", "Find room");
+    this.searchButton = this.iconButton("🔍", this.i18n.t('findRoom'));
     this.searchButton.addEventListener("click", () => this.toggleSearchPopover());
     bar.appendChild(this.searchButton);
 
     this.searchInput = document.createElement("input");
     this.searchInput.type = "search";
     this.searchInput.className = "map-pane__search";
-    this.searchInput.placeholder = "Find room";
+    this.searchInput.placeholder = this.i18n.t('findRoom');
     this.searchInput.addEventListener("input", () => void this.onSearch());
 
-    this.managerButton = this.iconButton("⌗", "Zone manager");
+    this.managerButton = this.iconButton("⌗", this.i18n.t('zoneManager'));
     this.managerButton.addEventListener("click", () => this.toggleManagerPopover());
     bar.appendChild(this.managerButton);
 
-    this.recordingToggle = this.iconButton("OBS", "Diagnostic movement observation; no rooms are written");
+    this.recordingToggle = this.iconButton(this.i18n.t('recordingIdle'), this.i18n.t('recordingDiagnostic'));
     this.recordingToggle.classList.add("map-pane__recording-toggle");
     this.recordingToggle.setAttribute("aria-pressed", "false");
     this.recordingToggle.addEventListener("click", () => void this.toggleMapRecording());
@@ -320,8 +324,8 @@ export class MapPaneController {
     this.selectionToggle.type = "button";
     this.selectionToggle.className = "map-pane__tool";
     this.selectionToggle.textContent = "⌗";
-    this.selectionToggle.title = "Select rooms";
-    this.selectionToggle.setAttribute("aria-label", "Select rooms");
+    this.selectionToggle.title = this.i18n.t('selectRooms');
+    this.selectionToggle.setAttribute("aria-label", this.i18n.t('selectRooms'));
     this.selectionToggle.setAttribute("aria-pressed", "false");
     this.selectionToggle.addEventListener("click", () => this.toggleSelectionMode());
     this.selectionToggle.hidden = true;
@@ -336,8 +340,8 @@ export class MapPaneController {
     this.moveZoneButton = document.createElement("button");
     this.moveZoneButton.type = "button";
     this.moveZoneButton.className = "map-pane__zone-command";
-    this.moveZoneButton.textContent = "Move to zone…";
-    this.moveZoneButton.title = "Move selected rooms to a zone";
+    this.moveZoneButton.textContent = this.i18n.t('moveToZone');
+    this.moveZoneButton.title = this.i18n.t('moveSelectedTitle');
     this.moveZoneButton.disabled = true;
     this.moveZoneButton.addEventListener("click", () => this.openZoneDialog("move"));
     this.moveZoneButton.hidden = true;
@@ -346,8 +350,8 @@ export class MapPaneController {
     this.renameZoneButton = document.createElement("button");
     this.renameZoneButton.type = "button";
     this.renameZoneButton.className = "map-pane__zone-command";
-    this.renameZoneButton.textContent = "Rename zone…";
-    this.renameZoneButton.title = "Rename the current zone";
+    this.renameZoneButton.textContent = this.i18n.t('renameZone');
+    this.renameZoneButton.title = this.i18n.t('renameZoneTitle');
     this.renameZoneButton.disabled = true;
     this.renameZoneButton.addEventListener("click", () => this.openZoneDialog("rename"));
     this.renameZoneButton.hidden = true;
@@ -355,10 +359,10 @@ export class MapPaneController {
 
     const followLabel = document.createElement("label");
     followLabel.className = "map-pane__follow";
-    followLabel.title = "Follow the live player position";
+    followLabel.title = this.i18n.t('followTitle');
     this.followToggle = document.createElement("input");
     this.followToggle.type = "checkbox";
-    this.followToggle.setAttribute("aria-label", "Follow the live player position");
+    this.followToggle.setAttribute("aria-label", this.i18n.t('followTitle'));
     this.followToggle.checked = true;
     followLabel.classList.add("on");
     this.followToggle.addEventListener("change", () => {
@@ -369,13 +373,13 @@ export class MapPaneController {
     });
     followLabel.appendChild(this.followToggle);
     const followText = document.createElement("span");
-    followText.textContent = "Follow";
+    followText.textContent = this.i18n.t('follow');
     followLabel.appendChild(followText);
     bar.appendChild(followLabel);
 
     this.confidenceBadge = document.createElement("span");
     this.confidenceBadge.className = "map-pane__confidence";
-    this.confidenceBadge.title = "Tracker confidence";
+    this.confidenceBadge.title = this.i18n.t('trackerConfidence');
     this.confidenceBadge.textContent = "⚪";
     bar.appendChild(this.confidenceBadge);
 
@@ -399,9 +403,9 @@ export class MapPaneController {
     this.walkResumeButton = document.createElement("button");
     this.walkResumeButton.type = "button";
     this.walkResumeButton.className = "map-pane__walk-resume";
-    this.walkResumeButton.textContent = "Continue";
-    this.walkResumeButton.setAttribute("aria-label", "Continue paused map walk");
-    this.walkResumeButton.title = "Continue paused map walk";
+    this.walkResumeButton.textContent = this.i18n.t('continue');
+    this.walkResumeButton.setAttribute("aria-label", this.i18n.t('continueWalk'));
+    this.walkResumeButton.title = this.i18n.t('continueWalk');
     this.walkResumeButton.hidden = true;
     this.walkResumeButton.addEventListener("click", () => void this.resumeMapWalk());
     bar.appendChild(this.walkResumeButton);
@@ -409,9 +413,9 @@ export class MapPaneController {
     this.walkStopButton = document.createElement("button");
     this.walkStopButton.type = "button";
     this.walkStopButton.className = "map-pane__walk-stop";
-    this.walkStopButton.textContent = "Stop";
-    this.walkStopButton.setAttribute("aria-label", "Stop map walk");
-    this.walkStopButton.title = "Stop map walk";
+    this.walkStopButton.textContent = this.i18n.t('stop');
+    this.walkStopButton.setAttribute("aria-label", this.i18n.t('stopWalk'));
+    this.walkStopButton.title = this.i18n.t('stopWalk');
     this.walkStopButton.hidden = true;
     this.walkStopButton.addEventListener("click", () => void this.cancelMapWalk());
     bar.appendChild(this.walkStopButton);
@@ -443,8 +447,8 @@ export class MapPaneController {
     closeStatus.type = "button";
     closeStatus.className = "map-pane__status-close";
     closeStatus.textContent = "×";
-    closeStatus.setAttribute("aria-label", "Dismiss message");
-    closeStatus.title = "Dismiss message";
+    closeStatus.setAttribute("aria-label", this.i18n.t('dismiss'));
+    closeStatus.title = this.i18n.t('dismiss');
     closeStatus.addEventListener("click", () => this.dismissStatus());
     this.statusLine.appendChild(closeStatus);
     this.statusLine.style.display = "none";
@@ -512,6 +516,63 @@ export class MapPaneController {
       if (this.disposed) return;
       this.renderer.resize();
     });
+  }
+
+  // Locale changes normally arrive with a page reload, but keeping the controller
+  // switchable makes an eventual live settings broadcast safe: static controls are
+  // refreshed and coordinate-bound overlays are closed before they can mix locales.
+  setLocale(locale: unknown): void {
+    const next = createMapperI18n(locale);
+    if (next.locale === this.i18n.locale) return;
+    const opener = this.searchPopover ? this.searchOpener
+      : this.managerPopover ? this.managerOpener
+        : this.zoneDialog ? this.zoneDialogOpener
+          : this.reconciliationDialog ? this.reconciliationOpener : null;
+    this.i18n = next;
+    this.closeCellMenu();
+    this.closeSearchPopover(false);
+    this.closeManagerPopover(false);
+    this.closeZoneDialog(false);
+    this.closeReconciliationDialog(false);
+    this.dismissStatus();
+    // position_reason is localized server copy, but the current wire/UI model has
+    // no reason_code/args with which to rebuild it. Drop only the cached display
+    // reason; the next room_position event restores a reason in the new locale.
+    // Replacing the snapshot avoids mutating an object owned by the caller.
+    if (this.lastPosition?.reason) this.lastPosition = { ...this.lastPosition, reason: undefined };
+    this.zoneSelect.title = next.t('zone');
+    this.searchButton.title = next.t('findRoom');
+    this.searchButton.setAttribute('aria-label', next.t('findRoom'));
+    this.searchInput.placeholder = next.t('findRoom');
+    this.managerButton.title = next.t('zoneManager');
+    this.managerButton.setAttribute('aria-label', next.t('zoneManager'));
+    this.selectionToggle.title = next.t('selectRooms');
+    this.selectionToggle.setAttribute('aria-label', next.t('selectRooms'));
+    this.moveZoneButton.textContent = next.t('moveToZone');
+    this.moveZoneButton.title = next.t('moveSelectedTitle');
+    this.renameZoneButton.textContent = next.t('renameZone');
+    this.renameZoneButton.title = next.t('renameZoneTitle');
+    const follow = this.followToggle.closest('label');
+    if (follow) follow.title = next.t('followTitle');
+    this.followToggle.setAttribute('aria-label', next.t('followTitle'));
+    const followText = follow?.querySelector('span');
+    if (followText) followText.textContent = next.t('follow');
+    this.confidenceBadge.title = next.t('trackerConfidence');
+    this.recordingToggle.setAttribute('aria-label', next.t('recordingDiagnostic'));
+    this.walkResumeButton.textContent = next.t('continue');
+    this.walkResumeButton.title = next.t('continueWalk');
+    this.walkResumeButton.setAttribute('aria-label', next.t('continueWalk'));
+    this.walkStopButton.textContent = next.t('stop');
+    this.walkStopButton.title = next.t('stopWalk');
+    this.walkStopButton.setAttribute('aria-label', next.t('stopWalk'));
+    const dismiss = this.statusLine.querySelector<HTMLButtonElement>('.map-pane__status-close');
+    if (dismiss) { dismiss.title = next.t('dismiss'); dismiss.setAttribute('aria-label', next.t('dismiss')); }
+    this.setSelection(this.selectedCoords);
+    this.updateRecordButton();
+    if (this.lastPosition) this.updateConfidence(this.lastPosition);
+    this.renderRecordingControl(this.recordingState, false);
+    this.renderWalkControl(this.walk, false);
+    if (opener?.isConnected) opener.focus();
   }
 
   dispose(): void {
@@ -634,7 +695,7 @@ export class MapPaneController {
     if (id == null) {
       if (!this.isCurrentLoad(generation, id)) return;
       this.clearMapView();
-      this.setStatus("No active map set. Select one in session settings.");
+      this.setStatus(this.i18n.t('noActiveMapSet'));
       return;
     }
     try {
@@ -680,7 +741,7 @@ export class MapPaneController {
     } catch (err) {
       if (!this.isCurrentLoad(generation, id)) return;
       this.setStatus(
-        `Failed to load zones: ${err instanceof Error ? err.message : String(err)}`,
+        this.i18n.t('failedLoadZones', { error: err instanceof Error ? err.message : String(err) }),
       );
     }
   }
@@ -742,7 +803,7 @@ export class MapPaneController {
     } catch (err) {
       if (!this.isCurrentLoad(generation, this.mapSetID)) return null;
       this.setStatus(
-        `Failed to load zone: ${err instanceof Error ? err.message : String(err)}`,
+        this.i18n.t('failedLoadZone', { error: err instanceof Error ? err.message : String(err) }),
       );
       return null;
     }
@@ -799,11 +860,11 @@ export class MapPaneController {
   }
 
   private setSelection(coords: ZoneCoord[]): void {
-    this.selectedCoords = canonicalCoords(coords);
+    this.selectedCoords = canonicalCoords(coords, this.i18n);
     const count = this.selectedCoords.length;
     this.selectionCount.hidden = count === 0;
     this.selectionCount.textContent = String(count);
-    this.selectionCount.title = `${count} selected room${count === 1 ? "" : "s"}`;
+    this.selectionCount.title = this.i18n.plural('selectedRoom', count);
     this.selectionCount.setAttribute("aria-label", this.selectionCount.title);
     this.moveZoneButton.disabled = this.zoneOperationBusy || count === 0 || count > 8000 || this.config.sessionID == null;
     this.managerButton.classList.toggle("on", this.renderer.isSelectionMode() || count > 0);
@@ -813,7 +874,7 @@ export class MapPaneController {
     this.selectedCoords = [];
     this.selectionCount.hidden = true;
     this.selectionCount.textContent = "";
-    this.selectionCount.setAttribute("aria-label", "0 selected rooms");
+    this.selectionCount.setAttribute("aria-label", this.i18n.plural('selectedRoom', 0));
     this.moveZoneButton.disabled = true;
     this.managerButton.classList.toggle("on", this.renderer?.isSelectionMode() ?? false);
     this.renderer?.clearSelection(false);
@@ -838,7 +899,7 @@ export class MapPaneController {
     const popover = document.createElement("div");
     popover.className = "map-pane__popover map-pane__search-popover";
     popover.setAttribute("role", "dialog");
-    popover.setAttribute("aria-label", "Find room");
+    popover.setAttribute("aria-label", this.i18n.t('findRoom'));
     this.searchResults = document.createElement("div");
     this.searchResults.className = "map-pane__search-results";
     popover.append(this.searchInput, this.searchResults);
@@ -875,18 +936,18 @@ export class MapPaneController {
     const popover = document.createElement("div");
     popover.className = "map-pane__popover map-pane__manager-popover";
     popover.setAttribute("role", "dialog");
-    popover.setAttribute("aria-label", "Zone manager");
+    popover.setAttribute("aria-label", this.i18n.t('zoneManager'));
     const select = document.createElement("button");
     select.type = "button";
     select.className = "map-pane__manager-action";
-    select.textContent = this.renderer.isSelectionMode() ? "Stop selecting" : "Select rooms";
+    select.textContent = this.renderer.isSelectionMode() ? this.i18n.t('stopSelecting') : this.i18n.t('selectRooms');
     select.addEventListener("click", () => {
       this.toggleSelectionMode();
       this.managerButton.focus();
     });
     const count = document.createElement("div");
     count.className = "map-pane__manager-count";
-    count.textContent = `${this.selectedCoords.length} selected`;
+    count.textContent = this.i18n.t('selected', { count: this.selectedCoords.length });
     this.moveZoneButton.hidden = false;
     this.renameZoneButton.hidden = false;
     popover.append(select, count, this.moveZoneButton, this.renameZoneButton);
@@ -917,7 +978,7 @@ export class MapPaneController {
   private placePopover(popover: HTMLElement, opener: HTMLElement): void {
     const root = this.root.getBoundingClientRect();
     const anchor = opener.getBoundingClientRect();
-    const width = Math.min(300, Math.max(180, root.width - 12));
+    const width = Math.min(300, Math.max(0, root.width - 12));
     popover.style.width = `${width}px`;
     const left = Math.max(6, Math.min(anchor.left - root.left, root.width - width - 6));
     popover.style.left = `${left}px`;
@@ -931,9 +992,9 @@ export class MapPaneController {
       : document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.closeManagerPopover(false);
     const source = this.currentZone;
-    const selection = canonicalCoords(this.selectedCoords);
+    const selection = canonicalCoords(this.selectedCoords, this.i18n);
     if (kind === "move" && (selection.length === 0 || selection.length > 8000)) {
-      this.setStatus(selection.length > 8000 ? "Selection exceeds 8000 rooms" : "Select rooms first", { sticky: true });
+      this.setStatus(selection.length > 8000 ? this.i18n.t('selectionTooLarge') : this.i18n.t('selectFirst'), { sticky: true });
       return;
     }
 
@@ -945,11 +1006,11 @@ export class MapPaneController {
     dialog.className = "map-zone-dialog";
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
-    dialog.setAttribute("aria-label", kind === "move" ? "Move to zone" : "Rename zone");
+    dialog.setAttribute("aria-label", kind === "move" ? this.i18n.t('moveToZone') : this.i18n.t('renameZone'));
     backdrop.appendChild(dialog);
 
     const title = document.createElement("h2");
-    title.textContent = kind === "move" ? "Move to zone" : "Rename zone";
+    title.textContent = kind === "move" ? this.i18n.t('moveToZone') : this.i18n.t('renameZone');
     dialog.appendChild(title);
     const sourceLine = document.createElement("div");
     sourceLine.className = "map-zone-dialog__source";
@@ -957,10 +1018,10 @@ export class MapPaneController {
     dialog.appendChild(sourceLine);
 
     const existingLabel = document.createElement("label");
-    existingLabel.textContent = "Existing zone";
+    existingLabel.textContent = this.i18n.t('existingZone');
     const search = document.createElement("input");
     search.type = "search";
-    search.placeholder = "Search zones";
+    search.placeholder = this.i18n.t('searchZones');
     search.className = "map-zone-dialog__search";
     existingLabel.appendChild(search);
     const existing = document.createElement("select");
@@ -969,7 +1030,7 @@ export class MapPaneController {
     dialog.appendChild(existingLabel);
 
     const newLabel = document.createElement("label");
-    newLabel.textContent = "New zone";
+    newLabel.textContent = this.i18n.t('newZone');
     const newName = document.createElement("input");
     newName.type = "text";
     newName.autocomplete = "off";
@@ -988,13 +1049,13 @@ export class MapPaneController {
     actions.className = "map-zone-dialog__actions";
     const cancel = document.createElement("button");
     cancel.type = "button";
-    cancel.textContent = "Cancel";
+    cancel.textContent = this.i18n.t('cancel');
     const preview = document.createElement("button");
     preview.type = "button";
-    preview.textContent = "Preview";
+    preview.textContent = this.i18n.t('preview');
     const apply = document.createElement("button");
     apply.type = "button";
-    apply.textContent = "Apply";
+    apply.textContent = this.i18n.t('apply');
     apply.disabled = true;
     actions.append(cancel, preview, apply);
     dialog.appendChild(actions);
@@ -1005,7 +1066,7 @@ export class MapPaneController {
       existing.innerHTML = "";
       const blank = document.createElement("option");
       blank.value = "";
-      blank.textContent = "Select a zone";
+      blank.textContent = this.i18n.t('selectZone');
       existing.appendChild(blank);
       for (const zone of this.zoneNames) {
         if (zone === source || (needle && !zone.toLocaleLowerCase().includes(needle))) continue;
@@ -1036,7 +1097,7 @@ export class MapPaneController {
       } catch (err) {
         if (listController.signal.aborted || this.zoneDialog !== backdrop || listGeneration !== this.zoneListGeneration) return;
         if (!info.textContent) {
-          info.textContent = `Failed to load zones: ${err instanceof Error ? err.message : String(err)}`;
+          info.textContent = this.i18n.t('failedLoadZones', { error: err instanceof Error ? err.message : String(err) });
           info.dataset.error = "true";
         }
       }
@@ -1044,7 +1105,7 @@ export class MapPaneController {
 
     let previewResult: ZoneMovePreview | null = null;
     let applying = false;
-    const target = (): string => canonicalZoneName(newName.value || existing.value).value;
+    const target = (): string => canonicalZoneName(newName.value || existing.value, this.i18n).value;
     const invalidate = () => {
       // A response for the old target must not re-enable Apply after an
       // operator has already changed the form.
@@ -1070,13 +1131,13 @@ export class MapPaneController {
     };
     const latest = (generation: number) => !this.disposed && this.zoneDialog === backdrop && generation === this.zoneRequestGeneration;
     const request = async (applyNow: boolean) => {
-      const checkedTarget = canonicalZoneName(newName.value || existing.value);
+      const checkedTarget = canonicalZoneName(newName.value || existing.value, this.i18n);
       const targetZone = checkedTarget.value;
       if (checkedTarget.error) {
-        setError(checkedTarget.error === "Zone name is required" ? "Choose an existing zone or enter a new name" : checkedTarget.error);
+        setError(checkedTarget.value === '' ? this.i18n.t('chooseZoneOrName') : checkedTarget.error);
         return;
       }
-      if (targetZone === source) { setError("Source and target zones must differ"); return; }
+      if (targetZone === source) { setError(this.i18n.t('distinctZones')); return; }
       if (applyNow && !previewResult) return;
       this.zoneRequest?.abort();
       const controller = new AbortController();
@@ -1086,7 +1147,7 @@ export class MapPaneController {
       apply.disabled = true;
       if (applyNow) applying = true;
       info.dataset.error = "false";
-      info.textContent = applyNow ? "Applying…" : "Previewing…";
+      info.textContent = applyNow ? this.i18n.t('applying') : this.i18n.t('previewing');
       const path = kind === "rename"
         ? (applyNow ? "map-zones/rename/apply" : "map-zones/rename/preview")
         : (applyNow ? "map-zones/apply" : "map-zones/preview");
@@ -1094,7 +1155,7 @@ export class MapPaneController {
         const response = await postZoneMove(this.config.sessionID!, path, body(applyNow), controller.signal);
         if (!latest(generation)) return;
         if (!response.ok || !response.preview) {
-          const reason = response.reason ?? "Zone operation was refused";
+          const reason = response.reason ?? this.i18n.t('operationRefused');
           if (/stale topology revision/i.test(reason)) await this.handleStaleZoneOperation(source, setError);
           else setError(reason);
           return;
@@ -1103,10 +1164,10 @@ export class MapPaneController {
           previewResult = response.preview;
           if (!Number.isSafeInteger(response.preview.revision) || response.preview.revision == null || response.preview.revision < 0) {
             previewResult = null;
-            setError("Preview did not include a valid topology revision");
+            setError(this.i18n.t('previewRevision'));
             return;
           }
-          info.textContent = previewSummary(response.preview) + (response.preview.source_empties ? " · source will be empty" : "");
+          info.textContent = previewSummary(response.preview, this.i18n) + (response.preview.source_empties ? ` · ${this.i18n.t('sourceEmpty')}` : '');
           apply.disabled = response.preview.collision_count > 0;
           return;
         }
@@ -1118,7 +1179,7 @@ export class MapPaneController {
         try {
           const activeMapSet = response.active_map_set ?? response.forked_to ?? this.mapSetID;
           await this.refreshAfterZoneOperation(activeMapSet, source, targetZone, response.preview.source_empties);
-          if (!this.disposed) this.setStatus(kind === "move" ? "Rooms moved" : "Zone renamed", { autoHide: true });
+          if (!this.disposed) this.setStatus(kind === "move" ? this.i18n.t('roomsMoved') : this.i18n.t('zoneRenamed'), { autoHide: true });
         } finally {
           this.zoneOperationBusy = false;
           this.renameZoneButton.disabled = !this.currentZone || this.config.sessionID == null;
@@ -1183,7 +1244,7 @@ export class MapPaneController {
   }
 
   private async handleStaleZoneOperation(source: string, setError: (message: string) => void): Promise<void> {
-    setError("Topology changed; preview again.");
+    setError(this.i18n.t('topologyChanged'));
     // Fetch exactly the currently displayed zone once. Form fields and the
     // canvas-owned selection remain untouched, so retry does not lose operator work.
     if (this.currentZone !== source) return;
@@ -1256,17 +1317,23 @@ export class MapPaneController {
   onMapRecordingState(state: MapRecordingState): void {
     if (state.revision < this.recordingState.revision) return;
     this.recordingState = state;
+    this.renderRecordingControl(state);
+    if (state.mode === "conflict" && state.conflict && !this.reconciliationDialog) this.openReconciliationDialog();
+    if (state.mode !== "conflict") this.closeReconciliationDialog();
+  }
+
+  private renderRecordingControl(state: MapRecordingState, useSnapshotReason = true): void {
     const active = state.mode === "recording" || state.mode === "armed";
     this.recordingToggle.setAttribute("aria-pressed", String(active));
     this.recordingToggle.classList.toggle("on", active);
-    this.recordingToggle.textContent = state.mode === "conflict" ? "OBS!" : active ? "STOP OBS" : "OBS";
+    this.recordingToggle.textContent = state.mode === "conflict"
+      ? this.i18n.t('recordingAlert')
+      : active ? this.i18n.t('recordingStop') : this.i18n.t('recordingIdle');
     this.recordingToggle.title = state.mode === "conflict"
-      ? `Recording paused: ${state.reason ?? "conflict"}`
+      ? this.i18n.t('recordingConflictTitle', { reason: useSnapshotReason ? state.reason ?? this.i18n.t('conflict') : this.i18n.t('conflict') })
       : active
-        ? `Stop recording observation (${state.pending} pending; foundation does not write rooms)`
-        : "Start recording observation (foundation only; no rooms are written)";
-    if (state.mode === "conflict" && state.conflict && !this.reconciliationDialog) this.openReconciliationDialog();
-    if (state.mode !== "conflict") this.closeReconciliationDialog();
+        ? this.i18n.t('recordingActiveTitle', { count: state.pending })
+        : this.i18n.t('recordingStartTitle');
   }
 
   resetMapRecordingState(state: MapRecordingState): void {
@@ -1285,28 +1352,28 @@ export class MapPaneController {
       const data = await res.json();
       if (!res.ok) throw new Error(data.reason ?? `HTTP ${res.status}`);
       if (data.state) this.onMapRecordingState(data.state as MapRecordingState);
-      if (!data.started && !stopping) this.setStatus(`Recording not started: ${data.reason ?? "?"}`, { sticky: true });
+      if (!data.started && !stopping) this.setStatus(this.i18n.t('recordingStartFailed', { reason: data.reason ?? '?' }), { sticky: true });
     } catch (err) {
-      this.setStatus(`Recording control failed: ${err instanceof Error ? err.message : String(err)}`, { sticky: true });
+      this.setStatus(this.i18n.t('recordingControlFailed', { error: err instanceof Error ? err.message : String(err) }), { sticky: true });
     }
   }
 
-  private closeReconciliationDialog(): void { const d=this.reconciliationDialog;if(!d)return;this.reconciliationDialog=null;d.closest(".map-zone-dialog-backdrop")?.remove();const opener=this.reconciliationOpener;this.reconciliationOpener=null;if(opener?.isConnected)opener.focus(); }
+  private closeReconciliationDialog(returnFocus = true): void { const d=this.reconciliationDialog;if(!d)return;this.reconciliationDialog=null;d.closest(".map-zone-dialog-backdrop")?.remove();const opener=this.reconciliationOpener;this.reconciliationOpener=null;if(returnFocus&&opener?.isConnected)opener.focus(); }
 
   private openReconciliationDialog(): void {
     const conflict=this.recordingState.conflict;if(!conflict||this.reconciliationDialog||this.config.sessionID==null)return;
     this.reconciliationOpener=this.root.contains(document.activeElement)?document.activeElement as HTMLElement:this.recordingToggle;
     const backdrop=document.createElement("div");backdrop.className="map-zone-dialog-backdrop";
-    const dialog=document.createElement("dialog");dialog.className="map-zone-dialog";dialog.setAttribute("aria-modal","true");dialog.setAttribute("aria-label","Resolve mapper conflict");backdrop.appendChild(dialog);
-    const title=document.createElement("h3");title.textContent="Resolve observed room";dialog.appendChild(title);
-    const summary=document.createElement("p");summary.textContent=`Observed: ${conflict.observed.hint || "(unnamed)"}. Expected: ${conflict.expected_hint || `${conflict.expected.zone} (${conflict.expected.x}, ${conflict.expected.y}, ${conflict.expected.l})`}. Command: ${conflict.move.command}`;dialog.appendChild(summary);
-    const diff=document.createElement("div");diff.className="map-reconciliation-diff";for(const field of ["hint","desc","exits"] as const){const row=document.createElement("div");const heading=document.createElement("strong");heading.textContent=field.toUpperCase();const expected=document.createElement("pre");expected.textContent=`Expected: ${conflict.expected_room?.[field]??""}`;const observed=document.createElement("pre");observed.textContent=`Observed: ${conflict.observed[field]??""}`;row.append(heading,expected,observed);diff.appendChild(row)}dialog.appendChild(diff);
-    const rooms=this.zoneCache.get(this.currentZone)??[];const select=document.createElement("select");select.setAttribute("aria-label","Existing target room");for(const room of rooms){const o=document.createElement("option");o.value=JSON.stringify({zone:room.z,x:room.x,y:room.y,l:room.l});o.textContent=`${room.h||"(unnamed)"} — (${room.x}, ${room.y}, ${room.l})`;select.appendChild(o)}dialog.appendChild(select);
-    const source=conflict.move.from;const coords=["display_x","display_y","display_l"] as const;const values=[source.x,source.y,source.l];const inputs:HTMLInputElement[]=[];coords.forEach((name,i)=>{const label=document.createElement("label");label.textContent=name.replace("display_","Display ").toUpperCase()+" ";const input=document.createElement("input");input.type="number";input.value=String(values[i]);input.setAttribute("aria-label",name);label.appendChild(input);dialog.appendChild(label);inputs.push(input)});
-    const status=document.createElement("p");status.setAttribute("aria-live","polite");dialog.appendChild(status);const actions=document.createElement("div");actions.className="map-zone-dialog__actions";const preview=document.createElement("button");preview.type="button";preview.textContent="Preview";const apply=document.createElement("button");apply.type="button";apply.textContent="Apply";apply.disabled=true;const cancel=document.createElement("button");cancel.type="button";cancel.textContent="Cancel";actions.append(preview,apply,cancel);dialog.appendChild(actions);
+    const dialog=document.createElement("dialog");dialog.className="map-zone-dialog";dialog.setAttribute("aria-modal","true");dialog.setAttribute("aria-label",this.i18n.t('reconcileDialog'));backdrop.appendChild(dialog);
+    const title=document.createElement("h3");title.textContent=this.i18n.t('reconcileTitle');dialog.appendChild(title);
+    const expectedName=conflict.expected_hint || `${conflict.expected.zone} (${conflict.expected.x}, ${conflict.expected.y}, ${conflict.expected.l})`;const summary=document.createElement("p");summary.textContent=this.i18n.t('reconcileSummary',{observed:conflict.observed.hint||this.i18n.t('unnamed'),expected:expectedName,command:conflict.move.command});dialog.appendChild(summary);
+    const fieldLabels={hint:this.i18n.t('fieldHint'),desc:this.i18n.t('fieldDesc'),exits:this.i18n.t('fieldExits')};const diff=document.createElement("div");diff.className="map-reconciliation-diff";for(const field of ["hint","desc","exits"] as const){const row=document.createElement("div");const heading=document.createElement("strong");heading.textContent=fieldLabels[field];const expected=document.createElement("pre");expected.textContent=this.i18n.t('expected',{value:conflict.expected_room?.[field]??''});const observed=document.createElement("pre");observed.textContent=this.i18n.t('observed',{value:conflict.observed[field]??''});row.append(heading,expected,observed);diff.appendChild(row)}dialog.appendChild(diff);
+    const rooms=this.zoneCache.get(this.currentZone)??[];const select=document.createElement("select");select.setAttribute("aria-label",this.i18n.t('existingTargetRoom'));for(const room of rooms){const o=document.createElement("option");o.value=JSON.stringify({zone:room.z,x:room.x,y:room.y,l:room.l});o.textContent=`${room.h||this.i18n.t('unnamed')} — (${room.x}, ${room.y}, ${room.l})`;select.appendChild(o)}dialog.appendChild(select);
+    const source=conflict.move.from;const coords=["display_x","display_y","display_l"] as const;const values=[source.x,source.y,source.l];const inputs:HTMLInputElement[]=[];coords.forEach((name,i)=>{const copy=this.i18n.t('displayCoord',{axis:name.slice(-1).toUpperCase()});const label=document.createElement("label");label.textContent=copy+' ';const input=document.createElement("input");input.type="number";input.value=String(values[i]);input.setAttribute("aria-label",copy);label.appendChild(input);dialog.appendChild(label);inputs.push(input)});
+    const status=document.createElement("p");status.setAttribute("aria-live","polite");dialog.appendChild(status);const actions=document.createElement("div");actions.className="map-zone-dialog__actions";const preview=document.createElement("button");preview.type="button";preview.textContent=this.i18n.t('preview');const apply=document.createElement("button");apply.type="button";apply.textContent=this.i18n.t('apply');apply.disabled=true;const cancel=document.createElement("button");cancel.type="button";cancel.textContent=this.i18n.t('cancel');actions.append(preview,apply,cancel);dialog.appendChild(actions);
     let token="";const invalidate=()=>{token="";apply.disabled=true};select.addEventListener("change",invalidate);inputs.forEach(i=>i.addEventListener("input",invalidate));
-    preview.addEventListener("click",async()=>{try{if(!select.value)throw new Error("Choose an existing target room");if(inputs.some(input=>input.value.trim()===""||!Number.isSafeInteger(Number(input.value))))throw new Error("Display coordinates must be integers");const target=JSON.parse(select.value);const layouts=[{zone:source.zone,x:source.x,y:source.y,l:source.l,display_x:Number(inputs[0].value),display_y:Number(inputs[1].value),display_l:Number(inputs[2].value),pinned:false}];const res=await fetchWithToken(`/api/sessions/${this.config.sessionID}/map-reconciliation/preview`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({conflict_id:conflict.id,target,layouts})});if(!res.ok)throw new Error(await res.text());const data=await res.json();token=data.token;apply.disabled=!token;status.textContent=`Preview ready: ${data.command} → ${data.target.zone} (${data.target.x}, ${data.target.y}, ${data.target.l})`;}catch(err){invalidate();status.textContent=`Preview failed: ${err instanceof Error?err.message:String(err)}`}});
-    apply.addEventListener("click",async()=>{if(!token)return;apply.disabled=true;try{const res=await fetchWithToken(`/api/sessions/${this.config.sessionID}/map-reconciliation/apply`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({conflict_id:conflict.id,token})});if(!res.ok)throw new Error(await res.text());const data=await res.json();if(data.state)this.onMapRecordingState(data.state);this.closeReconciliationDialog();}catch(err){status.textContent=`Apply failed: ${err instanceof Error?err.message:String(err)}`;token="";apply.disabled=true;}});
+    preview.addEventListener("click",async()=>{try{if(!select.value)throw new Error(this.i18n.t('chooseTarget'));if(inputs.some(input=>input.value.trim()===""||!Number.isSafeInteger(Number(input.value))))throw new Error(this.i18n.t('displayCoordsInteger'));const target=JSON.parse(select.value);const layouts=[{zone:source.zone,x:source.x,y:source.y,l:source.l,display_x:Number(inputs[0].value),display_y:Number(inputs[1].value),display_l:Number(inputs[2].value),pinned:false}];const res=await fetchWithToken(`/api/sessions/${this.config.sessionID}/map-reconciliation/preview`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({conflict_id:conflict.id,target,layouts})});if(!res.ok)throw new Error(await res.text());const data=await res.json();token=data.token;apply.disabled=!token;status.textContent=this.i18n.t('previewReady',{command:data.command,zone:data.target.zone,coords:`${data.target.x}, ${data.target.y}, ${data.target.l}`});}catch(err){invalidate();status.textContent=this.i18n.t('previewFailed',{error:err instanceof Error?err.message:String(err)})}});
+    apply.addEventListener("click",async()=>{if(!token)return;apply.disabled=true;try{const res=await fetchWithToken(`/api/sessions/${this.config.sessionID}/map-reconciliation/apply`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({conflict_id:conflict.id,token})});if(!res.ok)throw new Error(await res.text());const data=await res.json();if(data.state)this.onMapRecordingState(data.state);this.closeReconciliationDialog();}catch(err){status.textContent=this.i18n.t('applyFailed',{error:err instanceof Error?err.message:String(err)});token="";apply.disabled=true;}});
     cancel.addEventListener("click",()=>this.closeReconciliationDialog());dialog.addEventListener("cancel",e=>{e.preventDefault();this.closeReconciliationDialog()});dialog.addEventListener("keydown",event=>{if(event.key==="Escape"){event.preventDefault();this.closeReconciliationDialog();return}if(event.key!=="Tab")return;const focusable=[...dialog.querySelectorAll<HTMLElement>("button:not([disabled]), input, select")];if(focusable.length===0)return;const first=focusable[0]!,last=focusable.at(-1)!;if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus()}});backdrop.addEventListener("mousedown",e=>{if(e.target===backdrop)this.closeReconciliationDialog()});this.root.appendChild(backdrop);this.reconciliationDialog=dialog;if(typeof dialog.showModal==="function"){try{dialog.showModal()}catch{}}select.focus();
   }
 
@@ -1349,6 +1416,11 @@ export class MapPaneController {
       this.walkTerminalJobID = Math.max(this.walkTerminalJobID, jobID);
     }
     this.walk = next;
+    this.renderWalkControl(next);
+    if (!next.active && next.reason && next.reason !== "completed") this.setStatus(next.reason);
+  }
+
+  private renderWalkControl(next: MapWalkState, useSnapshotReason = true): void {
     this.walkProgress.hidden = !next.active;
     this.walkStopButton.hidden = !next.active;
     this.walkResumeButton.hidden = !next.active || next.state !== "paused";
@@ -1357,17 +1429,17 @@ export class MapPaneController {
     if (!next.active) {
       this.walkProgress.textContent = "";
       this.walkProgress.removeAttribute("title");
-      if (next.reason && next.reason !== "completed") this.setStatus(next.reason);
       return;
     }
     const hop = next.total > 0 ? Math.min(next.current + 1, next.total) : 0;
     let label: string;
     if (next.state === "paused") {
-      label = `Walk ${next.current}/${next.total}: ${next.reason ?? "paused"}`;
+      const reason = useSnapshotReason ? next.reason ?? this.i18n.t('paused') : this.i18n.t('paused');
+      label = this.i18n.t('walkFailed', { current: next.current, total: next.total, reason });
     } else {
       label = next.state === "stopping"
-        ? `Stopping ${next.current}/${next.total}`
-        : `Walk ${hop}/${next.total}`;
+        ? this.i18n.t('walkStopping', { current: next.current, total: next.total })
+        : this.i18n.t('walkGeneric', { current: hop, total: next.total });
     }
     this.walkProgress.textContent = label;
     this.walkProgress.title = label;
@@ -1385,7 +1457,7 @@ export class MapPaneController {
       this.onMapWalk(state);
     } catch (err) {
       this.setStatus(
-        `Stop failed: ${err instanceof Error ? err.message : String(err)}`,
+        this.i18n.t('stopFailed', { error: err instanceof Error ? err.message : String(err) }),
       );
     }
   }
@@ -1400,7 +1472,7 @@ export class MapPaneController {
       if (!res.ok) throw new Error(await res.text());
       this.onMapWalk(await res.json() as MapWalkState);
     } catch (err) {
-      this.setStatus(`Continue failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.setStatus(this.i18n.t('continueFailed', { error: err instanceof Error ? err.message : String(err) }));
     }
   }
 
@@ -1460,6 +1532,7 @@ export class MapPaneController {
       this.lastPosition,
       this.liveRoom,
       this.currentCellExists(),
+      this.i18n,
     );
     this.recordButton.textContent = st.label;
     this.recordButton.disabled = !st.enabled;
@@ -1473,6 +1546,7 @@ export class MapPaneController {
       this.lastPosition,
       this.liveRoom,
       this.currentCellExists(),
+      this.i18n,
     );
     if (!st.enabled || !st.cell) {
       this.setStatus(st.title, { sticky: true });
@@ -1486,12 +1560,17 @@ export class MapPaneController {
     const glyph = CONF_GLYPH[pos.confidence] ?? "⚪";
     const pending = pos.pendingMoves > 0 ? ` +${pos.pendingMoves}` : "";
     this.confidenceBadge.textContent = glyph + pending;
-    let title = `Confidence: ${pos.confidence}`;
+    const confidence = {
+      green: this.i18n.t('confidenceGreen'),
+      yellow: this.i18n.t('confidenceYellow'),
+      red: this.i18n.t('confidenceRed'),
+    }[pos.confidence] ?? pos.confidence;
+    let title = this.i18n.t('confidence', { confidence });
     if (pos.pendingMoves > 0)
-      title += ` · ${pos.pendingMoves} unconfirmed move(s)`;
+      title += ` · ${this.i18n.plural('unconfirmedMove', pos.pendingMoves)}`;
     if (pos.reason) title += ` · ${pos.reason}`;
-    if (pos.isDT) title += " · ⚠ death trap";
-    if (pos.pipe) title += " · corridor";
+    if (pos.isDT) title += ` · ${this.i18n.t('tipDeathTrap')}`;
+    if (pos.pipe) title += ` · ${this.i18n.t('corridor')}`;
     this.confidenceBadge.title = title;
   }
 
@@ -1536,12 +1615,12 @@ export class MapPaneController {
     _room: SlimRoom,
   ): Promise<void> {
     if (!seam.passable || seam.to == null) {
-      this.setStatus(!seam.passable ? "Seam is blocked" : "Seam target is unresolved");
+      this.setStatus(!seam.passable ? this.i18n.t('seamBlocked') : this.i18n.t('seamUnresolved'));
       return;
     }
     const target = findZoneName(seam.to.zone, this.zoneNames);
     if (!target) {
-      this.setStatus(`Seam target zone "${seam.to.zone}" not found`);
+      this.setStatus(this.i18n.t('seamZoneMissing', { zone: seam.to.zone }));
       return;
     }
     const generation = this.nextLoadGeneration();
@@ -1556,7 +1635,7 @@ export class MapPaneController {
     if (hit) {
       this.renderer.centerOn(hit.x, hit.y, hit.l);
     }
-    this.setStatus(`Jumped via seam to "${target}"`);
+    this.setStatus(this.i18n.t('seamJumped', { zone: target }));
   }
 
   // Cross-zone grid contacts stay grid edges in the map model. They get their
@@ -1568,12 +1647,12 @@ export class MapPaneController {
     _room: SlimRoom,
   ): Promise<void> {
     if (!contact.p) {
-      this.setStatus("Grid edge is blocked");
+      this.setStatus(this.i18n.t('gridBlocked'));
       return;
     }
     const target = this.exactGridTargetZone(contact.z);
     if (!target) {
-      this.setStatus(`Grid target zone "${contact.z}" not found`);
+      this.setStatus(this.i18n.t('gridZoneMissing', { zone: contact.z }));
       return;
     }
     const generation = this.nextLoadGeneration();
@@ -1596,12 +1675,12 @@ export class MapPaneController {
     );
     if (!hit) {
       this.setStatus(
-        `Grid target room "${contact.z} (${contact.x},${contact.y},${contact.l})" not found`,
+        this.i18n.t('gridRoomMissing', { zone: `${contact.z} (${contact.x},${contact.y},${contact.l})` }),
       );
       return;
     }
     this.renderer.centerOn(hit.x, hit.y, hit.l);
-    this.setStatus(`Jumped via grid edge to "${target}"`);
+    this.setStatus(this.i18n.t('gridJumped', { zone: target }));
   }
 
   // Unlike a legacy seam selector, XZ already carries the authoritative target
@@ -1638,16 +1717,16 @@ export class MapPaneController {
     // 1) Status header: confidence + reason, plus a yellow exit-diff + update.
     const header = document.createElement("div");
     header.className = "map-cell-menu__header";
-    header.textContent = statusHeaderText(pos);
+    header.textContent = statusHeaderText(pos, this.i18n);
     menu.appendChild(header);
 
     if (hasExitDiff(pos)) {
       const diff = document.createElement("div");
       diff.className = "map-cell-menu__diff";
-      diff.textContent = formatExitDiff(pos);
+      diff.textContent = formatExitDiff(pos, this.i18n);
       menu.appendChild(diff);
       const updateBtn = this.menuButton(
-        "Update cell from live state",
+        this.i18n.t('updateCellLive'),
         () => void this.patchCellFromLive(pos!),
       );
       updateBtn.classList.add("map-cell-menu__update");
@@ -1657,13 +1736,13 @@ export class MapPaneController {
     if (room) {
       this.appendSeamItems(menu, room);
       this.appendGridItems(menu, room);
-      const portal = this.menuButton("Add directed portal", () =>
+      const portal = this.menuButton(this.i18n.t('addPortal'), () =>
         this.openPortalMenu(room, null, clientX, clientY),
       );
       portal.classList.add("map-cell-menu__portal-add");
-      portal.title = "Create a transition to an exact cell in this or another zone";
+      portal.title = this.i18n.t('addPortalTitle');
       menu.appendChild(portal);
-      const knowledge = this.menuButton("Knowledge…", () => {
+      const knowledge = this.menuButton(this.i18n.t('knowledge'), () => {
         if (this.mapSetID == null) return;
         this.knowledgeDialog.open({
           mapSetID: this.mapSetID,
@@ -1680,7 +1759,7 @@ export class MapPaneController {
 
     // 2) «Записать комнату» — the human autorecord. One action, two labels:
     // create the cell (ghost) or refresh an existing one from the live text.
-    const rec = recordAction(pos, this.liveRoom, cell, room !== null);
+    const rec = recordAction(pos, this.liveRoom, cell, room !== null, this.i18n);
     // HARD INVARIANT: never offer a clickable write we cannot show the operator
     // first. recordAction already refuses a missing/blank live room, but tying
     // the button to the PREVIEW itself makes "no preview => no record" structural
@@ -1690,7 +1769,7 @@ export class MapPaneController {
     const recReason =
       rec.reason ||
       (preview === null
-        ? "no live room received yet — nothing to preview"
+        ? this.i18n.t('noPreview')
         : "");
     // Confirm-before-you-write: show the live name + the exits that will be
     // recorded, and for an update the diff against what the cell holds now.
@@ -1701,12 +1780,12 @@ export class MapPaneController {
       if (pv) {
         const box = document.createElement("div");
         box.className = "map-cell-menu__preview";
-        const lines = [`Will record: ${pv.hint}`];
-        lines.push(`exits: ${pv.exits.join(" ") || "none"}`);
+        const lines = [this.i18n.t('previewRoom', { room: pv.hint })];
+        lines.push(this.i18n.t('previewExits', { exits: pv.exits.join(' ') || this.i18n.t('none') }));
         const diff: string[] = [];
         if (pv.added.length > 0) diff.push(`+${pv.added.join("+")}`);
         if (pv.removed.length > 0) diff.push(`−${pv.removed.join("−")}`);
-        if (diff.length > 0) lines.push(`changes: ${diff.join(" / ")}`);
+        if (diff.length > 0) lines.push(this.i18n.t('previewChanges', { changes: diff.join(' / ') }));
         box.textContent = lines.join("\n");
         menu.appendChild(box);
       }
@@ -1742,14 +1821,14 @@ export class MapPaneController {
     // (this surface is experimental — every write must be reversible from here).
     if (room) {
       const anchorBtn = this.menuButton(
-        "I'm here",
+        this.i18n.t('anchorHere'),
         () => void this.anchorHere(room),
       );
       anchorBtn.classList.add("map-cell-menu__anchor");
       menu.appendChild(anchorBtn);
     }
     const undoBtn = this.menuButton(
-      "Undo last map change",
+      this.i18n.t('undo'),
       () => void this.undoMapWrite(),
     );
     undoBtn.classList.add("map-cell-menu__undo");
@@ -1778,23 +1857,23 @@ export class MapPaneController {
       const row = document.createElement("div");
       row.className = "map-cell-menu__seam-row";
       const button = this.menuButton(
-        `${seam.command || "transition"} → ${seam.zone}`,
+        `${seam.command || this.i18n.t('transition')} → ${seam.zone}`,
         () => void this.jumpSeam(seam, room),
       );
       button.classList.add("map-cell-menu__seam-item");
       button.disabled = !seam.passable || seam.to == null;
       button.title = button.disabled
-        ? (!seam.passable ? "Transition is blocked" : "Target room is unresolved")
-        : `Target tag: ${seam.tag}`;
+        ? (!seam.passable ? this.i18n.t('transitionBlocked') : this.i18n.t('targetUnresolved'))
+        : this.i18n.t('targetTag', { tag: seam.tag ?? '' });
       row.appendChild(button);
       const props = document.createElement("button");
       props.type = "button";
       props.className = "map-cell-menu__seam-props";
       props.textContent = "⚙";
-      props.setAttribute("aria-label", `Transition properties for ${seam.command || "transition"} to ${seam.zone}`);
-      props.title = "Transition properties";
+      props.setAttribute("aria-label", this.i18n.t('transitionPropsAria', { command: seam.command || this.i18n.t('transition'), zone: seam.zone }));
+      props.title = this.i18n.t('transitionProps');
       props.disabled = seam.tag == null || seam.zone === "";
-      if (props.disabled) props.title = "Incomplete legacy selector: repair the exact portal target";
+      if (props.disabled) props.title = this.i18n.t('legacyIncomplete');
       props.addEventListener("click", (event) => {
         const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
         this.openSeamMenu(room, seam, rect.left, rect.bottom);
@@ -1804,8 +1883,8 @@ export class MapPaneController {
         const repair = document.createElement("button");
         repair.type = "button";
         repair.className = "map-cell-menu__portal-repair";
-        repair.textContent = "Repair target";
-        repair.title = "Assign an exact target cell and convert the legacy transition into a portal";
+        repair.textContent = this.i18n.t('repairTarget');
+        repair.title = this.i18n.t('repairTargetTitle');
         repair.addEventListener("click", (event) => {
           const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
           this.openPortalMenu(room, seam, rect.left, rect.bottom);
@@ -1830,14 +1909,14 @@ export class MapPaneController {
     for (const contact of contacts) {
       const targetKnown = this.exactGridTargetZone(contact.z) !== null;
       const button = this.menuButton(
-        `${contact.dir || "grid"} → ${contact.z} (${contact.x},${contact.y},${contact.l})`,
+        `${contact.dir || this.i18n.t('grid')} → ${contact.z} (${contact.x},${contact.y},${contact.l})`,
         () => void this.jumpGrid(contact, room),
       );
       button.classList.add("map-cell-menu__grid-item");
       button.disabled = !contact.p || !targetKnown;
       button.title = button.disabled
-        ? (!contact.p ? "Grid edge is blocked" : "Grid target zone is missing")
-        : `Target: ${contact.z} (${contact.x},${contact.y},${contact.l})`;
+        ? (!contact.p ? this.i18n.t('gridBlocked') : this.i18n.t('gridZoneMissingShort'))
+        : this.i18n.t('target', { target: `${contact.z} (${contact.x},${contact.y},${contact.l})` });
       section.appendChild(button);
     }
     menu.appendChild(section);
@@ -1860,14 +1939,14 @@ export class MapPaneController {
     menu.setAttribute("role", "menu");
     const header = document.createElement("div");
     header.className = "map-cell-menu__header";
-    header.textContent = seam ? `Transition: ${seam.command || "transition"} → ${seam.zone}` : "New directed portal";
+    header.textContent = seam ? this.i18n.t('transitionAction', { command: seam.command || this.i18n.t('transition'), zone: seam.zone }) : this.i18n.t('newPortal');
     menu.appendChild(header);
 
     const box = document.createElement("div");
     box.className = "map-edge-menu__side";
     const title = document.createElement("div");
     title.className = "map-cell-menu__section";
-    title.textContent = `from '${room.h || "cell"}' (${room.z} ${room.x},${room.y},${room.l})`;
+    title.textContent = this.i18n.t('portalFrom', { room: room.h || this.i18n.t('cell'), coord: `${room.z} ${room.x},${room.y},${room.l}` });
     box.appendChild(title);
     const attrs = this.appendDirectedAttrControls(box, seam ? seamAttrs(room, seam) : { weight: 1, phrase: "", door: false, locked: false, openCmd: "", noRoute: false }, seamDirection(seam?.command ?? ""), (patch) =>
       seam
@@ -1879,7 +1958,7 @@ export class MapPaneController {
     const command = document.createElement("input");
     command.type = "text";
     command.value = seam?.command ?? "";
-    command.placeholder = "Transition command";
+    command.placeholder = this.i18n.t('transitionCommand');
     command.className = "map-edge-menu__input";
     details.appendChild(command);
 
@@ -1897,7 +1976,7 @@ export class MapPaneController {
     const targetSearch = document.createElement("input");
     targetSearch.type = "search";
     targetSearch.className = "map-edge-menu__input";
-    targetSearch.placeholder = "Search by name or coordinates";
+    targetSearch.placeholder = this.i18n.t('searchTarget');
     details.appendChild(targetSearch);
     const targetRoom = document.createElement("select");
     targetRoom.className = "map-edge-menu__input";
@@ -1915,7 +1994,7 @@ export class MapPaneController {
         if (needle && !searchable.includes(needle)) continue;
         const option = document.createElement("option");
         option.value = `${candidate.x},${candidate.y},${candidate.l}`;
-        option.textContent = `${candidate.h || "cell"} (${candidate.x},${candidate.y},${candidate.l})`;
+        option.textContent = `${candidate.h || this.i18n.t('cell')} (${candidate.x},${candidate.y},${candidate.l})`;
         if (candidate.x === Number(x.value) && candidate.y === Number(y.value) && candidate.l === Number(l.value)) option.selected = true;
         targetRoom.appendChild(option);
       }
@@ -1934,7 +2013,7 @@ export class MapPaneController {
         renderTargets();
       } catch (err) {
         if (controller.signal.aborted || request !== targetRequest || this.cellMenu !== menu) return;
-        this.setStatus(`Failed to load target zone: ${err instanceof Error ? err.message : String(err)}`, { sticky: true });
+        this.setStatus(this.i18n.t('failedLoadTarget', { error: err instanceof Error ? err.message : String(err) }), { sticky: true });
       }
     };
     targetSearch.addEventListener("input", renderTargets);
@@ -1943,13 +2022,13 @@ export class MapPaneController {
     details.append(targetRoom, x, y, l);
     void populateTargets();
 
-    const save = this.menuButton(seam ? "Save portal" : "Create portal", () => void this.writePortal(room, seam, {
+    const save = this.menuButton(seam ? this.i18n.t('savePortal') : this.i18n.t('createPortal'), () => void this.writePortal(room, seam, {
       command: command.value, target: { zone: zone.value, x: Number(x.value), y: Number(y.value), l: Number(l.value) },
     }));
     details.appendChild(save);
     if (seam) {
-      const remove = this.menuButton("Delete portal", () => {
-        if (window.confirm("Delete this directed portal?")) void this.deletePortal(room, seam);
+      const remove = this.menuButton(this.i18n.t('deletePortal'), () => {
+        if (window.confirm(this.i18n.t('deletePortalConfirm'))) void this.deletePortal(room, seam);
       });
       remove.classList.add("map-edge-menu__delete");
       details.appendChild(remove);
@@ -1987,24 +2066,24 @@ export class MapPaneController {
     if (marks.length === 0) return;
     const header = document.createElement("div");
     header.className = "map-cell-menu__section";
-    header.textContent = "Manual up/down marks";
+    header.textContent = this.i18n.t('verticalMarks');
     menu.appendChild(header);
     for (const mk of marks) {
       const label = document.createElement("div");
       label.className = "map-edge-menu__prov";
-      label.textContent = `${dirName(mk.dir)}: ${provenanceLabel(mk.state)}`;
+      label.textContent = `${dirName(mk.dir, this.i18n)}: ${provenanceLabel(mk.state, this.i18n)}`;
       menu.appendChild(label);
-      const btn = this.menuButton(`Clear mark (${dirName(mk.dir)})`, () =>
+      const btn = this.menuButton(this.i18n.t('clearMark', { direction: dirName(mk.dir, this.i18n) }), () =>
         void this.writeEdgeMark(
           {
             from: cell,
             to: { z: cell.z, x: cell.x, y: cell.y, l: cell.l + (mk.dir === "U" ? 1 : -1) },
             dir: mk.dir,
-            fromLabel: room.h || "cell",
-            toLabel: mk.dir === "U" ? "floor above" : "floor below",
+            fromLabel: room.h || this.i18n.t('cell'),
+            toLabel: mk.dir === "U" ? this.i18n.t('floorAbove') : this.i18n.t('floorBelow'),
             state: mk.state,
             passable: mk.state === "open",
-            provenance: provenanceLabel(mk.state),
+            provenance: provenanceLabel(mk.state, this.i18n),
           },
           "auto",
         ),
@@ -2023,24 +2102,24 @@ export class MapPaneController {
   ): void {
     const goHeader = document.createElement("div");
     goHeader.className = "map-cell-menu__section";
-    goHeader.textContent = `Go here: ${room.h || "cell"}`;
+    goHeader.textContent = this.i18n.t('goHere', { room: room.h || this.i18n.t('cell') });
     menu.appendChild(goHeader);
 
     const routable = canRoute(pos) && !isCurrentCell(pos, cell);
     const insertBtn = this.menuButton(
-      "Insert route into chat",
+      this.i18n.t('insertPath'),
       () => void this.routeToCell(cell, room, "insert"),
     );
     const sendBtn = this.menuButton(
-      "Start route",
+      this.i18n.t('startRoute'),
       () => void this.routeToCell(cell, room, "send"),
     );
     if (!routable) {
       insertBtn.disabled = true;
       sendBtn.disabled = true;
       const why = isCurrentCell(pos, cell)
-        ? "you are already here"
-        : "no position — use 'I'm here' first";
+        ? this.i18n.t('alreadyHere')
+        : this.i18n.t('routeNoPosition');
       insertBtn.title = why;
       sendBtn.title = why;
     }
@@ -2088,7 +2167,7 @@ export class MapPaneController {
 
     const header = document.createElement("div");
     header.className = "map-cell-menu__header";
-    header.textContent = `Edge: ${model.sides[0].fromLabel} ↔ ${model.sides[0].toLabel}`;
+    header.textContent = this.i18n.t('edgeHeading', { from: model.sides[0].fromLabel, to: model.sides[0].toLabel });
     menu.appendChild(header);
 
     const blocks: EdgeSideBlock[] = [];
@@ -2100,9 +2179,7 @@ export class MapPaneController {
 
     const hint = document.createElement("div");
     hint.className = "map-edge-menu__hint";
-    hint.textContent =
-      "This mark belongs to the edge, not the room exits: recording the room will not erase it. " +
-      "Use 'Undo last map change' in the cell menu to restore the previous state.";
+    hint.textContent = this.i18n.t('edgeHint');
     menu.appendChild(hint);
 
     this.placeCellMenu(menu, clientX, clientY);
@@ -2131,10 +2208,10 @@ export class MapPaneController {
       c
         ? (rooms.find((r) => r.x === c.x && r.y === c.y && r.l === c.l) ?? null)
         : null;
-    const model = buildEdgeModel(cell, dir, at(cell), null);
+    const model = buildEdgeModel(cell, dir, at(cell), null, this.i18n);
     if (!model) return null;
     // Re-resolve with the neighbour now that buildEdgeModel computed its coord.
-    return buildEdgeModel(cell, dir, at(model.a), at(model.b));
+    return buildEdgeModel(cell, dir, at(model.a), at(model.b), this.i18n);
   }
 
   // One directed half of the boundary.
@@ -2144,7 +2221,7 @@ export class MapPaneController {
 
     const title = document.createElement("div");
     title.className = "map-cell-menu__section";
-    title.textContent = `from '${side.fromLabel}' to '${side.toLabel}' (${dirName(side.dir)})`;
+    title.textContent = this.i18n.t('edgeSide', { from: side.fromLabel, to: side.toLabel, direction: dirName(side.dir, this.i18n) });
     box.appendChild(title);
 
     const label = document.createElement("label");
@@ -2159,7 +2236,7 @@ export class MapPaneController {
     });
     label.appendChild(box_);
     const text = document.createElement("span");
-    text.textContent = "passage exists";
+    text.textContent = this.i18n.t('passageExists');
     label.appendChild(text);
     box.appendChild(label);
 
@@ -2175,7 +2252,7 @@ export class MapPaneController {
     // Only offered when a hand-drawn row is what decides the face: "let the room's
     // own exits decide again" is meaningless where nothing was drawn by hand.
     if (canClear(side.state)) {
-      const clearBtn = this.menuButton("Clear manual mark", () =>
+      const clearBtn = this.menuButton(this.i18n.t('clearMark', { direction: dirName(side.dir, this.i18n) }), () =>
         void this.writeEdgeMark(side, "auto"),
       );
       clearBtn.classList.add("map-edge-menu__clear");
@@ -2206,6 +2283,7 @@ export class MapPaneController {
     dir: string,
     write: (patch: AttrPatch) => Promise<boolean>,
   ): AttrControlBinding {
+    const i18n = this.i18n ?? createMapperI18n('en');
     const controls = document.createElement("div");
     controls.className = "map-edge-menu__attrs";
     box.appendChild(controls);
@@ -2254,26 +2332,26 @@ export class MapPaneController {
       }
       controls.replaceChildren();
       const attrs = state.attrs;
-      controls.appendChild(this.attrNumber("Route weight", attrs.weight, (v) => submit({ weight: v }), "weight"));
+      controls.appendChild(this.attrNumber(i18n.t('routeWeight'), attrs.weight, (v) => submit({ weight: v }), "weight"));
       controls.appendChild(this.attrText(
-        "traversal phrase", attrs.phrase, "for example: move crate", (v) => submit({ phrase: v }), "phrase",
+        i18n.t('traversalPhrase'), attrs.phrase, i18n.t('phraseExample'), (v) => submit({ phrase: v }), "phrase",
       ));
-      controls.appendChild(this.attrCheck("door", attrs.door, (v) => submit({ door: v }), "door"));
+      controls.appendChild(this.attrCheck(i18n.t('door'), attrs.door, (v) => submit({ door: v }), "door"));
       // The lock and opening command are meaningful only with a door, so an
       // optimistic door toggle reveals them in the same popup before its write settles.
       if (attrs.door) {
         controls.appendChild(this.attrCheck(
-          "locked by default", attrs.locked, (v) => submit({ locked: v }), "locked",
+          i18n.t('lockedDefault'), attrs.locked, (v) => submit({ locked: v }), "locked",
         ));
         controls.appendChild(this.attrText(
-          "opening command", attrs.openCmd, this.openCmdPlaceholder(dir), (v) => submit({ open_cmd: v }), "open_cmd",
+          i18n.t('openingCommand'), attrs.openCmd, this.openCmdPlaceholder(dir), (v) => submit({ open_cmd: v }), "open_cmd",
         ));
       }
       controls.appendChild(this.attrCheck(
-        "avoid in routes", attrs.noRoute, (v) => submit({ no_route: v }), "no_route",
+        i18n.t('noRoute'), attrs.noRoute, (v) => submit({ no_route: v }), "no_route",
       ));
 
-      const summary = attrsSummary(attrs, dir, this.doorOpen);
+      const summary = attrsSummary(attrs, dir, this.doorOpen, i18n);
       if (summary) {
         const line = document.createElement("div");
         line.className = "map-edge-menu__prov";
@@ -2369,6 +2447,7 @@ export class MapPaneController {
   // Routing weight accepts fractional costs, but a malformed/zero value must
   // remain local: the server has the same validation at its write boundary.
   private attrNumber(label: string, value: number, commit: (v: number) => void, field?: string): HTMLElement {
+    const i18n = this.i18n ?? createMapperI18n('en');
     const wrap = document.createElement("label");
     wrap.className = "map-edge-menu__attr";
     const cap = document.createElement("span");
@@ -2384,7 +2463,7 @@ export class MapPaneController {
     const fire = (): void => {
       const next = Number(input.value);
       if (!Number.isFinite(next) || next <= 0) {
-        input.setCustomValidity("Weight must be greater than zero");
+        input.setCustomValidity(i18n.t('weightPositive'));
         input.reportValidity();
         return;
       }
@@ -2410,10 +2489,11 @@ export class MapPaneController {
   // such command, and the placeholder says that rather than inviting the operator to
   // expect one.
   private openCmdPlaceholder(dir: string): string {
-    if (!dir) return "enter an opening command";
+    const i18n = this.i18n ?? createMapperI18n('en');
+    if (!dir) return i18n.t('enterOpening');
     return this.doorOpen
       ? renderDefaultOpen(this.doorOpen, dir)
-      : "the room format does not open doors — without a command the route sends nothing";
+      : i18n.t('openingRequired');
   }
 
   private attrCheck(
@@ -2444,7 +2524,7 @@ export class MapPaneController {
     patch: AttrPatch,
   ): Promise<boolean> {
     if (this.config.sessionID == null) {
-      this.setStatus("No session — cannot edit the edge");
+      this.setStatus(this.i18n.t('noSessionEdge'));
       return false;
     }
     const key = JSON.stringify(["grid", side.from.z, side.from.x, side.from.y, side.from.l, side.dir]);
@@ -2469,20 +2549,20 @@ export class MapPaneController {
         const data: { ok?: boolean; reason?: string; forked_to?: number } =
           await res.json();
         if (!data.ok) {
-          if (isLatest()) this.setStatus(`Failed to save edge attribute: ${data.reason ?? "?"}`, {
+          if (isLatest()) this.setStatus(this.i18n.t('attrSaveFailed', { reason: data.reason ?? '?' }), {
             sticky: true,
           });
           return false;
         }
-        let status = `${side.fromLabel} → ${side.toLabel}: ${describeAttrPatch(patch, side.dir, this.doorOpen)}`;
-        if (data.forked_to != null) status += " (map set forked to an editable copy)";
-        if (isLatest()) this.setStatus(`${status} · use Undo in the cell menu to restore it`, {
+        let status = `${side.fromLabel} → ${side.toLabel}: ${describeAttrPatch(patch, side.dir, this.doorOpen, this.i18n)}`;
+        if (data.forked_to != null) status += ` ${this.i18n.t('mapForked')}`;
+        if (isLatest()) this.setStatus(`${status} · ${this.i18n.t('undoHint')}`, {
           sticky: true,
         });
         return true;
       } catch (err) {
         if (isLatest()) this.setStatus(
-          `Edge attribute failed: ${err instanceof Error ? err.message : String(err)}`,
+          this.i18n.t('attrFailed', { error: err instanceof Error ? err.message : String(err) }),
         );
         return false;
       }
@@ -2494,7 +2574,7 @@ export class MapPaneController {
     seam: SeamTarget | null,
     value: { command: string; target: { zone: string; x: number; y: number; l: number } },
   ): Promise<void> {
-    if (this.config.sessionID == null) { this.setStatus("No session — cannot edit the portal"); return; }
+    if (this.config.sessionID == null) { this.setStatus(this.i18n.t('noSessionPortal')); return; }
     const generation = ++this.portalWriteGeneration;
     const isLatest = (): boolean => !this.disposed && generation === this.portalWriteGeneration;
     try {
@@ -2505,17 +2585,17 @@ export class MapPaneController {
       if (!res.ok) throw new Error(await res.text());
       const data: { ok?: boolean; reason?: string; forked_to?: number } = await res.json();
       if (!data.ok) {
-        if (isLatest()) this.setStatus(`Portal was not saved: ${data.reason ?? "?"}`, { sticky: true });
+        if (isLatest()) this.setStatus(this.i18n.t('portalNotSaved', { reason: data.reason ?? '?' }), { sticky: true });
         return;
       }
-      if (isLatest()) this.setStatus(`${seam ? "Portal updated" : "Portal created"}${data.forked_to != null ? " (map set forked to an editable copy)" : ""}`, { sticky: true });
+      if (isLatest()) this.setStatus(`${seam ? this.i18n.t('portalUpdated') : this.i18n.t('portalCreated')}${data.forked_to != null ? ` ${this.i18n.t('mapForked')}` : ''}`, { sticky: true });
     } catch (err) {
-      if (isLatest()) this.setStatus(`Portal write failed: ${err instanceof Error ? err.message : String(err)}`, { sticky: true });
+      if (isLatest()) this.setStatus(this.i18n.t('portalWriteFailed', { error: err instanceof Error ? err.message : String(err) }), { sticky: true });
     }
   }
 
   private async deletePortal(room: SlimRoom, seam: SeamTarget): Promise<void> {
-    if (this.config.sessionID == null) { this.setStatus("No session — cannot delete the portal"); return; }
+    if (this.config.sessionID == null) { this.setStatus(this.i18n.t('noSessionPortal')); return; }
     const generation = ++this.portalWriteGeneration;
     const isLatest = (): boolean => !this.disposed && generation === this.portalWriteGeneration;
     try {
@@ -2526,18 +2606,18 @@ export class MapPaneController {
       if (!res.ok) throw new Error(await res.text());
       const data: { ok?: boolean; reason?: string } = await res.json();
       if (!data.ok) {
-        if (isLatest()) this.setStatus(`Portal was not deleted: ${data.reason ?? "?"}`, { sticky: true });
+        if (isLatest()) this.setStatus(this.i18n.t('portalNotDeleted', { reason: data.reason ?? '?' }), { sticky: true });
         return;
       }
-      if (isLatest()) this.setStatus("Portal deleted", { sticky: true });
+      if (isLatest()) this.setStatus(this.i18n.t('portalDeleted'), { sticky: true });
     } catch (err) {
-      if (isLatest()) this.setStatus(`Portal delete failed: ${err instanceof Error ? err.message : String(err)}`);
+      if (isLatest()) this.setStatus(this.i18n.t('portalDeleteFailed', { error: err instanceof Error ? err.message : String(err) }));
     }
   }
 
   private async writePortalAttrs(room: SlimRoom, seam: SeamTarget, patch: AttrPatch): Promise<boolean> {
     if (this.config.sessionID == null) {
-      this.setStatus("No session — cannot edit the portal");
+      this.setStatus(this.i18n.t('noSessionPortal'));
       return false;
     }
     const key = JSON.stringify(["portal", room.z, room.x, room.y, room.l, seam.order]);
@@ -2553,15 +2633,15 @@ export class MapPaneController {
         if (!res.ok) throw new Error(await res.text());
         const data: { ok?: boolean; reason?: string; forked_to?: number } = await res.json();
         if (!data.ok) {
-          if (isLatest()) this.setStatus(`Failed to save portal attribute: ${data.reason ?? "?"}`, { sticky: true });
+          if (isLatest()) this.setStatus(this.i18n.t('portalAttrSaveFailed', { reason: data.reason ?? '?' }), { sticky: true });
           return false;
         }
-        let status = `${room.h || "cell"} → ${seam.zone}: ${describeAttrPatch(patch, seamDirection(seam.command), this.doorOpen)}`;
-        if (data.forked_to != null) status += " (map set forked to an editable copy)";
-        if (isLatest()) this.setStatus(`${status} · use Undo in the cell menu to restore it`, { sticky: true });
+        let status = `${room.h || this.i18n.t('cell')} → ${seam.zone}: ${describeAttrPatch(patch, seamDirection(seam.command), this.doorOpen, this.i18n)}`;
+        if (data.forked_to != null) status += ` ${this.i18n.t('mapForked')}`;
+        if (isLatest()) this.setStatus(`${status} · ${this.i18n.t('undoHint')}`, { sticky: true });
         return true;
       } catch (err) {
-        if (isLatest()) this.setStatus(`Portal attribute failed: ${err instanceof Error ? err.message : String(err)}`);
+        if (isLatest()) this.setStatus(this.i18n.t('portalAttrFailed', { error: err instanceof Error ? err.message : String(err) }));
         return false;
       }
     });
@@ -2569,7 +2649,7 @@ export class MapPaneController {
 
   private async writeSeamAttrs(room: SlimRoom, seam: SeamTarget, patch: AttrPatch): Promise<boolean> {
     if (this.config.sessionID == null) {
-      this.setStatus("No session — cannot edit the seam");
+      this.setStatus(this.i18n.t('noSessionSeam'));
       return false;
     }
     const key = JSON.stringify([
@@ -2595,15 +2675,15 @@ export class MapPaneController {
         if (!res.ok) throw new Error(await res.text());
         const data: { ok?: boolean; reason?: string; forked_to?: number } = await res.json();
         if (!data.ok) {
-          if (isLatest()) this.setStatus(`Failed to save transition attribute: ${data.reason ?? "?"}`, { sticky: true });
+          if (isLatest()) this.setStatus(this.i18n.t('seamAttrSaveFailed', { reason: data.reason ?? '?' }), { sticky: true });
           return false;
         }
-        let status = `${room.h || "cell"} → ${seam.zone}: ${describeAttrPatch(patch, seamDirection(seam.command), this.doorOpen)}`;
-        if (data.forked_to != null) status += " (map set forked to an editable copy)";
-        if (isLatest()) this.setStatus(`${status} · use Undo in the cell menu to restore it`, { sticky: true });
+        let status = `${room.h || this.i18n.t('cell')} → ${seam.zone}: ${describeAttrPatch(patch, seamDirection(seam.command), this.doorOpen, this.i18n)}`;
+        if (data.forked_to != null) status += ` ${this.i18n.t('mapForked')}`;
+        if (isLatest()) this.setStatus(`${status} · ${this.i18n.t('undoHint')}`, { sticky: true });
         return true;
       } catch (err) {
-        if (isLatest()) this.setStatus(`Seam attribute failed: ${err instanceof Error ? err.message : String(err)}`);
+        if (isLatest()) this.setStatus(this.i18n.t('seamAttrFailed', { error: err instanceof Error ? err.message : String(err) }));
         return false;
       }
     });
@@ -2638,7 +2718,7 @@ export class MapPaneController {
   private async writeEdgeMark(side: EdgeSide, mark: EdgeMark): Promise<void> {
     this.closeCellMenu();
     if (this.config.sessionID == null) {
-      this.setStatus("No session — cannot mark the edge");
+      this.setStatus(this.i18n.t('noSessionMark'));
       return;
     }
     try {
@@ -2661,26 +2741,25 @@ export class MapPaneController {
       const data: { ok?: boolean; reason?: string; forked_to?: number } =
         await res.json();
       if (!data.ok) {
-        this.setStatus(`Failed to mark edge: ${data.reason ?? "?"}`, {
+        this.setStatus(this.i18n.t('edgeMarkFailed', { reason: data.reason ?? '?' }), {
           sticky: true,
         });
         return;
       }
       const what =
         mark === "open"
-          ? "hidden passage marked"
+          ? this.i18n.t('markHidden')
           : mark === "blocked"
-            ? "passage blocked"
-            : "manual mark cleared — the room text decides the edge again" +
-              " (if it says nothing about the passage, no passage will exist)";
+            ? this.i18n.t('markBlocked')
+            : this.i18n.t('markAuto');
       let status = `${side.fromLabel} → ${side.toLabel}: ${what}`;
-      if (data.forked_to != null) status += " (map set forked to an editable copy)";
-      this.setStatus(`${status} · use Undo in the cell menu to restore it`, {
+      if (data.forked_to != null) status += ` ${this.i18n.t('mapForked')}`;
+      this.setStatus(`${status} · ${this.i18n.t('undoHint')}`, {
         sticky: true,
       });
     } catch (err) {
       this.setStatus(
-        `Edge mark failed: ${err instanceof Error ? err.message : String(err)}`,
+        this.i18n.t('edgeMarkError', { error: err instanceof Error ? err.message : String(err) }),
       );
     }
   }
@@ -2773,7 +2852,7 @@ export class MapPaneController {
     action: "insert" | "send",
   ): Promise<void> {
     if (this.config.sessionID == null) {
-      this.setStatus("No session — cannot compute a route");
+      this.setStatus(this.i18n.t('noSessionRoute'));
       return;
     }
     try {
@@ -2792,10 +2871,10 @@ export class MapPaneController {
         const state: MapWalkState = await res.json();
         this.onMapWalk(state);
         if (!state.active) {
-          if (!state.reason) this.setStatus("Unable to start route");
+          if (!state.reason) this.setStatus(this.i18n.t('routeStartFailed'));
           return;
         }
-        this.setStatus(`Route to "${room.h}": ${state.current + 1}/${state.total}`);
+        this.setStatus(this.i18n.t('routeToProgress', { room: room.h, current: state.current + 1, total: state.total }));
         return;
       }
       const res = await fetchWithToken(
@@ -2812,47 +2891,47 @@ export class MapPaneController {
       const data: MapPathResponse = await res.json();
       if (!data.reachable) {
         const reason = data.dt
-          ? "target is a death trap"
-          : data.reason || "no route";
+          ? this.i18n.t('targetDeathTrap')
+          : data.reason || this.i18n.t('routeMissing');
         // A route blocked ONLY by the player's own "не водить сюда" marks is not a
         // hole in the map, and must not read like one — otherwise they go looking
         // for a passage that is right there and that they closed themselves.
         if (data.vetoed_only) {
-          this.setStatus(`No route to "${room.h}": ${reason}`, {
+          this.setStatus(this.i18n.t('noRouteColon', { room: room.h, reason }), {
             sticky: true,
           });
           return;
         }
-        this.setStatus(`No route to "${room.h}" — ${reason}`);
+        this.setStatus(this.i18n.t('noRouteDash', { room: room.h, reason }));
         return;
       }
       const dirs = data.directions ?? [];
       if (data.here || dirs.length === 0) {
-        this.setStatus(`Already at "${room.h}"`);
+        this.setStatus(this.i18n.t('alreadyAt', { room: room.h }));
         return;
       }
       if (action === "insert") {
         const walk = dirs.join(";");
         if (this.config.setInputText) {
           this.config.setInputText(walk);
-          const fallbackSummary = `${dirs.length} ${dirs.length === 1 ? "step" : "steps"}`;
-          let status = `Route to "${room.h}": ${data.summary ?? fallbackSummary} → input`;
+          const fallbackSummary = `${dirs.length} ${this.i18n.plural('step', dirs.length)}`;
+          let status = this.i18n.t('routeInput', { room: room.h, summary: data.summary ?? fallbackSummary });
           if (data.locked)
-            status += ` · ⚠ ${data.locked} ${data.locked === 1 ? "door is" : "doors are"} marked locked — a key is required`;
-          if (data.dt) status += " ⚠ death trap on path";
+            status += ` · ${this.i18n.plural('lockedWarning', data.locked)}`;
+          if (data.dt) status += ` ${this.i18n.t('deathTrapPath')}`;
           this.setStatus(status, { autoHide: !data.locked && !data.dt });
         } else {
-          let status = `Route to "${room.h}": ${walk}`;
+          let status = this.i18n.t('routePath', { room: room.h, path: walk });
           if (data.locked)
-            status += ` · ⚠ ${data.locked} ${data.locked === 1 ? "door is" : "doors are"} marked locked — a key is required`;
-          if (data.dt) status += " ⚠ death trap on path";
+            status += ` · ${this.i18n.plural('lockedWarning', data.locked)}`;
+          if (data.dt) status += ` ${this.i18n.t('deathTrapPath')}`;
           this.setStatus(status, { autoHide: !data.locked && !data.dt });
         }
         return;
       }
     } catch (err) {
       this.setStatus(
-        `Route failed: ${err instanceof Error ? err.message : String(err)}`,
+        this.i18n.t('routeFailed', { error: err instanceof Error ? err.message : String(err) }),
       );
     }
   }
@@ -2863,12 +2942,12 @@ export class MapPaneController {
   // reload() — so the edge becomes known (next visit → green).
   private async patchCellFromLive(pos: PlayerPosition): Promise<void> {
     if (this.config.sessionID == null) {
-      this.setStatus("No session — cannot update the cell");
+      this.setStatus(this.i18n.t('noSessionUpdate'));
       return;
     }
     const { add_exits, remove_exits } = cellPatchPayload(pos);
     if (add_exits.length === 0 && remove_exits.length === 0) {
-      this.setStatus("No changes to apply");
+      this.setStatus(this.i18n.t('noChanges'));
       return;
     }
     try {
@@ -2890,13 +2969,13 @@ export class MapPaneController {
       if (!res.ok) throw new Error(await res.text());
       const data: { ok?: boolean; reason?: string } = await res.json();
       if (!data.ok) {
-        this.setStatus(`Failed to update cell: ${data.reason ?? "?"}`);
+        this.setStatus(this.i18n.t('updateFailedReason', { reason: data.reason ?? '?' }));
         return;
       }
-      this.setStatus("Cell updated from live state", { sticky: true });
+      this.setStatus(this.i18n.t('cellUpdated'), { sticky: true });
     } catch (err) {
       this.setStatus(
-        `Update failed: ${err instanceof Error ? err.message : String(err)}`,
+        this.i18n.t('updateFailed', { error: err instanceof Error ? err.message : String(err) }),
       );
     }
   }
@@ -2914,7 +2993,7 @@ export class MapPaneController {
     l: number;
   }): Promise<void> {
     if (this.config.sessionID == null) {
-      this.setStatus("No session — cannot record the room");
+      this.setStatus(this.i18n.t('noSessionRecord'));
       return;
     }
     try {
@@ -2944,13 +3023,13 @@ export class MapPaneController {
         }>;
       } = await res.json();
       if (!data.applied) {
-        this.setStatus(`Failed to record room: ${data.reason ?? "?"}`, {
+        this.setStatus(this.i18n.t('recordFailed', { reason: data.reason ?? '?' }), {
           sticky: true,
         });
         return;
       }
-      let status = data.created ? "Room recorded" : "Room updated";
-      if (data.forked_to != null) status += " (map set forked to an editable copy)";
+      let status = data.created ? this.i18n.t('roomRecorded') : this.i18n.t('roomUpdated');
+      if (data.forked_to != null) status += ` ${this.i18n.t('mapForked')}`;
       // Report which neighbours the written exits now connect to. A one-sided
       // edge (back_link=false) exists ONLY because this record asserted it, so
       // it is the one worth eyeballing — flag those explicitly.
@@ -2958,16 +3037,16 @@ export class MapPaneController {
       if (touches.length > 0) {
         const parts = touches.map(
           (t) =>
-            `${t.dir}→${t.hint || "?"}${t.back_link ? "" : " (one-way)"}`,
+            `${t.dir}→${t.hint || '?'}${t.back_link ? '' : ` ${this.i18n.t('oneWay')}`}`,
         );
-        status += ` · links: ${parts.join(", ")}`;
+        status += ` · ${this.i18n.t('links', { links: parts.join(', ') })}`;
       }
-      this.setStatus(`${status} · use Undo in the cell menu to restore it`, {
+      this.setStatus(`${status} · ${this.i18n.t('undoHint')}`, {
         sticky: true,
       });
     } catch (err) {
       this.setStatus(
-        `Record failed: ${err instanceof Error ? err.message : String(err)}`,
+        this.i18n.t('recordError', { error: err instanceof Error ? err.message : String(err) }),
       );
     }
   }
@@ -2977,7 +3056,7 @@ export class MapPaneController {
   // last — including a write an agent made over MCP.
   private async undoMapWrite(): Promise<void> {
     if (this.config.sessionID == null) {
-      this.setStatus("No session — cannot undo");
+      this.setStatus(this.i18n.t('noSessionUndo'));
       return;
     }
     try {
@@ -3002,11 +3081,11 @@ export class MapPaneController {
         reanchored?: boolean;
       } = await res.json();
       if (data.nothing_to_undo) {
-        this.setStatus("Nothing to undo in this map set", { sticky: true });
+        this.setStatus(this.i18n.t('nothingUndo'), { sticky: true });
         return;
       }
       if (!data.applied) {
-        this.setStatus(`Undo was not applied: ${data.reason ?? "?"}`, {
+        this.setStatus(this.i18n.t('undoNotApplied', { reason: data.reason ?? '?' }), {
           sticky: true,
         });
         return;
@@ -3017,16 +3096,16 @@ export class MapPaneController {
         data.zone != null
           ? ` @ ${data.zone} ${data.x},${data.y},${data.l}`
           : "";
-      const re = data.reanchored ? " · position restored" : "";
+      const re = data.reanchored ? ` · ${this.i18n.t('positionRestored')}` : '';
       this.setStatus(
-        `Undone: ${data.label ?? "last change"}${at}${re}`,
+        this.i18n.t('undone', { change: data.label ?? this.i18n.t('lastChange'), at, position: re }),
         {
           sticky: true,
         },
       );
     } catch (err) {
       this.setStatus(
-        `Undo failed: ${err instanceof Error ? err.message : String(err)}`,
+        this.i18n.t('undoFailed', { error: err instanceof Error ? err.message : String(err) }),
       );
     }
   }
@@ -3082,10 +3161,10 @@ export class MapPaneController {
         mapSetID !== this.mapSetID || !this.searchPopover
       ) return;
       this.renderSearchResults(hits);
-      if (hits.length === 0) this.setStatus(`No room matches "${query}"`);
+      if (hits.length === 0) this.setStatus(this.i18n.t('noRoomMatch', { query }));
     } catch (err) {
       if (controller.signal.aborted) return;
-      this.setStatus(`Search failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.setStatus(this.i18n.t('searchFailed', { error: err instanceof Error ? err.message : String(err) }));
     } finally {
       if (this.searchRequest === controller) this.searchRequest = null;
     }
@@ -3114,14 +3193,14 @@ export class MapPaneController {
     this.renderer.setLevel(candidate.l);
     this.buildFloorStack();
     this.renderer.centerOn(candidate.x, candidate.y, candidate.l);
-    this.setStatus(`Found "${candidate.h}" in "${candidate.z}"`);
+    this.setStatus(this.i18n.t('foundRoom', { room: candidate.h, zone: candidate.z }));
   }
 
   // --- "Я здесь" re-anchor (invoked from the cell menu) ------------------
 
   private async anchorHere(room: SlimRoom): Promise<void> {
     if (this.config.sessionID == null) {
-      this.setStatus("No session — cannot anchor");
+      this.setStatus(this.i18n.t('noSessionAnchor'));
       return;
     }
     try {
@@ -3139,10 +3218,10 @@ export class MapPaneController {
         },
       );
       if (!res.ok) throw new Error(await res.text());
-      this.setStatus(`Anchored at "${room.h}" — awaiting confirmation`);
+      this.setStatus(this.i18n.t('anchored', { room: room.h }));
     } catch (err) {
       this.setStatus(
-        `Anchor failed: ${err instanceof Error ? err.message : String(err)}`,
+        this.i18n.t('anchorFailed', { error: err instanceof Error ? err.message : String(err) }),
       );
     }
   }
@@ -3163,18 +3242,20 @@ export class MapPaneController {
     this.tip.style.top = `${clientY - rect.top}px`;
     this.tip.style.opacity = "1";
     const dirs = room.e.join(" ") || "—";
-    const name = room.p ? room.h || "corridor" : room.h;
+    const name = room.p ? room.h || this.i18n.t('corridor') : room.h;
     const parts = [`<div class="map-tip__name">${esc(name)}</div>`];
     parts.push(
-      `<div class="map-tip__row">tag ${room.t ?? "—"} · L${room.l} · exits ${esc(dirs)}</div>`,
+      `<div class="map-tip__row">${esc(this.i18n.t('tipDetails', { tag: room.t ?? '—', level: room.l, exits: dirs }))}</div>`,
     );
     if (room.s)
-      parts.push(`<div class="map-tip__row map-tip__dt">⚠ death trap</div>`);
+      parts.push(`<div class="map-tip__row map-tip__dt">${esc(this.i18n.t('tipDeathTrap'))}</div>`);
     if (room.se.length > 0)
       parts.push(
-        `<div class="map-tip__row map-tip__seam">◈ ${
-          room.se.length === 1 ? "seam" : `${room.se.length} seams`
-        } (click to ${room.se.length === 1 ? "cross" : "choose"})</div>`,
+        `<div class="map-tip__row map-tip__seam">${esc(this.i18n.t('tipSeams', {
+          count: room.se.length,
+          seams: this.i18n.plural('seam', room.se.length),
+          action: this.i18n.plural('seamAction', room.se.length),
+        }))}</div>`,
       );
     this.tip.innerHTML = parts.join("");
   }

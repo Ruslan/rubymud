@@ -12,6 +12,8 @@ import type {
 import { fetchWithToken } from "./dom";
 import { MapPaneController, MAP_BUFFER, type MapWalkState } from "./map/pane";
 import type { LiveRoom, MapRecordingState, PlayerPosition } from "./map/types";
+import { createMapperI18n } from './map/i18n';
+import { readBootLocale } from './i18n';
 
 interface RendererState {
   activePanel: "keyboard" | "variables" | "groups" | null;
@@ -503,6 +505,7 @@ export function createRenderer({
           sessionID,
           getActiveMapSetID: getActiveMapSetID ?? (() => null),
           setInputText,
+          locale: readBootLocale(),
         });
         pane.mapController = controller;
         mapControllers.set(node.id, controller);
@@ -527,7 +530,7 @@ export function createRenderer({
         bodyEl.innerHTML = "";
         const notice = document.createElement("div");
         notice.className = "map-pane__unavailable";
-        notice.textContent = "Map unavailable";
+        notice.textContent = createMapperI18n(readBootLocale()).t('mapUnavailable');
         bodyEl.appendChild(notice);
         el.appendChild(bodyEl);
         // Register the pane WITHOUT a controller so it is inert but valid; text

@@ -1,4 +1,5 @@
 import type { Confidence, LiveRoom, PlayerPosition, SlimRoom } from "./types";
+import { mapperI18n, type MapperI18n } from "./i18n";
 
 // Pure logic for the map cell context menu. The DOM rendering lives in the
 // controller (pane.ts); this module holds the decision/formatting logic that is
@@ -13,10 +14,15 @@ const CONF_GLYPH: Record<Confidence, string> = {
 };
 
 // Human-readable status header for the menu's top row.
-export function statusHeaderText(pos: PlayerPosition | null): string {
-  if (!pos) return "⚪ no position";
+export function statusHeaderText(pos: PlayerPosition | null, i18n: MapperI18n = mapperI18n): string {
+  if (!pos) return `⚪ ${i18n.t('noPosition')}`;
   const glyph = CONF_GLYPH[pos.confidence] ?? "⚪";
-  const parts = [`${glyph} ${pos.confidence}`];
+  const confidence = {
+    green: i18n.t('confidenceGreen'),
+    yellow: i18n.t('confidenceYellow'),
+    red: i18n.t('confidenceRed'),
+  }[pos.confidence] ?? pos.confidence;
+  const parts = [`${glyph} ${confidence}`];
   if (pos.reason) parts.push(pos.reason);
   return parts.join(" · ");
 }
@@ -33,15 +39,15 @@ export function hasExitDiff(pos: PlayerPosition | null): boolean {
 
 // Formats the exit diff like "выходы: +U live / −N map". Returns '' when there is
 // nothing to show (caller should gate on hasExitDiff first, but this is safe).
-export function formatExitDiff(pos: PlayerPosition | null): string {
+export function formatExitDiff(pos: PlayerPosition | null, i18n: MapperI18n = mapperI18n): string {
   if (!pos) return "";
   const added = pos.exitsAddedLive ?? [];
   const removed = pos.exitsRemovedMap ?? [];
   if (added.length === 0 && removed.length === 0) return "";
   const segs: string[] = [];
-  if (added.length > 0) segs.push(`+${added.join("+")} live`);
-  if (removed.length > 0) segs.push(`−${removed.join("−")} map`);
-  return `exits: ${segs.join(" / ")}`;
+  if (added.length > 0) segs.push(i18n.t('diffLive', { exits: added.join('+') }));
+  if (removed.length > 0) segs.push(i18n.t('diffMap', { exits: removed.join('−') }));
+  return i18n.t('exitsDiff', { diff: segs.join(' / ') });
 }
 
 // Whether "Идти сюда" (and its send/insert sub-actions) should be enabled: the
@@ -114,18 +120,19 @@ export function recordAction(
   live: LiveRoom | null,
   cell: { z: string; x: number; y: number; l: number },
   cellExists: boolean,
+  i18n: MapperI18n = mapperI18n,
 ): { label: string; enabled: boolean; reason: string } {
   const label = cellExists
-    ? "Update room from live data"
-    : "Record room here";
+    ? i18n.t('updateRoomLive')
+    : i18n.t('recordHere');
   if (!pos || !pos.valid) {
-    return { label, enabled: false, reason: "no position — use 'I'm here' first" };
+    return { label, enabled: false, reason: i18n.t('recordNoPosition') };
   }
   if (!isCurrentCell(pos, cell)) {
     return {
       label,
       enabled: false,
-      reason: "you can only record the cell where you are standing",
+      reason: i18n.t('recordWrongCell'),
     };
   }
   // 🔴 lost: the tracker still reports a coord, but it is the LAST-KNOWN one —
@@ -135,7 +142,7 @@ export function recordAction(
     return {
       label,
       enabled: false,
-      reason: "position lost (🔴) — the live room does not describe this cell",
+      reason: i18n.t('recordPositionLost'),
     };
   }
   // The tracker is merely HOLDING this coord (ambiguous match / hint-less pipe
@@ -144,24 +151,26 @@ export function recordAction(
     return {
       label,
       enabled: false,
-      reason: "the live room does not match this cell — use 'I'm here' first",
+      reason: i18n.t('recordCellMismatch'),
     };
   }
   if (!live || !live.hint) {
     return {
       label,
       enabled: false,
-      reason: "no live room received yet — look at the room first",
+      reason: i18n.t('recordNoLive'),
     };
   }
   // Recording re-anchors, and anchoring flushes the pending queue — doing that
   // mid-speedwalk would silently drop the in-flight moves.
   if (pos.pendingMoves > 0) {
-    const steps = pos.pendingMoves === 1 ? "step" : "steps";
     return {
       label,
       enabled: false,
-      reason: `movement in progress (${pos.pendingMoves} pending ${steps}) — wait until it finishes`,
+      reason: i18n.t('recordMovement', {
+        count: pos.pendingMoves,
+        step: i18n.plural('step', pos.pendingMoves),
+      }),
     };
   }
   return { label, enabled: true, reason: "" };
@@ -172,7 +181,7 @@ export function recordAction(
 // Fixed label. It does NOT switch between "record"/"update" the way the cell
 // menu's item does: a toolbar button whose caption changes under the cursor is
 // hard to aim at, and the create-vs-update distinction is in the tooltip instead.
-export const recordButtonLabel = "Record room";
+export const recordButtonLabel = mapperI18n.t('recordRoom');
 
 // State of the top-bar record button. It is the SAME write as the cell menu's
 // record item — aimed, unconditionally, at the cell the player is standing in —
@@ -192,37 +201,37 @@ export function recordButtonState(
   pos: PlayerPosition | null,
   live: LiveRoom | null,
   cellExists: boolean | null,
+  i18n: MapperI18n = mapperI18n,
 ): {
   label: string;
   enabled: boolean;
   title: string;
   cell: { z: string; x: number; y: number; l: number } | null;
 } {
-  const label = recordButtonLabel;
+  const label = i18n.t('recordRoom');
   if (!pos || !pos.valid) {
     return {
       label,
       enabled: false,
-      title: `${label}: no position — use 'I'm here' in the cell menu first`,
+      title: `${label}: ${i18n.t('recordNoPositionMenu')}`,
       cell: null,
     };
   }
   const cell = { z: pos.zone, x: pos.x, y: pos.y, l: pos.l };
-  const act = recordAction(pos, live, cell, cellExists === true);
+  const act = recordAction(pos, live, cell, cellExists === true, i18n);
   if (!act.enabled) {
     return { label, enabled: false, title: `${label}: ${act.reason}`, cell };
   }
-  const verb =
-    cellExists === true
-      ? "update"
-      : cellExists === false
-        ? "create"
-        : "record";
+  const verb = cellExists === true
+    ? i18n.t('verbUpdate')
+    : cellExists === false
+      ? i18n.t('verbCreate')
+      : i18n.t('verbRecord');
   const at = `${cell.z} ${cell.x},${cell.y},${cell.l}`;
   return {
     label,
     enabled: true,
-    title: `${verb} cell {${at}} from live room '${live?.hint ?? ""}'`,
+    title: i18n.t('recordTitle', { verb, cell: at, room: live?.hint ?? '' }),
     cell,
   };
 }

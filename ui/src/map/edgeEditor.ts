@@ -1,5 +1,6 @@
 import { stepDelta } from "./geometry";
 import type { SeamTarget, SlimEdgeAttr, SlimRoom, SlimSeam } from "./types";
+import { mapperI18n, type MapperI18n } from "./i18n";
 
 // The EDGE EDITOR's pure model: everything the popup on a cell boundary needs,
 // with no DOM. pane.ts renders it; this file decides what it says and what a
@@ -55,18 +56,23 @@ export function passableNow(state: FaceState): boolean {
 // provenanceLabel explains WHERE the current state came from. The player has to
 // be able to tell "the MUD said so" from "I marked it", otherwise they cannot
 // tell their own experiment from the map.
-export function provenanceLabel(state: FaceState): string {
+export function provenanceLabel(state: FaceState, candidate: MapperI18n | unknown = mapperI18n): string {
+  // Array.map passes the index as a second argument; keep the long-standing
+  // `states.map(provenanceLabel)` use safe while still accepting an explicit locale.
+  const i18n = typeof candidate === 'object' && candidate !== null &&
+    't' in candidate && typeof (candidate as MapperI18n).t === 'function'
+    ? candidate as MapperI18n : mapperI18n;
   switch (state) {
     case "open":
-      return "passage marked manually (not present in the room text)";
+      return i18n.t('provOpen');
     case "blocked":
-      return "passage blocked manually (the room text lists it)";
+      return i18n.t('provBlocked');
     case "derived":
-      return "passage parsed from the room text";
+      return i18n.t('provDerived');
     case "fallback":
-      return "adjacency-only passage: neither room provides exit data";
+      return i18n.t('provFallback');
     default:
-      return "no passage";
+      return i18n.t('provNone');
   }
 }
 
@@ -186,11 +192,12 @@ export function attrsSummary(
   attrs: EdgeAttrs,
   dir: string,
   defaultOpen: string,
+  i18n: MapperI18n = mapperI18n,
 ): string {
   const parts: string[] = [];
-  if (attrs.weight !== 1) parts.push(`weight ${attrs.weight}`);
+  if (attrs.weight !== 1) parts.push(i18n.t('attrWeight', { weight: attrs.weight }));
   if (attrs.phrase) {
-    parts.push(`route sends '${attrs.phrase}' instead of the direction`);
+    parts.push(i18n.t('attrPhrase', { phrase: attrs.phrase }));
   }
   if (attrs.door) {
     // `defaultOpen` is the SESSION's room-format template, and it is empty for every
@@ -198,22 +205,19 @@ export function attrsSummary(
     // пошлёт «»» instead would read as a bug — or worse, as a promise.
     const cmd = attrs.openCmd || renderDefaultOpen(defaultOpen, dir);
     if (cmd) {
-      parts.push(`route sends '${cmd}' before the step`);
+      parts.push(i18n.t('attrOpen', { command: cmd }));
     } else {
-      parts.push(
-        "no opening command is set and this MUD's room format does not open doors" +
-          " — the route will not open the door",
-      );
+      parts.push(i18n.t('attrNoOpen'));
     }
   } else if (attrs.openCmd) {
     // An opening command with no door is inert — say so rather than let it look armed.
-    parts.push("an opening command is set, but this edge has no door — it will not run");
+    parts.push(i18n.t('attrInertOpen'));
   }
   if (attrs.locked) {
-    parts.push("locked by default from this side — a key is required");
+    parts.push(i18n.t('attrLocked'));
   }
   if (attrs.noRoute) {
-    parts.push("routes avoid this edge (manual movement still works and is tracked)");
+    parts.push(i18n.t('attrNoRoute'));
   }
   if (parts.length === 0) return "";
   return parts.join(" · ");
@@ -282,6 +286,7 @@ export function buildEdgeModel(
   dir: string,
   roomA: SlimRoom | null,
   roomB: SlimRoom | null,
+  i18n: MapperI18n = mapperI18n,
 ): EdgeModel | null {
   const b = neighbourCell(a, dir);
   const back = OPPOSITE[dir];
@@ -302,7 +307,7 @@ export function buildEdgeModel(
         toLabel: lb,
         state: sa,
         passable: passableNow(sa),
-        provenance: provenanceLabel(sa),
+        provenance: provenanceLabel(sa, i18n),
         attrs: faceAttrs(roomA, dir),
         attrsEditable: passableNow(sa),
       },
@@ -314,7 +319,7 @@ export function buildEdgeModel(
         toLabel: la,
         state: sb,
         passable: passableNow(sb),
-        provenance: provenanceLabel(sb),
+        provenance: provenanceLabel(sb, i18n),
         attrs: faceAttrs(roomB, back),
         attrsEditable: passableNow(sb),
       },
@@ -323,9 +328,9 @@ export function buildEdgeModel(
 }
 
 // dirName renders a canonical letter as the English direction word used by the pane.
-export function dirName(dir: string): string {
+export function dirName(dir: string, i18n: MapperI18n = mapperI18n): string {
   return (
-    { N: "north", S: "south", E: "east", W: "west", U: "up", D: "down" }[
+    { N: i18n.t('dirN'), S: i18n.t('dirS'), E: i18n.t('dirE'), W: i18n.t('dirW'), U: i18n.t('dirU'), D: i18n.t('dirD') }[
       dir
     ] ?? dir
   );

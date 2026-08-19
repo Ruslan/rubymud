@@ -35,9 +35,9 @@ test("reconciles the live five-room loop and survives restart", async ({ browser
 
   const target = dialog.getByLabel("Existing target room");
   await target.selectOption({ label: "Loop Room 1 — (0, 0, 0)" });
-  await dialog.getByLabel("display_x").fill("1");
-  await dialog.getByLabel("display_y").fill("0");
-  await dialog.getByLabel("display_l").fill("0");
+  await dialog.getByLabel("Display X").fill("1");
+  await dialog.getByLabel("Display Y").fill("0");
+  await dialog.getByLabel("Display L").fill("0");
   const apply = dialog.getByRole("button", { name: "Apply" });
   await expect(apply).toBeDisabled();
   await dialog.getByRole("button", { name: "Preview" }).click();
@@ -45,9 +45,9 @@ test("reconciles the live five-room loop and survives restart", async ({ browser
   await expect(apply).toBeEnabled();
   expectFalseFace(initialRevision);
 
-  await dialog.getByLabel("display_y").fill("1");
+  await dialog.getByLabel("Display Y").fill("1");
   await expect(apply).toBeDisabled();
-  await dialog.getByLabel("display_y").fill("0");
+  await dialog.getByLabel("Display Y").fill("0");
   await dialog.getByRole("button", { name: "Preview" }).click();
   await expect(apply).toBeEnabled();
   await apply.click();

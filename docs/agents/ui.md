@@ -71,6 +71,22 @@ Catalog-to-placement transitions abort any in-flight room refresh and keep its
 generation stale, preserving the unsaved placement form. Back completes a
 pending refresh; automatic catalog closure restores focus to `Place existing`.
 
+## Mapper localization
+
+The canvas mapper uses the typed, dependency-free catalog in `ui/src/map/i18n.ts`.
+Construct `MapPaneController` with the server-injected boot locale; do not fetch a
+locale from the game loop. RubyMUD-authored labels, statuses, tooltips, ARIA copy,
+and client-side validation belong in that catalog. Room/zone names, commands,
+raw MUD output, parser direction vocabulary, and server/game values passed as
+interpolation parameters must never be translated.
+
+Keep English wording backward-compatible. Add both en/ru entries with matching
+placeholders, and use the catalog plural API for counts. The controller's
+`setLocale` closes locale-bound overlays before rebuilding static copy, which is
+safe for a future live settings broadcast; today Settings applies the
+instance-wide language on page reload. `i18nExtraction.test.ts` is the guard for
+accidental Cyrillic UI literals and contains the narrow parser allowlist.
+
 ## Development
 
 - **Build**: Vite compiles everything into `go/internal/web/static/`.
