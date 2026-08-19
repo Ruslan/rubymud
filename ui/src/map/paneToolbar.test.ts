@@ -155,7 +155,9 @@ describe("map pane compact toolbar", () => {
   });
 
   it("renders OBS lifecycle states, fences stale updates, and resets for restore", async () => {
-    const button = [...pane.root.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "OBS")!;
+	const button = [...pane.root.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "OBS")!;
+	expect(button.classList.contains("map-pane__recording-toggle")).toBe(true);
+	expect(mainStyles).toMatch(/\.map-pane__icon\.map-pane__recording-toggle\s*\{[^}]*width:\s*auto;[^}]*flex:\s*0 0 auto;[^}]*padding:\s*0 6px;/s);
     pane.onMapRecordingState({ mode: "armed", pending: 0, revision: 5 });
     expect(button.textContent).toBe("STOP OBS");
     expect(button.getAttribute("aria-pressed")).toBe("true");

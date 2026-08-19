@@ -1151,6 +1151,13 @@ body {
   font-size: 16px;
   line-height: 1;
 }
+.map-pane__icon.map-pane__recording-toggle {
+  width: auto;
+  min-width: 34px;
+  flex: 0 0 auto;
+  padding: 0 6px;
+  font-size: 11px;
+}
 .map-pane__tool.on,
 .map-pane__icon.on {
   color: #f0b64e;

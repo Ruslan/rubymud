@@ -215,9 +215,6 @@ func (m *Manager) Connect(id int64) (*Session, error) {
 		return nil, err
 	}
 
-	m.sessions[id] = sess
-	go sess.RunReadLoop()
-
 	// Build the mapper tracker index from the session's active map set (off the
 	// hot path; degrades to an empty tracker if no/dangling set).
 	sess.LoadActiveMapSet()
@@ -227,6 +224,14 @@ func (m *Manager) Connect(id int64) (*Session, error) {
 	// says so on the wire). This is the ONE place the profile is resolved on the
 	// connect path — never per incoming line.
 	sess.LoadMapperProfile()
+
+	// Install the tracker and detector BEFORE reading the socket. A MUD may send
+	// its first room block immediately after TCP connect; the kernel already
+	// buffers those bytes while the cheap DB-backed mapper setup runs. Starting
+	// the read loop earlier loses that first room for mapping even though it is
+	// still shown in the output log.
+	m.sessions[id] = sess
+	go sess.RunReadLoop()
 
 	sess.QueueStartupCommands()
 

@@ -10,7 +10,7 @@ DB_PATH ?= data/mudhost.db
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || printf 'dev')
 GO_LDFLAGS ?= -X rubymud/go/internal/buildinfo.Version=$(VERSION)
 
-.PHONY: help run build go-build test tidy db-init db-schema ui docker-build docker-run smoke-tzdata
+.PHONY: help run build go-build test tidy db-init db-schema ui docker-build docker-run smoke-tzdata e2e-mapper-reconciliation
 
 help:
 	@printf "Targets:\n"
@@ -25,6 +25,7 @@ help:
 	@printf "  make docker-build                        Build Docker image\n"
 	@printf "  make docker-run                          Run protected local Docker container (requires inherited MUDHOST_BASIC_AUTH_* env)\n"
 	@printf "  make smoke-tzdata                        Verify timezones persist in the alpine runtime image\n"
+	@printf "  make e2e-mapper-reconciliation           Run isolated five-room mapper live E2E\n"
 
 .PHONY: ui-install
 
@@ -91,3 +92,9 @@ docker-run:
 # regressing and silently folding users' saved zones to UTC. See the script header.
 smoke-tzdata:
 	scripts/tzdata_smoke_test
+
+# Build and run the loopback-only five-room MUD + isolated SQLite/mudhost +
+# headless Chromium reconciliation scenario. The script owns process cleanup and
+# never uses data/mudhost.db.
+e2e-mapper-reconciliation:
+	scripts/e2e_mapper_reconciliation

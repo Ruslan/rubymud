@@ -38,3 +38,27 @@ func TestExactCorridorLandingOnPipeDoesNotAbsorbFollowingStep(t *testing.T) {
 		t.Fatalf("exact corridor swallowed following pipe step: %#v", result)
 	}
 }
+
+func TestReconciledReverseSuppressionPreventsDiagonalRoute(t *testing.T) {
+	z, l := "Z", 0
+	cell := func(x, y int) (*string, *int, *int, *int) { xx, yy := x, y; return &z, &xx, &yy, &l }
+	edge := func(fx, fy int, dir string, tx, ty int) storage.MapEdge {
+		tz, x, y, ll := cell(tx, ty)
+		return storage.MapEdge{Kind: storage.EdgeKindGrid, Source: storage.EdgeSourceParsed, Passable: true, FromZone: z, FromX: fx, FromY: fy, Dir: dir, ToZone: tz, ToX: x, ToY: y, ToL: ll, EdgeAttrs: storage.EdgeAttrs{Weight: 1}}
+	}
+	rooms := []storage.Room{{Zone: z, X: 0, Y: 0}, {Zone: z, X: 0, Y: 1}, {Zone: z, X: 0, Y: 2}, {Zone: z, X: 1, Y: 2}, {Zone: z, X: 1, Y: 1}}
+	edges := []storage.MapEdge{edge(0, 0, "E", 0, 1), edge(0, 1, "E", 0, 2), edge(0, 2, "S", 1, 2), edge(1, 2, "W", 1, 1)}
+	tz, tx, ty, tl := cell(0, 0)
+	edges = append(edges,
+		storage.MapEdge{Kind: storage.EdgeKindCorridor, Source: storage.EdgeSourceReconciled, Passable: true, FromZone: z, FromX: 1, FromY: 1, Dir: "N", ToZone: tz, ToX: tx, ToY: ty, ToL: tl, Command: "climb exact", EdgeAttrs: storage.EdgeAttrs{Weight: 1}},
+		storage.MapEdge{Kind: storage.EdgeKindGrid, Source: storage.EdgeSourceReconciled, Passable: false, FromZone: z, FromX: 0, FromY: 1, Dir: "S", ToZone: func() *string { v := z; return &v }(), ToX: func() *int { v := 1; return &v }(), ToY: func() *int { v := 1; return &v }(), ToL: func() *int { v := 0; return &v }(), EdgeAttrs: storage.EdgeAttrs{Weight: 1}},
+	)
+	idx := BuildIndexWithEdges(1, rooms, edges)
+	if got := idx.Room(Coord{z, 0, 1, 0}).GridEdge("S"); got == nil || got.Passable {
+		t.Fatalf("reverse suppression missing: %#v", got)
+	}
+	result := idx.FindPath(Coord{z, 0, 1, 0}, func(r *IndexRoom) bool { return r.Coord == (Coord{z, 1, 1, 0}) })
+	if !result.Reachable || len(result.Steps) != 3 {
+		t.Fatalf("routing used suppressed diagonal: %#v", result)
+	}
+}

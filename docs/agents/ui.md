@@ -50,7 +50,7 @@ a late response cannot replace a newer zone selection.
 
 ## Mapper Room Knowledge
 
-The cell menu action `Знания…` opens a room-scoped dialog. Its `Обитатели` tab
+The cell menu action `Knowledge…` opens a room-scoped dialog. Its `Inhabitants` tab
 loads lazily from `/api/map-sets/{id}/inhabitants`; the full catalogue must not
 be added to the hot slim-room/zone payload. Cards and forms use DOM `textContent`
 and native controls rather than HTML interpolation.

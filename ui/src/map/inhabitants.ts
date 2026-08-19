@@ -74,7 +74,7 @@ function textArea(name: string, value: string): HTMLTextAreaElement {
   return area;
 }
 
-// Owns the room-scoped «Знания → Обитатели» surface. It has no zone cache and
+// Owns the room-scoped Knowledge → Inhabitants surface. It has no zone cache and
 // performs no eager request: open() is the sole initial load boundary.
 export class RoomKnowledgeDialog {
   private backdrop: HTMLElement | null = null;
@@ -105,14 +105,14 @@ export class RoomKnowledgeDialog {
     dialog.className = "map-knowledge-dialog";
     dialog.setAttribute("role", "dialog");
     dialog.setAttribute("aria-modal", "true");
-    dialog.setAttribute("aria-label", "Знания");
+    dialog.setAttribute("aria-label", "Knowledge");
     backdrop.appendChild(dialog);
 
     const title = document.createElement("h2");
-    title.textContent = "Знания";
+    title.textContent = "Knowledge";
     const roomLine = document.createElement("div");
     roomLine.className = "map-knowledge-dialog__room";
-    roomLine.textContent = `${room.name || "Комната"} · ${room.zone} (${room.x},${room.y},${room.l})`;
+    roomLine.textContent = `${room.name || "Room"} · ${room.zone} (${room.x},${room.y},${room.l})`;
     const tabs = document.createElement("div");
     tabs.className = "map-knowledge-dialog__tabs";
     tabs.setAttribute("role", "tablist");
@@ -120,7 +120,7 @@ export class RoomKnowledgeDialog {
     inhabitantsTab.type = "button";
     inhabitantsTab.setAttribute("role", "tab");
     inhabitantsTab.setAttribute("aria-selected", "true");
-    inhabitantsTab.textContent = "Обитатели";
+    inhabitantsTab.textContent = "Inhabitants";
     tabs.appendChild(inhabitantsTab);
 
     const panel = document.createElement("div");
@@ -141,11 +141,11 @@ export class RoomKnowledgeDialog {
     actions.className = "map-knowledge-dialog__actions";
     this.addButton = document.createElement("button");
     this.addButton.type = "button";
-    this.addButton.textContent = "Добавить";
+    this.addButton.textContent = "Add";
     this.addButton.addEventListener("click", () => this.openForm(null));
     const close = document.createElement("button");
     close.type = "button";
-    close.textContent = "Закрыть";
+    close.textContent = "Close";
     close.addEventListener("click", () => this.close());
     actions.append(this.addButton, close);
     panel.append(this.message, this.list, actions);
@@ -230,7 +230,7 @@ export class RoomKnowledgeDialog {
     // latest server state is fetched as soon as this form is saved or cancelled.
     if (this.form) {
       this.pendingRefresh = true;
-      this.setMessage("Данные комнаты изменились; список обновится после закрытия формы.");
+      this.setMessage("Room data changed; the list will refresh after the form closes.");
       return;
     }
     void this.load();
@@ -243,7 +243,7 @@ export class RoomKnowledgeDialog {
     const controller = new AbortController();
     this.loadRequest = controller;
     const generation = ++this.generation;
-    this.setMessage("Загрузка…");
+    this.setMessage("Loading…");
     try {
       const response = await fetchWithToken(
         `/api/map-sets/${room.mapSetID}/inhabitants?${roomParams(room)}`,
@@ -253,11 +253,11 @@ export class RoomKnowledgeDialog {
       const rows = await response.json() as RoomInhabitant[];
       if (!this.isCurrent(room, generation, controller)) return;
       this.rows = Array.isArray(rows) ? rows : [];
-      this.setMessage(this.rows.length === 0 ? "Для этой комнаты обитатели ещё не записаны." : "");
+      this.setMessage(this.rows.length === 0 ? "No inhabitants have been recorded for this room." : "");
       this.renderList();
     } catch (error) {
       if (!this.isCurrent(room, generation, controller)) return;
-      this.setMessage(`Не удалось загрузить обитателей: ${error instanceof Error ? error.message : String(error)}`, true);
+      this.setMessage(`Failed to load inhabitants: ${error instanceof Error ? error.message : String(error)}`, true);
     } finally {
       if (this.loadRequest === controller) this.loadRequest = null;
     }
@@ -301,24 +301,24 @@ export class RoomKnowledgeDialog {
     if (row.resident) {
       const resident = document.createElement("span");
       resident.className = "map-inhabitant-card__resident";
-      resident.textContent = "постоянный";
+      resident.textContent = "resident";
       header.appendChild(resident);
     }
     card.appendChild(header);
-    this.appendDetail(card, "Присутствие", row.presence_text);
-    this.appendDetail(card, "Цель look", row.look_target);
-    this.appendDetail(card, "Результат look", row.look_text);
-    this.appendDetail(card, "Заметка", row.note);
-    this.appendDetail(card, "Стратегия", row.strategy);
+    this.appendDetail(card, "Presence", row.presence_text);
+    this.appendDetail(card, "Look target", row.look_target);
+    this.appendDetail(card, "Look result", row.look_text);
+    this.appendDetail(card, "Note", row.note);
+    this.appendDetail(card, "Strategy", row.strategy);
     const actions = document.createElement("div");
     actions.className = "map-inhabitant-card__actions";
     const edit = document.createElement("button");
     edit.type = "button";
-    edit.textContent = "Изменить";
+    edit.textContent = "Edit";
     edit.addEventListener("click", () => this.openForm(row));
     const remove = document.createElement("button");
     remove.type = "button";
-    remove.textContent = "Удалить";
+    remove.textContent = "Delete";
     remove.addEventListener("click", () => void this.remove(row));
     actions.append(edit, remove);
     card.appendChild(actions);
@@ -351,14 +351,14 @@ export class RoomKnowledgeDialog {
     const form = document.createElement("form");
     form.className = "map-inhabitant-form";
     const heading = document.createElement("h3");
-    heading.textContent = row ? "Изменить обитателя" : "Добавить обитателя";
+    heading.textContent = row ? "Edit inhabitant" : "Add inhabitant";
     form.appendChild(heading);
 
     const name = textInput("name", row?.name ?? "", nameLimit);
     name.required = true;
     const kind = document.createElement("select");
     kind.name = "kind";
-    for (const [value, label] of [["npc", "NPC"], ["monster", "Монстр"], ["other", "Другое"]] as const) {
+    for (const [value, label] of [["npc", "NPC"], ["monster", "Monster"], ["other", "Other"]] as const) {
       const option = document.createElement("option");
       option.value = value;
       option.textContent = label;
@@ -376,11 +376,11 @@ export class RoomKnowledgeDialog {
     resident.checked = row?.resident ?? false;
     const residentLabel = document.createElement("label");
     residentLabel.className = "map-inhabitant-form__resident";
-    residentLabel.append(resident, document.createTextNode(" Постоянный обитатель этой комнаты"));
+    residentLabel.append(resident, document.createTextNode(" Permanent resident of this room"));
     form.append(
-      labelWrap("Имя", name), labelWrap("Тип", kind), labelWrap("Цель команды look", target),
-      labelWrap("Результат look", look), labelWrap("Заметка", note),
-      labelWrap("Стратегия взаимодействия", strategy), labelWrap("Строка присутствия", presence),
+      labelWrap("Name", name), labelWrap("Type", kind), labelWrap("Look target", target),
+      labelWrap("Look result", look), labelWrap("Note", note),
+      labelWrap("Interaction strategy", strategy), labelWrap("Presence text", presence),
       residentLabel,
     );
     const message = document.createElement("div");
@@ -391,11 +391,11 @@ export class RoomKnowledgeDialog {
     actions.className = "map-inhabitant-form__actions";
     const cancel = document.createElement("button");
     cancel.type = "button";
-    cancel.textContent = "Отмена";
+    cancel.textContent = "Cancel";
     cancel.addEventListener("click", () => this.renderList());
     const save = document.createElement("button");
     save.type = "submit";
-    save.textContent = "Сохранить";
+    save.textContent = "Save";
     actions.append(cancel, save);
     form.appendChild(actions);
     form.addEventListener("submit", (event) => {
@@ -429,7 +429,7 @@ export class RoomKnowledgeDialog {
     this.writeRequest = controller;
     const controls = [...form.querySelectorAll<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement | HTMLButtonElement>("input, textarea, select, button")];
     controls.forEach((control) => { control.disabled = true; });
-    message.textContent = "Сохранение…";
+    message.textContent = "Saving…";
     const path = row
       ? `/api/map-sets/${room.mapSetID}/inhabitants/${row.id}`
       : `/api/map-sets/${room.mapSetID}/inhabitants`;
@@ -451,7 +451,7 @@ export class RoomKnowledgeDialog {
       this.renderList();
     } catch (error) {
       if (controller.signal.aborted || this.room !== room || this.form !== form) return;
-      message.textContent = `Не удалось сохранить: ${error instanceof Error ? error.message : String(error)}`;
+      message.textContent = `Failed to save: ${error instanceof Error ? error.message : String(error)}`;
       controls.forEach((control) => { control.disabled = false; });
     } finally {
       if (this.writeRequest === controller) this.writeRequest = null;
@@ -460,11 +460,11 @@ export class RoomKnowledgeDialog {
 
   private async remove(row: RoomInhabitant): Promise<void> {
     const room = this.room;
-    if (!room || !this.dialog || !window.confirm(`Удалить «${row.name}» из этой комнаты?`)) return;
+    if (!room || !this.dialog || !window.confirm(`Remove "${row.name}" from this room?`)) return;
     this.writeRequest?.abort();
     const controller = new AbortController();
     this.writeRequest = controller;
-    this.setMessage("Удаление…");
+    this.setMessage("Deleting…");
     try {
       const response = await fetchWithToken(
         `/api/map-sets/${room.mapSetID}/inhabitants/${row.id}?${roomParams(room)}`,
@@ -473,11 +473,11 @@ export class RoomKnowledgeDialog {
       if (!response.ok) throw new Error(await response.text());
       if (controller.signal.aborted || this.room !== room) return;
       this.rows = this.rows.filter((candidate) => candidate.id !== row.id);
-      this.setMessage(this.rows.length === 0 ? "Для этой комнаты обитатели ещё не записаны." : "");
+      this.setMessage(this.rows.length === 0 ? "No inhabitants have been recorded for this room." : "");
       this.renderList();
     } catch (error) {
       if (controller.signal.aborted || this.room !== room) return;
-      this.setMessage(`Не удалось удалить: ${error instanceof Error ? error.message : String(error)}`, true);
+      this.setMessage(`Failed to delete: ${error instanceof Error ? error.message : String(error)}`, true);
     } finally {
       if (this.writeRequest === controller) this.writeRequest = null;
     }

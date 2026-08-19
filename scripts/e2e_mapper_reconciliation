@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+make -C "$repo_dir" build
+(
+  cd "$repo_dir/go"
+  go build -tags=e2e -o ../bin/e2e-five-room-mud ./cmd/e2e-five-room-mud
+  go build -tags=e2e -o ../bin/e2e-mapper-fixture ./cmd/e2e-mapper-fixture
+)
+
+if [[ ! -d "$repo_dir/e2e/node_modules" ]]; then
+  npm --prefix "$repo_dir/e2e" ci
+fi
+"$repo_dir/e2e/node_modules/.bin/playwright" install chromium
+npm --prefix "$repo_dir/e2e" test

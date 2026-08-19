@@ -96,14 +96,14 @@ describe("map room inhabitants knowledge dialog", () => {
     clickRoom();
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/inhabitants"))).toBe(false);
     const knowledge = [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
-      .find((button) => button.textContent === "Знания…")!;
+      .find((button) => button.textContent === "Knowledge…")!;
     knowledge.click();
 
     const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
-    expect(dialog.getAttribute("aria-label")).toBe("Знания");
+    expect(dialog.getAttribute("aria-label")).toBe("Knowledge");
     const tab = dialog.querySelector<HTMLElement>('[role="tab"]')!;
     const panel = dialog.querySelector<HTMLElement>('[role="tabpanel"]')!;
-    expect(tab.textContent).toBe("Обитатели");
+    expect(tab.textContent).toBe("Inhabitants");
     expect(tab.getAttribute("aria-controls")).toBe(panel.id);
     await vi.waitFor(() => expect(dialog.textContent).toContain("Кузнец"));
     expect(dialog.textContent).toContain("Крыса");
@@ -111,7 +111,7 @@ describe("map room inhabitants knowledge dialog", () => {
     expect(decodeURIComponent(String(listCall[0]))).toContain("zone=Город&x=3&y=4&l=0");
 
     [...dialog.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "Добавить")!.click();
+      .find((button) => button.textContent === "Add")!.click();
     const createForm = dialog.querySelector<HTMLFormElement>(".map-inhabitant-form")!;
     (createForm.elements.namedItem("name") as HTMLInputElement).value = "Торговец";
     (createForm.elements.namedItem("kind") as HTMLSelectElement).value = "other";
@@ -132,7 +132,7 @@ describe("map room inhabitants knowledge dialog", () => {
     const smithCard = [...dialog.querySelectorAll<HTMLElement>(".map-inhabitant-card")]
       .find((card) => card.textContent?.includes("Кузнец"))!;
     [...smithCard.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "Изменить")!.click();
+      .find((button) => button.textContent === "Edit")!.click();
     const editForm = dialog.querySelector<HTMLFormElement>(".map-inhabitant-form")!;
     (editForm.elements.namedItem("name") as HTMLInputElement).value = "Мастер-кузнец";
     editForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
@@ -144,13 +144,13 @@ describe("map room inhabitants knowledge dialog", () => {
     const ratCard = [...dialog.querySelectorAll<HTMLElement>(".map-inhabitant-card")]
       .find((card) => card.textContent?.includes("Крыса"))!;
     [...ratCard.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "Удалить")!.click();
+      .find((button) => button.textContent === "Delete")!.click();
     await vi.waitFor(() => expect(dialog.textContent).not.toContain("Крыса"));
     const deleteCall = fetchMock.mock.calls.find(([, init]) => init?.method === "DELETE")!;
     expect(decodeURIComponent(String(deleteCall[0]))).toContain("/inhabitants/2?zone=Город&x=3&y=4&l=0");
 
     [...dialog.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "Закрыть")!.click();
+      .find((button) => button.textContent === "Close")!.click();
     await Promise.resolve();
     expect(pane.root.contains(document.activeElement)).toBe(true);
     expect(document.activeElement).not.toBe(document.body);
@@ -160,7 +160,7 @@ describe("map room inhabitants knowledge dialog", () => {
     await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
     clickRoom();
     [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
-      .find((button) => button.textContent === "Знания…")!.click();
+      .find((button) => button.textContent === "Knowledge…")!.click();
     await vi.waitFor(() => expect(pane.root.querySelector(".map-knowledge-dialog")?.textContent).toContain("Кузнец"));
     const knowledgeCalls = () => fetchMock.mock.calls.filter(([url]) => String(url).includes("/inhabitants?")).length;
     const roomCalls = () => fetchMock.mock.calls.filter(([url]) => String(url).includes("/api/rooms?")).length;
@@ -181,11 +181,11 @@ describe("map room inhabitants knowledge dialog", () => {
     await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
     clickRoom();
     [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
-      .find((button) => button.textContent === "Знания…")!.click();
+      .find((button) => button.textContent === "Knowledge…")!.click();
     await vi.waitFor(() => expect(pane.root.querySelector(".map-knowledge-dialog")?.textContent).toContain("Кузнец"));
     const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
     [...dialog.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "Добавить")!.click();
+      .find((button) => button.textContent === "Add")!.click();
     const form = dialog.querySelector<HTMLFormElement>(".map-inhabitant-form")!;
     const name = form.elements.namedItem("name") as HTMLInputElement;
     const note = form.elements.namedItem("note") as HTMLTextAreaElement;
@@ -206,10 +206,10 @@ describe("map room inhabitants knowledge dialog", () => {
     fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveLoad = resolve; }));
     clickRoom();
     [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
-      .find((button) => button.textContent === "Знания…")!.click();
+      .find((button) => button.textContent === "Knowledge…")!.click();
     const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
     [...dialog.querySelectorAll<HTMLButtonElement>("button")]
-      .find((button) => button.textContent === "Добавить")!.click();
+      .find((button) => button.textContent === "Add")!.click();
     const form = dialog.querySelector<HTMLFormElement>(".map-inhabitant-form")!;
     const name = form.elements.namedItem("name") as HTMLInputElement;
     name.value = "Несохранённый NPC";

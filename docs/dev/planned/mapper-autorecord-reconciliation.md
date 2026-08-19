@@ -48,6 +48,10 @@ preview перед Apply и сохраняется при stale error. Frozen-se
 без orphan fork/active-set rollback. Selector текущего среза ограничен уже
 загруженной зоной; cross-zone search и solver/drag не входят в C2.
 
+Проверка C2 на полном live stack вынесена в
+[`mapper-reconciliation-live-e2e.md`](mapper-reconciliation-live-e2e.md):
+детерминированный five-room TCP MUD, отдельные mudhost/SQLite и headless Chromium.
+
 План выделен из пунктов 2 и 3 общего mapper backlog
 **2026-08-19** после обсуждения замыкания маршрута без стабильного server room ID.
 

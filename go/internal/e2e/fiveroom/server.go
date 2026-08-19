@@ -1,0 +1,223 @@
+package fiveroom
+
+import (
+	"bufio"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+)
+
+const (
+	maxCommandBytes = 256
+	readIdleTimeout = 30 * time.Second
+	writeTimeout    = 5 * time.Second
+)
+
+type TraceEntry struct {
+	Sequence     uint64 `json:"sequence"`
+	ConnectionID uint64 `json:"connection_id"`
+	From         int    `json:"from"`
+	Command      string `json:"command"`
+	To           int    `json:"to"`
+	Moved        bool   `json:"moved"`
+}
+
+type Server struct {
+	listener net.Listener
+	trace    *os.File
+
+	traceMu sync.Mutex
+	connMu  sync.Mutex
+	conns   map[net.Conn]struct{}
+
+	nextConnection atomic.Uint64
+	nextSequence   atomic.Uint64
+	acceptWG       sync.WaitGroup
+	connWG         sync.WaitGroup
+	closeOnce      sync.Once
+	closeErr       error
+}
+
+func Listen(addr, tracePath string) (*Server, error) {
+	listener, err := net.Listen("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	trace, err := os.Create(tracePath)
+	if err != nil {
+		listener.Close()
+		return nil, err
+	}
+	s := &Server{listener: listener, trace: trace, conns: make(map[net.Conn]struct{})}
+	s.acceptWG.Add(1)
+	go s.acceptLoop()
+	return s, nil
+}
+
+func (s *Server) Addr() net.Addr { return s.listener.Addr() }
+
+func (s *Server) Close() error {
+	s.closeOnce.Do(func() {
+		listenerErr := s.listener.Close()
+		s.acceptWG.Wait()
+		s.connMu.Lock()
+		for conn := range s.conns {
+			_ = conn.Close()
+		}
+		s.connMu.Unlock()
+		s.connWG.Wait()
+		traceErr := s.trace.Close()
+		if listenerErr != nil && !errors.Is(listenerErr, net.ErrClosed) {
+			s.closeErr = listenerErr
+		} else {
+			s.closeErr = traceErr
+		}
+	})
+	return s.closeErr
+}
+
+func (s *Server) acceptLoop() {
+	defer s.acceptWG.Done()
+	for {
+		conn, err := s.listener.Accept()
+		if err != nil {
+			return
+		}
+		s.connMu.Lock()
+		s.conns[conn] = struct{}{}
+		s.connMu.Unlock()
+		connectionID := s.nextConnection.Add(1)
+		s.connWG.Add(1)
+		go s.handleConnection(conn, connectionID)
+	}
+}
+
+func (s *Server) handleConnection(conn net.Conn, connectionID uint64) {
+	defer s.connWG.Done()
+	defer func() {
+		s.connMu.Lock()
+		delete(s.conns, conn)
+		s.connMu.Unlock()
+		_ = conn.Close()
+	}()
+
+	world := NewWorld()
+	if err := writeRoomBlock(conn, world.Current()); err != nil {
+		return
+	}
+	reader := bufio.NewReaderSize(conn, maxCommandBytes+16)
+	for {
+		command, err := readCommand(conn, reader)
+		if err != nil {
+			return
+		}
+		if command == "" {
+			continue
+		}
+		from := world.Current().ID
+		room, moved := world.Apply(command)
+		entry := TraceEntry{
+			Sequence: s.nextSequence.Add(1), ConnectionID: connectionID,
+			From: from, Command: command, To: room.ID, Moved: moved,
+		}
+		if err := s.appendTrace(entry); err != nil {
+			return
+		}
+		if !moved {
+			if err := writeLine(conn, "Вы не можете идти в этом направлении."); err != nil {
+				return
+			}
+			continue
+		}
+		if err := writeRoomBlock(conn, room); err != nil {
+			return
+		}
+	}
+}
+
+func (s *Server) appendTrace(entry TraceEntry) error {
+	s.traceMu.Lock()
+	defer s.traceMu.Unlock()
+	return json.NewEncoder(s.trace).Encode(entry)
+}
+
+func writeRoomBlock(conn net.Conn, room Room) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(conn, "%s\r\n%s\r\n[ Exits: %s ]\r\n", room.Hint, room.Desc, room.Exits)
+	return err
+}
+
+func writeLine(conn net.Conn, line string) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+		return err
+	}
+	_, err := io.WriteString(conn, line+"\r\n")
+	return err
+}
+
+func readCommand(conn net.Conn, reader *bufio.Reader) (string, error) {
+	var command strings.Builder
+	for {
+		if err := conn.SetReadDeadline(time.Now().Add(readIdleTimeout)); err != nil {
+			return "", err
+		}
+		b, err := reader.ReadByte()
+		if err != nil {
+			return "", err
+		}
+		if b == 255 {
+			if err := discardTelnetSequence(reader); err != nil {
+				return "", err
+			}
+			continue
+		}
+		switch b {
+		case '\r':
+			continue
+		case '\n':
+			return strings.TrimSpace(command.String()), nil
+		}
+		if b < 32 || b > 126 {
+			continue
+		}
+		if command.Len() >= maxCommandBytes {
+			return "", fmt.Errorf("command exceeds %d bytes", maxCommandBytes)
+		}
+		command.WriteByte(b)
+	}
+}
+
+func discardTelnetSequence(reader *bufio.Reader) error {
+	command, err := reader.ReadByte()
+	if err != nil {
+		return err
+	}
+	switch command {
+	case 251, 252, 253, 254: // WILL, WONT, DO, DONT
+		_, err = reader.ReadByte()
+		return err
+	case 250: // SB ... IAC SE
+		previousIAC := false
+		for {
+			b, readErr := reader.ReadByte()
+			if readErr != nil {
+				return readErr
+			}
+			if previousIAC && b == 240 {
+				return nil
+			}
+			previousIAC = b == 255
+		}
+	default:
+		return nil
+	}
+}

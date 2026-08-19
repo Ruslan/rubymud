@@ -1,0 +1,12 @@
+{
+  "name": "rubymud-e2e",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "playwright test mapper-reconciliation.spec.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.61.1",
+    "typescript": "6.0.3"
+  }
+}

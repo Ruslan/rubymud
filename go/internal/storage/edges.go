@@ -59,10 +59,10 @@ const (
 // Dir is the grid direction walked (empty for a seam, which is described by its
 // Command instead). To* is nil when the edge leads nowhere known (a dangling exit
 // or a dead seam): such a row is recorded but not traversable.
-// Passable=false is only ever produced by hand: it is a NEGATION ("no way here,
-// whatever the room's exits line says"), stored as a row because the row is what
-// owns the face and therefore what survives the re-derivation. The walk refuses it;
-// the derivation skips its face. Every derived row is Passable=true.
+// Passable=false is an authoritative NEGATION ("no way here, whatever the room's
+// exits line says"). Most are manual walls; reconciliation also uses a
+// source=reconciled tombstone for a disproven symmetric reverse. The walk refuses
+// both and derivation skips their faces. Every derived row is Passable=true.
 type MapEdge struct {
 	ID         int64   `gorm:"primaryKey" json:"id"`
 	MapSetID   int64   `gorm:"column:map_set_id" json:"map_set_id"`
@@ -685,18 +685,18 @@ func insertEdges(tx *gorm.DB, edges []MapEdge) error {
 	return tx.CreateInBatches(edges, 500).Error
 }
 
-// manualGridFaces returns the (cell, direction) faces of a set that a HAND-DRAWN
-// grid row already occupies. Derivation must skip those faces: a face holds one
+// manualGridFaces returns the (cell, direction) faces of a set that an
+// AUTHORITATIVE grid/corridor row already occupies. Derivation must skip them: a face holds one
 // row (the partial UNIQUE index says so, and worldNeighbors indexes edges by
 // direction), manual rows survive re-derivation by design, so emitting the derived
 // row too would collide on the index and roll back the whole write — a room edit
-// next to a hand-drawn edge would simply fail. Manual therefore WINS on its face.
+// next to an owned face would simply fail. Authoritative rows therefore WIN.
 //
 // Seams are exempt: they carry no direction, are not covered by the unique index,
 // and a room may legitimately hold both its automaps seams and a hand-drawn jump.
 func manualGridFaces(tx *gorm.DB, mapSetID int64) (map[edgeKey]bool, error) {
-	return manualFacesQuery(tx.Where("map_set_id = ? AND ((kind = ? AND source = ?) OR kind = ?)",
-		mapSetID, EdgeKindGrid, EdgeSourceManual, EdgeKindCorridor))
+	return manualFacesQuery(tx.Where("map_set_id = ? AND ((kind = ? AND source IN ?) OR kind = ?)",
+		mapSetID, EdgeKindGrid, []string{EdgeSourceManual, EdgeSourceReconciled}, EdgeKindCorridor))
 }
 
 // manualGridFacesAt is the same question asked only about the cells a write can
@@ -723,8 +723,8 @@ func manualGridFacesAt(tx *gorm.DB, mapSetID int64, cells []EdgeCell) (map[edgeK
 	taken := map[edgeKey]bool{}
 	for _, c := range cells {
 		part, err := manualFacesQuery(tx.Where(
-			"map_set_id = ? AND ((kind = ? AND source = ?) OR kind = ?) AND from_zone = ? AND from_x = ? AND from_y = ? AND from_l = ?",
-			mapSetID, EdgeKindGrid, EdgeSourceManual, EdgeKindCorridor, c.Zone, c.X, c.Y, c.L))
+			"map_set_id = ? AND ((kind = ? AND source IN ?) OR kind = ?) AND from_zone = ? AND from_x = ? AND from_y = ? AND from_l = ?",
+			mapSetID, EdgeKindGrid, []string{EdgeSourceManual, EdgeSourceReconciled}, EdgeKindCorridor, c.Zone, c.X, c.Y, c.L))
 		if err != nil {
 			return nil, err
 		}
@@ -907,8 +907,8 @@ func manualEdgesAroundTx(tx *gorm.DB, mapSetID int64, cells []EdgeCell) ([]MapEd
 	var out []MapEdge
 	for _, p := range probe {
 		var rows []MapEdge
-		if err := tx.Where("map_set_id = ? AND kind IN ? AND source = ? AND from_zone = ? AND from_x = ? AND from_y = ? AND from_l = ?",
-			mapSetID, []string{EdgeKindGrid, EdgeKindSeam}, EdgeSourceManual, p.Zone, p.X, p.Y, p.L).Order("id ASC").Find(&rows).Error; err != nil {
+		if err := tx.Where("map_set_id = ? AND ((kind = ? AND source IN ?) OR (kind = ? AND source = ?)) AND from_zone = ? AND from_x = ? AND from_y = ? AND from_l = ?",
+			mapSetID, EdgeKindGrid, []string{EdgeSourceManual, EdgeSourceReconciled}, EdgeKindSeam, EdgeSourceManual, p.Zone, p.X, p.Y, p.L).Order("id ASC").Find(&rows).Error; err != nil {
 			return nil, err
 		}
 		for _, e := range rows {
@@ -1097,7 +1097,7 @@ func restoreManualEdgesTx(tx *gorm.DB, mapSetID int64, snap ManualEdgeSnapshot) 
 // would delete duplicate/manual ownership and make ordinary room maintenance a
 // hidden legacy import operation.
 func rematerializeGridEdgesTx(tx *gorm.DB, mapSetID int64, rooms []Room) error {
-	if err := tx.Where("map_set_id = ? AND kind = ? AND source <> ?", mapSetID, EdgeKindGrid, EdgeSourceManual).
+	if err := tx.Where("map_set_id = ? AND kind = ? AND source NOT IN ?", mapSetID, EdgeKindGrid, []string{EdgeSourceManual, EdgeSourceReconciled}).
 		Delete(&MapEdge{}).Error; err != nil {
 		return err
 	}
@@ -1514,8 +1514,8 @@ func recomputeEdgesTx(tx *gorm.DB, mapSetID int64, cells []EdgeCell, tagsChanged
 	// Drop only derived grid rows under the affected keys. Seam rows are
 	// authoritative and must not be recreated from a room write.
 	for _, k := range keys {
-		if err := tx.Where("map_set_id = ? AND kind = ? AND source <> ? AND from_zone = ? AND from_x = ? AND from_y = ? AND from_l = ? AND dir = ?",
-			mapSetID, EdgeKindGrid, EdgeSourceManual, k.cell.Zone, k.cell.X, k.cell.Y, k.cell.L, k.dir).
+		if err := tx.Where("map_set_id = ? AND kind = ? AND source NOT IN ? AND from_zone = ? AND from_x = ? AND from_y = ? AND from_l = ? AND dir = ?",
+			mapSetID, EdgeKindGrid, []string{EdgeSourceManual, EdgeSourceReconciled}, k.cell.Zone, k.cell.X, k.cell.Y, k.cell.L, k.dir).
 			Delete(&MapEdge{}).Error; err != nil {
 			return err
 		}

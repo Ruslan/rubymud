@@ -87,6 +87,41 @@ func (s *Store) ApplyReconciliation(mapSetID int64, in ReconciliationInput) (bef
 			return e
 		}
 		before.Faces = []DirectionalFaceSnapshot{{Cell: in.Source, Dir: in.Dir, Existed: e == nil, Edge: old}}
+		// Reconciliation replaces evidence for one formerly assumed physical pair.
+		// Remove the old reverse half only when it was derived solely from the other
+		// room's side: a permissive/non-advertising source has not independently
+		// confirmed that directed traversal. Manual/corridor rows and a reverse room
+		// that explicitly advertises its own direction remain authoritative.
+		var staleReverse *MapEdge
+		oldDerived := e == nil && old.Kind == EdgeKindGrid && old.Passable &&
+			(old.Source == EdgeSourceParsed || old.Source == EdgeSourceGrid)
+		if oldDerived {
+			if oldTarget, ok := old.To(); ok && oldTarget == in.Source.step(in.Dir) {
+				// A derived grid face must point at its literal adjacent cell. Do not
+				// infer a pair from a mismatched/imported exact target.
+				reverseDir := oppositeDir[in.Dir]
+				var reverse MapEdge
+				rerr := tx.Where("map_set_id=? AND kind=? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=?", mapSetID, EdgeKindGrid, oldTarget.Zone, oldTarget.X, oldTarget.Y, oldTarget.L, reverseDir).First(&reverse).Error
+				if rerr != nil && rerr != gorm.ErrRecordNotFound {
+					return rerr
+				}
+				reverseTarget, reverseHasTarget := reverse.To()
+				reverseDerivedPair := rerr == nil && reverse.Passable &&
+					(reverse.Source == EdgeSourceParsed || reverse.Source == EdgeSourceGrid) &&
+					reverseHasTarget && reverseTarget == in.Source
+				if reverseDerivedPair {
+					var reverseRoom Room
+					if rerr = tx.Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=?", mapSetID, oldTarget.Zone, oldTarget.X, oldTarget.Y, oldTarget.L).First(&reverseRoom).Error; rerr != nil {
+						return rerr
+					}
+					if !RoomHasExplicitExits(reverseRoom.Ch, decodeStrArray(reverseRoom.EDirs)) || !RoomExitsInDir(reverseRoom.Ch, decodeStrArray(reverseRoom.EDirs), reverseDir) {
+						copy := reverse
+						staleReverse = &copy
+						before.Faces = append(before.Faces, DirectionalFaceSnapshot{Cell: oldTarget, Dir: reverseDir, Existed: true, Edge: reverse})
+					}
+				}
+			}
+		}
 
 		seen := map[EdgeCell]bool{}
 		for i := range in.Layouts {
@@ -119,6 +154,24 @@ func (s *Store) ApplyReconciliation(mapSetID int64, in ReconciliationInput) (bef
 		}
 		if e = tx.Where("map_set_id=? AND kind IN ? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=?", mapSetID, []string{EdgeKindGrid, EdgeKindCorridor}, in.Source.Zone, in.Source.X, in.Source.Y, in.Source.L, in.Dir).Delete(&MapEdge{}).Error; e != nil {
 			return e
+		}
+		if staleReverse != nil {
+			if e = tx.Delete(&MapEdge{}, staleReverse.ID).Error; e != nil {
+				return e
+			}
+			// Keep an authoritative, non-rendered/non-routable face tombstone. A
+			// plain delete is insufficient: room derivation is symmetric and would
+			// recreate this disproven reverse on the next upsert/rematerialization.
+			// Reconciled distinguishes it from a user-authored red/manual wall.
+			blocked := *staleReverse
+			blocked.ID = 0
+			blocked.Source = EdgeSourceReconciled
+			blocked.Passable = false
+			blocked.Command = ""
+			blocked.EdgeAttrs = EdgeAttrs{Weight: 1}
+			if e = tx.Create(&blocked).Error; e != nil {
+				return e
+			}
 		}
 		attrs := in.Attrs
 		if attrs.Weight == 0 {

@@ -797,6 +797,10 @@ func (s *Store) ListSlimRooms(mapSetID int64, zone string) ([]SlimRoom, error) {
 			})
 		}
 		switch {
+		case source == EdgeSourceReconciled && !passable:
+			// An internal authoritative tombstone suppresses symmetric room
+			// derivation after reconciliation. It is neither a passage nor a
+			// user-authored blocked wall, so never expose it to the renderer.
 		case source == EdgeSourceManual && passable:
 			d.m = append(d.m, dir)
 		case source == EdgeSourceManual:

@@ -70,6 +70,13 @@ func TestApplyReconciliationExactDirectedFaceSurvivesRecomputeAndUndo(t *testing
 		if reverse != 0 {
 			t.Fatal("phantom reverse corridor")
 		}
+		var suppressed MapEdge
+		if err := s.DB().Where("map_set_id=? AND kind=? AND from_zone='Z' AND from_x=0 AND from_y=1 AND from_l=0 AND dir='S'", id, EdgeKindGrid).First(&suppressed).Error; err != nil {
+			t.Fatalf("missing persistent reverse suppression: %v", err)
+		}
+		if suppressed.Source != EdgeSourceReconciled || suppressed.Passable {
+			t.Fatalf("reverse face is still traversable: %#v", suppressed)
+		}
 	}
 	assert()
 	var logical []Room
@@ -92,8 +99,12 @@ func TestApplyReconciliationExactDirectedFaceSurvivesRecomputeAndUndo(t *testing
 		t.Fatal(err)
 	}
 	var payload []SlimCorridor
-	var room4, room5 *SlimRoom
+	var room2, room4, room5 *SlimRoom
 	for _, r := range slim {
+		if r.H == "2" {
+			rr := r
+			room2 = &rr
+		}
 		if r.X == source.X && r.Y == source.Y {
 			payload = r.CO
 			rr := r
@@ -106,6 +117,9 @@ func TestApplyReconciliationExactDirectedFaceSurvivesRecomputeAndUndo(t *testing
 	}
 	if len(payload) != 1 || payload[0].ToX != target.X || payload[0].ToY != target.Y || payload[0].Command != "climb rope" {
 		t.Fatalf("corridor slim payload=%#v", payload)
+	}
+	if room2 == nil || slices.Contains(room2.G, "S") || slices.Contains(room2.GF, "S") || slices.Contains(room2.M, "S") || slices.Contains(room2.MB, "S") {
+		t.Fatalf("suppressed reverse leaked into slim payload: %#v", room2)
 	}
 	if room4 == nil || room5 == nil || room5.PX == nil || room5.PY == nil || *room5.PX != 1 || *room5.PY != 0 || room4.Y-*room5.PY != 2 || (!slices.Contains(room4.G, "W") && !slices.Contains(room4.GF, "W")) {
 		t.Fatalf("4-5 did not become one long display grid passage: 4=%#v 5=%#v", room4, room5)
@@ -125,6 +139,10 @@ func TestApplyReconciliationExactDirectedFaceSurvivesRecomputeAndUndo(t *testing
 	var old MapEdge
 	if err := s.DB().Where("map_set_id=? AND kind=? AND from_zone='Z' AND from_x=1 AND from_y=1 AND dir='N'", id, EdgeKindGrid).First(&old).Error; err != nil {
 		t.Fatalf("literal old grid not restored: %v", err)
+	}
+	var restoredReverse MapEdge
+	if err := s.DB().Where("map_set_id=? AND kind=? AND from_zone='Z' AND from_x=0 AND from_y=1 AND dir='S'", id, EdgeKindGrid).First(&restoredReverse).Error; err != nil || !restoredReverse.Passable || restoredReverse.Source == EdgeSourceReconciled {
+		t.Fatalf("literal reverse not restored: %#v err=%v", restoredReverse, err)
 	}
 	var layouts int64
 	s.DB().Model(&RoomLayout{}).Where("map_set_id=? AND zone='Z' AND x=1 AND y=1", id).Count(&layouts)
@@ -152,9 +170,126 @@ func TestApplyReconciliationStaleAndSubwriteFailureAreAtomic(t *testing.T) {
 	if corridor != 0 {
 		t.Fatal("edge escaped failed transaction")
 	}
+	var reverse MapEdge
+	if err := s.DB().Where("map_set_id=? AND kind=? AND from_zone='Z' AND from_x=0 AND from_y=1 AND dir='S'", id, EdgeKindGrid).First(&reverse).Error; err != nil || !reverse.Passable || reverse.Source == EdgeSourceReconciled {
+		t.Fatalf("failed apply changed reverse face: %#v err=%v", reverse, err)
+	}
 	after, _ := s.GetMapSet(id)
 	if after.TopologyRevision != set.TopologyRevision {
 		t.Fatalf("revision changed %d -> %d", set.TopologyRevision, after.TopologyRevision)
+	}
+}
+
+func TestApplyReconciliationPreservesAuthoritativeReverseFace(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		mutate func(*testing.T, *Store, int64)
+	}{
+		{"manual", func(t *testing.T, s *Store, id int64) {
+			if err := s.DB().Model(&MapEdge{}).Where("map_set_id=? AND kind=? AND from_zone='Z' AND from_x=0 AND from_y=1 AND dir='S'", id, EdgeKindGrid).Update("source", EdgeSourceManual).Error; err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"reconciled", func(t *testing.T, s *Store, id int64) {
+			if err := s.DB().Model(&MapEdge{}).Where("map_set_id=? AND kind=? AND from_zone='Z' AND from_x=0 AND from_y=1 AND dir='S'", id, EdgeKindGrid).Update("source", EdgeSourceReconciled).Error; err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"nonpassable", func(t *testing.T, s *Store, id int64) {
+			if err := s.DB().Model(&MapEdge{}).Where("map_set_id=? AND kind=? AND from_zone='Z' AND from_x=0 AND from_y=1 AND dir='S'", id, EdgeKindGrid).Update("passable", false).Error; err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"mismatched target", func(t *testing.T, s *Store, id int64) {
+			if err := s.DB().Model(&MapEdge{}).Where("map_set_id=? AND kind=? AND from_zone='Z' AND from_x=0 AND from_y=1 AND dir='S'", id, EdgeKindGrid).Updates(map[string]any{"to_x": 0, "to_y": 0}).Error; err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"own exit evidence", func(t *testing.T, s *Store, id int64) {
+			if err := s.DB().Model(&Room{}).Where("map_set_id=? AND zone='Z' AND x=0 AND y=1 AND l=0", id).Update("ch", 1<<chBitOrder["S"]).Error; err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, id := reconciliationFixture(t)
+			tc.mutate(t, s, id)
+			var want MapEdge
+			if err := s.DB().Where("map_set_id=? AND kind=? AND from_zone='Z' AND from_x=0 AND from_y=1 AND dir='S'", id, EdgeKindGrid).First(&want).Error; err != nil {
+				t.Fatal(err)
+			}
+			set, _ := s.GetMapSet(id)
+			if _, err := s.ApplyReconciliation(id, ReconciliationInput{Source: EdgeCell{"Z", 1, 1, 0}, Dir: "N", Target: EdgeCell{"Z", 0, 0, 0}, Command: "climb", ExpectedRevision: set.TopologyRevision}); err != nil {
+				t.Fatal(err)
+			}
+			var reverse MapEdge
+			err := s.DB().Where("map_set_id=? AND kind=? AND from_zone='Z' AND from_x=0 AND from_y=1 AND dir='S'", id, EdgeKindGrid).First(&reverse).Error
+			wantTo, wantOK := want.To()
+			gotTo, gotOK := reverse.To()
+			if err != nil || reverse.Source != want.Source || reverse.Passable != want.Passable || gotOK != wantOK || gotTo != wantTo {
+				t.Fatalf("authoritative reverse changed: want=%#v got=%#v err=%v", want, reverse, err)
+			}
+		})
+	}
+}
+
+func TestReconciledReverseSuppressionDoesNotOutliveEndpoint(t *testing.T) {
+	s, id := reconciliationFixture(t)
+	set, _ := s.GetMapSet(id)
+	source := EdgeCell{"Z", 1, 1, 0}
+	if _, err := s.ApplyReconciliation(id, ReconciliationInput{Source: source, Dir: "N", Target: EdgeCell{"Z", 0, 0, 0}, Command: "climb", ExpectedRevision: set.TopologyRevision}); err != nil {
+		t.Fatal(err)
+	}
+	if _, found, err := s.ApplyTopologyOp(id, TopologyOp{Kind: TopoDeleteRoom, Zone: source.Zone, X: source.X, Y: source.Y, L: source.L}); err != nil || !found {
+		t.Fatalf("delete found=%v err=%v", found, err)
+	}
+	var n int64
+	s.DB().Model(&MapEdge{}).Where("map_set_id=? AND source=?", id, EdgeSourceReconciled).Count(&n)
+	if n != 0 {
+		t.Fatal("reconciled topology survived endpoint deletion")
+	}
+	if _, _, err := s.ApplyTopologyOp(id, TopologyOp{Kind: TopoUpsertRoom, Zone: source.Zone, X: source.X, Y: source.Y, L: source.L, Fields: RoomFields{Hint: ptrStr("replacement")}}); err != nil {
+		t.Fatal(err)
+	}
+	s.DB().Model(&MapEdge{}).Where("map_set_id=? AND source=?", id, EdgeSourceReconciled).Count(&n)
+	if n != 0 {
+		t.Fatal("replacement inherited reconciled topology")
+	}
+}
+
+func TestApplyReconciliationDoesNotPairNonDerivedOldFace(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		updates map[string]any
+	}{
+		{"manual", map[string]any{"source": EdgeSourceManual}},
+		{"reconciled", map[string]any{"source": EdgeSourceReconciled}},
+		{"nonpassable", map[string]any{"passable": false}},
+		{"mismatched target", map[string]any{"to_x": 0, "to_y": 0}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, id := reconciliationFixture(t)
+			if err := s.DB().Model(&MapEdge{}).Where("map_set_id=? AND kind=? AND from_zone='Z' AND from_x=1 AND from_y=1 AND dir='N'", id, EdgeKindGrid).Updates(tc.updates).Error; err != nil {
+				t.Fatal(err)
+			}
+			var want MapEdge
+			if err := s.DB().Where("map_set_id=? AND kind=? AND from_zone='Z' AND from_x=0 AND from_y=1 AND dir='S'", id, EdgeKindGrid).First(&want).Error; err != nil {
+				t.Fatal(err)
+			}
+			set, _ := s.GetMapSet(id)
+			if _, err := s.ApplyReconciliation(id, ReconciliationInput{Source: EdgeCell{"Z", 1, 1, 0}, Dir: "N", Target: EdgeCell{"Z", 0, 0, 0}, Command: "climb", ExpectedRevision: set.TopologyRevision}); err != nil {
+				t.Fatal(err)
+			}
+			var got MapEdge
+			if err := s.DB().Where("map_set_id=? AND kind=? AND from_zone='Z' AND from_x=0 AND from_y=1 AND dir='S'", id, EdgeKindGrid).First(&got).Error; err != nil {
+				t.Fatal(err)
+			}
+			wantTo, wantOK := want.To()
+			gotTo, gotOK := got.To()
+			if got.Source != want.Source || got.Passable != want.Passable || gotOK != wantOK || gotTo != wantTo {
+				t.Fatalf("reverse changed for non-derived old face: want=%#v got=%#v", want, got)
+			}
+		})
 	}
 }
 

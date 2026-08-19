@@ -311,6 +311,7 @@ export class MapPaneController {
     bar.appendChild(this.managerButton);
 
     this.recordingToggle = this.iconButton("OBS", "Diagnostic movement observation; no rooms are written");
+    this.recordingToggle.classList.add("map-pane__recording-toggle");
     this.recordingToggle.setAttribute("aria-pressed", "false");
     this.recordingToggle.addEventListener("click", () => void this.toggleMapRecording());
     bar.appendChild(this.recordingToggle);
@@ -1658,7 +1659,7 @@ export class MapPaneController {
       portal.classList.add("map-cell-menu__portal-add");
       portal.title = "Create a transition to an exact cell in this or another zone";
       menu.appendChild(portal);
-      const knowledge = this.menuButton("Знания…", () => {
+      const knowledge = this.menuButton("Knowledge…", () => {
         if (this.mapSetID == null) return;
         this.knowledgeDialog.open({
           mapSetID: this.mapSetID,
