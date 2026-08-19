@@ -31,6 +31,8 @@ var ErrNoActiveMapSet = errors.New("no active map set for this session")
 // A missing/NULL/dangling set degrades gracefully to an empty (nil-index)
 // tracker (soft red), no panics.
 func (s *Session) LoadActiveMapSet() {
+	s.mapReconcileMu.Lock()
+	defer s.mapReconcileMu.Unlock()
 	idx := s.buildActiveIndex()
 	// A route's PathSteps belong to the previous graph. Invalidate before the
 	// index swap, preventing a confirmation callback from dispatching its tail
@@ -38,13 +40,51 @@ func (s *Session) LoadActiveMapSet() {
 	s.invalidateMapWalk("active map changed")
 
 	s.mapMu.Lock()
+	recordingWasActive := s.mapRecordingMode != "" && s.mapRecordingMode != MapRecordingOff
+	s.stopMapRecordingLocked("active map changed")
 	if s.mapTracker == nil {
 		s.mapTracker = mapper.NewTracker(idx)
 	} else {
 		s.mapTracker.SetIndex(idx)
 	}
 	s.syncDoorOpenLocked()
+	recordingState := s.mapRecordingStateLocked()
 	s.mapMu.Unlock()
+	if recordingWasActive {
+		s.broadcastMsg(mapRecordingMsg(recordingState))
+	}
+}
+
+// SetActiveMapSet serializes a user-visible map switch against reconciliation's
+// off-mapMu storage transaction, so either the switch wins before reservation or
+// the committed reconciliation is finalized before the switch proceeds.
+func (s *Session) SetActiveMapSet(id int64) error {
+	s.mapReconcileMu.Lock()
+	defer s.mapReconcileMu.Unlock()
+	if err := s.store.SetActiveMapSetID(s.sessionID, id); err != nil {
+		return err
+	}
+	s.LoadActiveMapSetUnlocked()
+	return nil
+}
+
+func (s *Session) LoadActiveMapSetUnlocked() {
+	idx := s.buildActiveIndex()
+	s.invalidateMapWalk("active map changed")
+	s.mapMu.Lock()
+	recordingWasActive := s.mapRecordingMode != "" && s.mapRecordingMode != MapRecordingOff
+	s.stopMapRecordingLocked("active map changed")
+	if s.mapTracker == nil {
+		s.mapTracker = mapper.NewTracker(idx)
+	} else {
+		s.mapTracker.SetIndex(idx)
+	}
+	s.syncDoorOpenLocked()
+	state := s.mapRecordingStateLocked()
+	s.mapMu.Unlock()
+	if recordingWasActive {
+		s.broadcastMsg(mapRecordingMsg(state))
+	}
 }
 
 // syncDoorOpenLocked points the freshly-installed index at the session's room-format
@@ -173,6 +213,8 @@ func (s *Session) LoadMapperProfile() {
 	res := s.resolveDetector()
 
 	s.mapMu.Lock()
+	recordingWasActive := s.mapRecordingMode != "" && s.mapRecordingMode != MapRecordingOff
+	s.stopMapRecordingLocked("room format changed")
 	// An explicit (re)load is the user's "try this again": clear the crash latch so
 	// a fixed detector gets a fresh chance, and let installDetectorLocked decide
 	// whether mapping ends up disabled.
@@ -181,7 +223,11 @@ func (s *Session) LoadMapperProfile() {
 	s.installDetectorLocked(res)
 	msg := s.mapperProfileMsgLocked()
 	warn := s.mapProfileErr
+	recordingState := s.mapRecordingStateLocked()
 	s.mapMu.Unlock()
+	if recordingWasActive {
+		s.broadcastMsg(mapRecordingMsg(recordingState))
+	}
 
 	if warn != "" {
 		// A broken profile fails INVISIBLY otherwise: the session keeps running and
@@ -424,14 +470,23 @@ func (s *Session) observeIncomingLine(plainText, raw string) {
 
 	var toBroadcast []ServerMsg
 	var walkPosition *mapper.Position
+	recordingConflict := false
 
 	s.mapMu.Lock()
 
 	// Movement refusal: head-cancel the queue, no position move. Cheap substring
 	// check; only meaningful when a tracker exists.
 	if s.mapTracker != nil && mapper.IsRefusal(plainText) {
-		if s.mapTracker.CancelHead() {
+		beforeRecordingRevision := s.mapRecordingRevision
+		trackerCanceled := s.mapTracker.CancelHead()
+		if len(s.mapRecordingPending) > 0 {
+			s.cancelAcceptedMapMoveLocked()
+		}
+		if trackerCanceled {
 			toBroadcast = append(toBroadcast, s.roomPositionMsgLocked())
+		}
+		if s.mapRecordingRevision != beforeRecordingRevision {
+			toBroadcast = append(toBroadcast, mapRecordingMsg(s.mapRecordingStateLocked()))
 		}
 		s.mapMu.Unlock()
 		s.broadcastAll(toBroadcast)
@@ -493,10 +548,22 @@ func (s *Session) observeIncomingLine(plainText, raw string) {
 	})
 
 	if s.mapTracker != nil {
+		beforeRecordingRevision := s.mapRecordingRevision
+		conflicted := s.observeMapRecordingRoomLocked(ev)
+		recordingConflict = conflicted
 		pos, changed := s.mapTracker.Reconcile(ev)
+		if !conflicted {
+			s.rebasePendingMapMovesLocked()
+		}
 		walkPosition = &pos
 		if changed {
 			toBroadcast = append(toBroadcast, s.roomPositionMsgLocked())
+		}
+		if !conflicted && (s.mapRecordingMode == MapRecordingArmed || s.mapRecordingMode == MapRecordingRecording) && (!pos.Valid || pos.Confidence == mapper.Red) {
+			s.stopMapRecordingLocked("position lost")
+		}
+		if s.mapRecordingRevision != beforeRecordingRevision {
+			toBroadcast = append(toBroadcast, mapRecordingMsg(s.mapRecordingStateLocked()))
 		}
 	}
 	s.mapMu.Unlock()
@@ -504,6 +571,10 @@ func (s *Session) observeIncomingLine(plainText, raw string) {
 	s.broadcastAll(toBroadcast)
 	if walkPosition != nil {
 		releaseWalkIOGate()
+		if recordingConflict {
+			s.stopMapWalkForZoneMove("map recording conflict")
+			return
+		}
 		s.ObserveMapWalkPosition(*walkPosition)
 	}
 }
@@ -578,6 +649,8 @@ func (s *Session) recoverFromDetectorPanic(r any) {
 		// LoadMapperProfile re-enables mapping.
 		s.mapMu.Lock()
 		wasDisabled := s.mapDetectorDisabled
+		beforeRecordingRevision := s.mapRecordingRevision
+		s.stopMapRecordingLocked("room format detector crashed")
 		s.mapDetector = nil
 		s.mapDetectorDisabled = true
 		s.mapProfileErr = fmt.Sprintf("the fallback room format %s also crashed (%v) — "+
@@ -590,6 +663,7 @@ func (s *Session) recoverFromDetectorPanic(r any) {
 		// global constant.
 		s.syncDoorOpenLocked()
 		msg := s.mapperProfileMsgLocked()
+		recordingState := s.mapRecordingStateLocked()
 		s.mapMu.Unlock()
 
 		if !wasDisabled {
@@ -597,6 +671,9 @@ func (s *Session) recoverFromDetectorPanic(r any) {
 			// the bug this branch is supposed to prevent.
 			log.Printf("mapper: the fallback room detector itself panicked (%v) — mapping disabled for this session", r)
 			s.broadcastMsg(msg)
+		}
+		if recordingState.Revision != beforeRecordingRevision {
+			s.broadcastMsg(mapRecordingMsg(recordingState))
 		}
 		return
 	}
@@ -608,6 +685,8 @@ func (s *Session) recoverFromDetectorPanic(r any) {
 		"This is a bug in that detector; the session is otherwise unaffected.", failed, failedRef, r, def.name, def.ref)
 
 	s.mapMu.Lock()
+	beforeRecordingRevision := s.mapRecordingRevision
+	s.stopMapRecordingLocked("room format detector crashed")
 	// Deliberately NOT installDetectorLocked: the outgoing detector just panicked,
 	// so asking it AtBlockBoundary() would re-enter the code that crashed.
 	s.mapDetector = def.det
@@ -623,9 +702,13 @@ func (s *Session) recoverFromDetectorPanic(r any) {
 	// code that crashed — so the sync has to be repeated by hand.
 	s.syncDoorOpenLocked()
 	msg := s.mapperProfileMsgLocked()
+	recordingState := s.mapRecordingStateLocked()
 	s.mapMu.Unlock()
 
 	s.broadcastMsg(msg)
+	if recordingState.Revision != beforeRecordingRevision {
+		s.broadcastMsg(mapRecordingMsg(recordingState))
+	}
 }
 
 // broadcastAll sends each message to clients. Called OUTSIDE mapMu.
@@ -638,16 +721,23 @@ func (s *Session) broadcastAll(msgs []ServerMsg) {
 // observeOutgoingMove is called from the command write path (after alias/VM
 // expansion) for each command actually written to the MUD. If the command is a
 // movement direction it is pushed onto the tracker's FIFO pending-moves queue.
-func (s *Session) observeOutgoingMove(cmd string) {
+func (s *Session) observeOutgoingMove(cmd, source string) {
 	dir, ok := mapper.MoveDir(cmd)
 	if !ok {
 		return
 	}
 	s.mapMu.Lock()
+	beforeRevision := s.mapRecordingRevision
+	var recordingState MapRecordingState
 	if s.mapTracker != nil {
 		s.mapTracker.PushMove(dir)
+		s.recordAcceptedMapMoveLocked(cmd, dir, source, nil)
+		recordingState = s.mapRecordingStateLocked()
 	}
 	s.mapMu.Unlock()
+	if recordingState.Revision != beforeRevision {
+		s.broadcastMsg(mapRecordingMsg(recordingState))
+	}
 }
 
 // roomPositionMsgLocked builds the current tracker-position ServerMsg. Caller
@@ -837,6 +927,10 @@ func (s *Session) ReloadActiveMapSet() {
 // refresh. It translates a tracker standing in a moved cell before rebuilding.
 func (s *Session) RefreshTopologyAfterZoneMove(mapSetID int64, move storage.ZoneMoveInput) {
 	s.reloadPreservingPositionAfterZoneMove(move)
+	s.broadcastRoomsChanged(mapSetID)
+}
+func (s *Session) RefreshSharedTopology(mapSetID int64) {
+	s.reloadPreservingPosition()
 	s.broadcastRoomsChanged(mapSetID)
 }
 

@@ -1334,6 +1334,11 @@ func TestMapWalkAllowsUnparsedSeamWithExplicitPhrase(t *testing.T) {
 	from := mapper.Coord{Zone: "A", X: 0, Y: 0, L: 0}
 	to := mapper.Coord{Zone: "B", X: 0, Y: 0, L: 0}
 	s.mapTracker.Anchor(from)
+	s.lastRoom = mapper.RoomEvent{Hint: "A", Desc: "a"}
+	s.lastRoomOK = true
+	if _, err := s.StartMapRecording(); err != nil {
+		t.Fatal(err)
+	}
 
 	st := s.StartMapWalk(to)
 	if !st.Active || conn.String() != "enter portal\n" {
@@ -1345,9 +1350,48 @@ func TestMapWalkAllowsUnparsedSeamWithExplicitPhrase(t *testing.T) {
 	if pending != 0 {
 		t.Fatalf("non-directional seam phrase added %d fake tracker moves", pending)
 	}
+	s.mapMu.Lock()
+	if len(s.mapRecordingPending) != 1 {
+		t.Fatalf("recording pending=%+v", s.mapRecordingPending)
+	}
+	recorded := s.mapRecordingPending[0]
+	if recorded.Command != "enter portal" || recorded.Source != "map_walk" || recorded.From != from || recorded.Expected != to || !recorded.ExpectedExact || recorded.Epoch != 1 {
+		t.Fatalf("seam evidence=%+v", recorded)
+	}
+	if s.observeMapRecordingRoomLocked(mapper.RoomEvent{Hint: "B", Desc: "b"}) {
+		t.Fatal("matching seam confirmation conflicted")
+	}
+	s.mapMu.Unlock()
 	confirmWalkAt(s, to)
 	if _, active := s.MapWalkSnapshot(); active {
 		t.Fatal("explicit seam phrase did not complete at its exact target")
+	}
+}
+
+func TestMapRecordingUnparsedSeamMismatchAndRefusal(t *testing.T) {
+	makeSession := func() (*Session, mapper.Coord) {
+		rooms := []storage.Room{mkTrackRoom("A", 0, 0, 0, 1, "A", "a", ""), mkTrackRoom("B", 0, 0, 0, 2, "B", "b", "")}
+		store := newTestStore(t)
+		conn := &recordingConn{}
+		s := &Session{sessionID: 1, store: store, conn: conn, vm: vm.New(store, 1), clients: map[int]clientSink{}, mapTracker: mapper.NewTracker(buildTestMapIndexWithSeams(1, rooms, "B|teleport|2")), lastRoom: mapper.RoomEvent{Hint: "A", Desc: "a"}, lastRoomOK: true, mapRecordingMode: MapRecordingOff}
+		s.mapTracker.Anchor(mapper.Coord{Zone: "A"})
+		if _, err := s.StartMapRecording(); err != nil {
+			t.Fatal(err)
+		}
+		to := mapper.Coord{Zone: "B"}
+		s.StartMapWalk(to)
+		return s, to
+	}
+	mismatch, _ := makeSession()
+	mismatch.mapMu.Lock()
+	if !mismatch.observeMapRecordingRoomLocked(mapper.RoomEvent{Hint: "Wrong", Desc: "wrong"}) {
+		t.Fatal("seam mismatch did not conflict")
+	}
+	mismatch.mapMu.Unlock()
+	refused, _ := makeSession()
+	refused.observeIncomingLine("Вы не можете идти в этом направлении.", "Вы не можете идти в этом направлении.")
+	if state := refused.MapRecordingState(); state.Pending != 0 {
+		t.Fatalf("seam refusal state=%+v", state)
 	}
 }
 

@@ -113,18 +113,29 @@ type Session struct {
 	// rather than one per incoming line. Both are cleared by an explicit
 	// LoadMapperProfile. mapDetectorDisabled is also set when no detector could be
 	// built at all, so a nil detector never reaches the hot path.
-	mapProfileMu        sync.Mutex
-	mapMu               sync.Mutex
-	mapDetector         mapper.RoomDetector
-	mapDetectorFellBack bool
-	mapDetectorDisabled bool
-	mapTracker          *mapper.Tracker
-	lastRoom            mapper.RoomEvent
-	lastRoomOK          bool
-	mapFormatRef        string
-	mapProfileID        int64
-	mapProfileName      string
-	mapProfileErr       string
+	mapProfileMu            sync.Mutex
+	mapMu                   sync.Mutex
+	mapDetector             mapper.RoomDetector
+	mapDetectorFellBack     bool
+	mapDetectorDisabled     bool
+	mapTracker              *mapper.Tracker
+	lastRoom                mapper.RoomEvent
+	lastRoomOK              bool
+	mapFormatRef            string
+	mapProfileID            int64
+	mapProfileName          string
+	mapProfileErr           string
+	mapRecordingMode        MapRecordingMode
+	mapRecordingReason      string
+	mapRecordingPending     []PendingMapMove
+	mapRecordingConflict    *MapRecordingConflictSnapshot
+	mapRecordingSequence    uint64
+	mapRecordingEpoch       int64
+	mapRecordingRevision    uint64
+	mapReconcileMu          sync.Mutex
+	mapReconcilePreview     *MapReconciliationPreview
+	mapReconcileApplying    bool
+	mapReconcileAfterCommit func() // test barrier after DB commit, before publication
 
 	// mapWalk is a server-owned, confirmation-paced route. It deliberately has a
 	// separate lock from mapMu: path/tracker reads stay short and no network write
@@ -158,21 +169,22 @@ func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM, initCm
 	}
 
 	s := &Session{
-		sessionID:    sessionID,
-		mapWalkEpoch: nextLiveWalkEpoch.Add(1),
-		mudAddr:      mudAddr,
-		conn:         conn,
-		store:        store,
-		vm:           v,
-		clients:      make(map[int]clientSink),
-		timers:       make(map[string]*Timer),
-		delays:       make(map[string]*delayTask),
-		cmdQueue:     make(chan cmdItem, 100),
-		done:         make(chan struct{}),
-		readSrc:      conn,
-		initCmds:     initCmds,
-		mccpOn:       mccpOn,
-		ansiCarry:    make(map[string]string),
+		sessionID:        sessionID,
+		mapWalkEpoch:     nextLiveWalkEpoch.Add(1),
+		mudAddr:          mudAddr,
+		conn:             conn,
+		store:            store,
+		vm:               v,
+		clients:          make(map[int]clientSink),
+		timers:           make(map[string]*Timer),
+		delays:           make(map[string]*delayTask),
+		cmdQueue:         make(chan cmdItem, 100),
+		done:             make(chan struct{}),
+		readSrc:          conn,
+		initCmds:         initCmds,
+		mccpOn:           mccpOn,
+		ansiCarry:        make(map[string]string),
+		mapRecordingMode: MapRecordingOff,
 	}
 
 	s.restoreTimers()
@@ -1039,6 +1051,8 @@ func (s *Session) Close() error {
 	// A closed transport can never confirm its outstanding hop. Stop the timer
 	// before notifying clients so reconnect/restore cannot replay a stale route.
 	s.invalidateMapWalk("session disconnected")
+	state := s.StopMapRecording("session disconnected")
+	s.broadcastMsg(mapRecordingMsg(state))
 	s.mu.Lock()
 	if s.closed {
 		s.mu.Unlock()

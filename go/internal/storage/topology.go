@@ -348,6 +348,23 @@ type RoomSnapshot struct {
 	Room    Room
 }
 
+// DirectionalFaceSnapshot is a literal before-image of one grid/corridor face.
+// Edge is meaningful only when Existed is true; no attribute is re-derived.
+type DirectionalFaceSnapshot struct {
+	Cell    EdgeCell
+	Dir     string
+	Existed bool
+	Edge    MapEdge
+}
+
+// RoomLayoutSnapshot is the literal sparse-layout presence/value before a
+// compound topology write.
+type RoomLayoutSnapshot struct {
+	Cell    EdgeCell
+	Existed bool
+	Layout  RoomLayout
+}
+
 // TopologyBefore is the COMPLETE before-state of one topology write — everything
 // undo needs to put the set back exactly as it was.
 //
@@ -364,6 +381,8 @@ type RoomSnapshot struct {
 type TopologyBefore struct {
 	Rooms    []RoomSnapshot
 	Manual   ManualEdgeSnapshot
+	Faces    []DirectionalFaceSnapshot
+	Layouts  []RoomLayoutSnapshot
 	ZoneMove *ZoneMoveBefore
 	// Revision is the topology revision immediately before this write. The write
 	// commits as Revision+1; the session journal uses that value to fence undo.
@@ -461,6 +480,42 @@ func topologyMatchesBeforeTx(tx *gorm.DB, mapSetID int64, before TopologyBefore)
 		}
 		if !reflect.DeepEqual(got, want) {
 			return false, nil
+		}
+	}
+	for _, want := range before.Faces {
+		var got MapEdge
+		err := tx.Where("map_set_id=? AND kind IN ? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=?", mapSetID, []string{EdgeKindGrid, EdgeKindCorridor}, want.Cell.Zone, want.Cell.X, want.Cell.Y, want.Cell.L, want.Dir).First(&got).Error
+		if err != nil && err != gorm.ErrRecordNotFound {
+			return false, err
+		}
+		if (err == nil) != want.Existed {
+			return false, nil
+		}
+		if want.Existed {
+			got.ID, got.MapSetID = 0, 0
+			w := want.Edge
+			w.ID, w.MapSetID = 0, 0
+			if !reflect.DeepEqual(got, w) {
+				return false, nil
+			}
+		}
+	}
+	for _, want := range before.Layouts {
+		var got RoomLayout
+		err := tx.Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=?", mapSetID, want.Cell.Zone, want.Cell.X, want.Cell.Y, want.Cell.L).First(&got).Error
+		if err != nil && err != gorm.ErrRecordNotFound {
+			return false, err
+		}
+		if (err == nil) != want.Existed {
+			return false, nil
+		}
+		if want.Existed {
+			got.MapSetID = 0
+			w := want.Layout
+			w.MapSetID = 0
+			if !reflect.DeepEqual(got, w) {
+				return false, nil
+			}
 		}
 	}
 	if len(before.Manual.Cells) == 0 {

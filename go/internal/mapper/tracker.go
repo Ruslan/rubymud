@@ -591,6 +591,19 @@ func (t *Tracker) predictGrid(c Coord, dir string) (Coord, bool) {
 	return Coord{Zone: c.Zone, X: c.X + d.DX, Y: c.Y + d.DY, L: c.L + d.DL}, true
 }
 
+// PredictReportedLanding applies the same seam/grid and pipe-run semantics used
+// by Reconcile for a room event with a non-empty hint.
+func (t *Tracker) PredictReportedLanding(c Coord, dir string) (Coord, bool) {
+	pred, ok := t.predict(c, dir)
+	if !ok {
+		return Coord{}, false
+	}
+	if skipped, skippedOK := t.skipPipeRun(pred, dir); skippedOK {
+		pred = skipped
+	}
+	return pred, true
+}
+
 // maxPipeSkip caps how many consecutive pipe cells the dead-reckoning skip will
 // step over, to guard against an unbounded loop on malformed pipe data.
 const maxPipeSkip = 32

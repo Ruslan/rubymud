@@ -3,6 +3,8 @@ package mapper
 import (
 	"container/heap"
 	"strings"
+
+	"rubymud/go/internal/storage"
 )
 
 // Pathfinding computes a lowest-weight route over the set's rooms. Death-trap
@@ -177,6 +179,7 @@ type worldNeighbor struct {
 	openAction   string // command to send before the move to get through a door
 	locked       bool   // that door is marked locked by default from this side
 	weight       float64
+	exactCommand bool // corridor Command is transport truth; Phrase is annotation
 }
 
 // worldNeighbors yields the room's traversable neighbors: its materialized grid
@@ -225,18 +228,24 @@ func (idx *Index) worldNeighbors(c Coord, ignoreVetoes bool) (out []worldNeighbo
 			continue
 		}
 		door, openAct, locked := doorOnHop(r, nb, dir, idx.doorOpen)
+		cmd := strings.ToLower(dir)
+		exact := e.Kind == storage.EdgeKindCorridor
+		if exact {
+			cmd = e.Command
+		}
 		out = append(out, worldNeighbor{
-			to:         nc,
-			command:    strings.ToLower(dir), // canonical english move (n/s/e/w/u/d)
-			dir:        dir,
-			seam:       false,
-			doorKind:   door,
-			toPipe:     nb.Pipe,
-			toZone:     nc.Zone,
-			phrase:     e.Phrase,
-			openAction: openAct,
-			locked:     locked,
-			weight:     e.EffectiveWeight(),
+			to:           nc,
+			command:      cmd,
+			dir:          dir,
+			seam:         false,
+			doorKind:     door,
+			toPipe:       nb.Pipe,
+			toZone:       nc.Zone,
+			phrase:       e.Phrase,
+			openAction:   openAct,
+			locked:       locked,
+			weight:       e.EffectiveWeight(),
+			exactCommand: exact,
 		})
 	}
 	for _, e := range r.seams {
@@ -460,6 +469,7 @@ func (idx *Index) findPath(start Coord, goal func(*IndexRoom) bool, ignoreVetoes
 				phrase:       nb.phrase,
 				openAction:   nb.openAction,
 				locked:       nb.locked,
+				exactCommand: nb.exactCommand,
 			}
 			if target != nil {
 				rs.hint = target.Hint
@@ -520,6 +530,7 @@ type rawStep struct {
 	phrase       string
 	openAction   string
 	locked       bool
+	exactCommand bool
 }
 
 // strongerDoor returns the stronger door signal of two kinds: confirmed beats
@@ -557,8 +568,8 @@ func collapsePipeRuns(raw []rawStep) []PathStep {
 		// with "двигать ящик", and an opening action must land between two moves, not
 		// inside one. So such a step both refuses to continue the previous command and
 		// stops the next one from continuing it.
-		ownCommand := rs.phrase != "" || rs.openAction != ""
-		prevOwn := len(out) > 0 && (out[len(out)-1].Phrase != "" || out[len(out)-1].OpenAction != "")
+		ownCommand := rs.phrase != "" || rs.openAction != "" || rs.exactCommand
+		prevOwn := len(out) > 0 && (out[len(out)-1].Phrase != "" || out[len(out)-1].OpenAction != "" || raw[i-1].exactCommand)
 		if len(out) > 0 && !ownCommand && !prevOwn && !rs.seam && !out[len(out)-1].Seam &&
 			rs.dir != "" && rs.dir == raw[i-1].dir && raw[i-1].toPipe {
 			last := &out[len(out)-1]
@@ -576,7 +587,7 @@ func collapsePipeRuns(raw []rawStep) []PathStep {
 		// walks the passage correctly without knowing the attribute exists; Dir keeps
 		// the geometry for whoever needs to know which way the step goes.
 		cmd := rs.command
-		if rs.phrase != "" {
+		if rs.phrase != "" && !rs.exactCommand {
 			cmd = rs.phrase
 		}
 		out = append(out, PathStep{

@@ -1499,6 +1499,20 @@ body {
   overflow-wrap: anywhere;
 }
 .map-zone-dialog__result[data-error="true"] { color: #ff8879; }
+.map-reconciliation-diff {
+  max-height: min(38vh, 320px);
+  overflow: auto;
+  border: 1px solid var(--border);
+  padding: 8px;
+}
+.map-reconciliation-diff pre {
+  margin: 3px 0 8px;
+  max-height: 7em;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .map-zone-dialog__actions {
   display: flex;
   justify-content: flex-end;

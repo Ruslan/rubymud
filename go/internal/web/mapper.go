@@ -424,7 +424,13 @@ func (s *Server) setActiveMapSet(w http.ResponseWriter, r *http.Request) {
 	if body.MapSetID != nil {
 		setID = *body.MapSetID
 	}
-	if err := s.store.SetActiveMapSetID(id, setID); err != nil {
+	var setErr error
+	if sess, ok := s.manager.GetSession(id); ok {
+		setErr = sess.SetActiveMapSet(setID)
+	} else {
+		setErr = s.store.SetActiveMapSetID(id, setID)
+	}
+	if err := setErr; err != nil {
 		if errors.Is(err, storage.ErrSessionNotFound) {
 			http.Error(w, fmt.Sprintf("session %d not found", id), http.StatusNotFound)
 			return
@@ -437,9 +443,6 @@ func (s *Server) setActiveMapSet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Rebuild the tracker index for the live session, if any, and broadcast.
-	if sess, ok := s.manager.GetSession(id); ok {
-		sess.ReloadActiveMapSet()
-	}
 	if setID > 0 {
 		writeJSON(w, map[string]any{"active_map_set_id": setID})
 	} else {

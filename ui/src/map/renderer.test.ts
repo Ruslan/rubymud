@@ -62,6 +62,62 @@ function slim(over: Partial<SlimRoom> = {}): SlimRoom {
 }
 
 describe("pipe orientation", () => {
+
+  it("uses presentation coordinates for drawing and hit-testing while retaining logical identity", () => {
+    const cv = makeCanvas();
+    const r = new MapRenderer(cv);
+    const room = slim({ x: 1, y: 2, l: 0, px: 8, py: 9, pl: 3 });
+    r.setZone("Z", [room]);
+    r.centerOn(1, 2, 0);
+    expect(r.level).toBe(3);
+    expect(r.pick(300, 200)).toBe(room);
+    expect(r.findRoom(1, 2, 0)).toBe(room);
+  });
+
+  it("projects a logical player marker onto the room presentation position and floor", () => {
+    const cv = makeCanvas();
+    const ctx = fakeCtx();
+    vi.mocked(cv.getContext).mockReturnValue(ctx as any);
+    const arc = vi.spyOn(ctx, "arc");
+    const r = new MapRenderer(cv);
+    r.setZone("Z", [slim({ x: 1, y: 2, px: 8, py: 9, pl: 3 })]);
+    r.setMarker({ x: 1, y: 2, l: 0, color: "green" });
+    r.centerOn(1, 2, 0);
+    (r as unknown as { paint(): void }).paint();
+    expect(arc.mock.calls.some(([x, y]) => x === 300 && y === 200)).toBe(true);
+  });
+
+  it("paints an exact same-zone corridor as one clipped display primitive", () => {
+    const cv = makeCanvas();
+    const ctx = cv.getContext("2d")!;
+    const moveTo = vi.spyOn(ctx, "moveTo");
+    const lineTo = vi.spyOn(ctx, "lineTo");
+    const stroke = vi.spyOn(ctx, "stroke");
+    const from = slim({ x: 1, y: 1, px: 0, py: 0, co: [{ dir: "N", r: "reconciled", p: true, z: "Z", x: 0, y: 0, l: 0, c: "climb rope" }] });
+    const to = slim({ x: 0, y: 0, px: 0, py: 4 });
+    const r = new MapRenderer(cv);
+    r.setZone("Z", [from, to]);
+    r.centerOn(1, 1, 0);
+    (r as unknown as { paint(): void }).paint();
+    expect(stroke).toHaveBeenCalledTimes(1);
+    const [ax, ay] = moveTo.mock.calls[0]!;
+    const [bx, by] = lineTo.mock.calls[0]!;
+    expect(ay).toBe(by);
+    expect(Number(bx) - Number(ax)).toBeGreaterThan(100);
+    expect(ax).not.toBe(300); // clipped at the source room edge
+  });
+
+  it("paints the relaid 4-5 grid passage once as one long primitive", () => {
+    const cv = makeCanvas(); const ctx = cv.getContext("2d")!;
+    const stroke = vi.spyOn(ctx,"stroke"); const moveTo=vi.spyOn(ctx,"moveTo"); const lineTo=vi.spyOn(ctx,"lineTo");
+    // Logical neighbours 4(1,2) W 5(1,1); display 5 moved under room 1 to y=0.
+    const four=slim({h:"4",x:1,y:2,g:["W"]});
+    const five=slim({h:"5",x:1,y:1,py:0,g:["E"]});
+    const r=new MapRenderer(cv);r.setZone("Z",[four,five]);r.centerOn(1,2,0);(r as unknown as {paint():void}).paint();
+    expect(stroke).toHaveBeenCalledTimes(1);
+    const [ax,ay]=moveTo.mock.calls[0]!;const [bx,by]=lineTo.mock.calls[0]!;
+    expect(ay).toBe(by);expect(Math.abs(Number(bx)-Number(ax))).toBeGreaterThan(30);
+  });
   it("uses N/S connectivity before four-neighbour geometry", () => {
     expect(pipeAxis(3, { hL: true, hR: true, vU: true, vD: true })).toBe("v");
   });
@@ -357,6 +413,19 @@ describe("MapRenderer candidate (ghost) cell", () => {
 // (marking a passage that does not exist yet is the point), and it must never
 // take a click that belongs to a cell (the cell context menu already owns those).
 describe("MapRenderer edge (boundary) hit zone", () => {
+  it("hit-tests the boundary at presentation positions and reports the logical source", () => {
+    const cv = makeCanvas();
+    const r = new MapRenderer(cv);
+    const a=slim({x:0,y:0,px:10,py:10}), b=slim({x:1,y:0,px:12,py:10});
+    r.setZone("Z",[a,b]);
+    r.centerOn(a.x,a.y,a.l);
+    const view=(r as unknown as {view:{s:number;ox:number;oy:number}}).view;
+    const hits:string[]=[];
+    r.onEdgeClick=(room,dir)=>hits.push(`${room.x},${room.y}:${dir}`);
+    const mx=view.ox+10*30*view.s, my=view.oy+11*30*view.s;
+    cv.dispatchEvent(new MouseEvent("click",{clientX:mx,clientY:my}));
+    expect(hits).toEqual(["0,0:S"]);
+  });
   afterEach(() => {
     vi.restoreAllMocks();
   });
@@ -543,17 +612,16 @@ describe("MapRenderer selection mode", () => {
   it("toggles a room without opening its ordinary cell callback", () => {
     const cv = makeCanvas();
     const renderer = new MapRenderer(cv);
-    const room = slim({ x: 0, y: 0 });
+    const room = slim({ x: 0, y: 0, px: 20, py: 30, pl: 2 });
     renderer.setZone("Z", [room]);
     renderer.setSelectionMode(true);
     const selected: unknown[] = [];
     const opened: unknown[] = [];
     renderer.onSelectionChange = (coords) => selected.push(coords);
     renderer.onRoomClick = () => opened.push(1);
-    const view = (renderer as unknown as { view: { ox: number; oy: number } }).view;
-    cv.dispatchEvent(new MouseEvent("mousedown", { clientX: view.ox, clientY: view.oy }));
-    window.dispatchEvent(new MouseEvent("mouseup", { clientX: view.ox, clientY: view.oy }));
-    cv.dispatchEvent(new MouseEvent("click", { clientX: view.ox, clientY: view.oy }));
+    cv.dispatchEvent(new MouseEvent("mousedown", { clientX: 300, clientY: 200 }));
+    window.dispatchEvent(new MouseEvent("mouseup", { clientX: 300, clientY: 200 }));
+    cv.dispatchEvent(new MouseEvent("click", { clientX: 300, clientY: 200 }));
     expect(selected).toEqual([[{ x: 0, y: 0, l: 0 }]]);
     expect(opened).toEqual([]);
   });
@@ -571,6 +639,20 @@ describe("MapRenderer selection mode", () => {
     window.dispatchEvent(new MouseEvent("mouseup", { clientX: before.ox + 200, clientY: before.oy + 10 }));
     expect(seen.at(-1)).toEqual([{ x: 0, y: 0, l: 0 }, { x: 0, y: 1, l: 0 }]);
     expect((renderer as unknown as { view: { ox: number; oy: number } }).view).toEqual(before);
+  });
+
+  it("rectangle-selects by presentation position/floor but emits logical coordinates", () => {
+    const cv = makeCanvas();
+    const renderer = new MapRenderer(cv);
+    renderer.setZone("Z", [
+      slim({ x: 10, y: 10, l: 0, px: 0, py: 0, pl: 2 }),
+      slim({ x: 11, y: 11, l: 0, px: 0, py: 1, pl: 3 }),
+    ]);
+    renderer.setLevel(2);
+    const view = (renderer as unknown as { view: { ox:number; oy:number } }).view;
+    (renderer as unknown as { selectRect(a:{x:number;y:number}, b:{x:number;y:number}, toggle:boolean):void })
+      .selectRect({x:view.ox-10,y:view.oy-10},{x:view.ox+10,y:view.oy+10},false);
+    expect(renderer.selectedCoords()).toEqual([{ x: 10, y: 10, l: 0 }]);
   });
 
   it("keeps panning and boundary editing outside selection mode", () => {

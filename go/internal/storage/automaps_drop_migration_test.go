@@ -32,7 +32,8 @@ func TestMigration026BackfillsAndDropsLegacyAutomaps(t *testing.T) {
 		('019_map_edge_weight.sql'), ('020_manual_seam_attrs.sql'), ('021_log_buffer_cursor_index.sql'),
 		('022_mcp_settings.sql'), ('023_map_edge_seam_order.sql'), ('024_exact_portal_endpoint.sql'),
 		('025_map_set_topology_revision.sql'), ('025a_map_edge_zone_guard.sql'),
-		('026_drop_rooms_automaps.sql')`).Error; err != nil {
+		('026_drop_rooms_automaps.sql'), ('027_canonical_zone_names.sql'),
+		('028_room_inhabitants.sql'), ('029_room_layouts.sql')`).Error; err != nil {
 		t.Fatalf("fence future migrations: %v", err)
 	}
 	if err := runMigrations(db); err != nil {

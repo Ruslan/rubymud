@@ -544,6 +544,10 @@ func (s *Session) dispatchMapWalk(id uint64) (MapWalkState, bool) {
 	sent = sent || sentMove
 	if err != nil {
 		s.mapWalkIOMu.Unlock()
+		if sent {
+			state := s.StopMapRecording("map walk command outcome unknown")
+			s.broadcastMsg(mapRecordingMsg(state))
+		}
 		return s.finishMapWalkDispatch(id, "failed to send step: "+err.Error(), sent)
 	}
 
@@ -553,10 +557,12 @@ func (s *Session) dispatchMapWalk(id uint64) (MapWalkState, bool) {
 	if s.mapWalk == nil || s.mapWalk.id != id || !s.mapWalk.dispatching {
 		s.mapWalkMu.Unlock()
 		msg := s.invalidateMapPositionLocked("walk command completed after route was invalidated")
+		recordingState := s.StopMapRecording("map walk command outcome unknown")
 		s.mapWalkIOMu.Unlock()
 		if msg.Type != "" {
 			s.broadcastMsg(msg)
 		}
+		s.broadcastMsg(mapRecordingMsg(recordingState))
 		return MapWalkState{}, false
 	}
 	s.mapMu.Lock()
@@ -564,15 +570,25 @@ func (s *Session) dispatchMapWalk(id uint64) (MapWalkState, bool) {
 		s.mapMu.Unlock()
 		s.mapWalkMu.Unlock()
 		msg := s.invalidateMapPositionLocked("walk command conflicted with another pending move")
+		recordingState := s.StopMapRecording("map walk command outcome unknown")
 		s.mapWalkIOMu.Unlock()
 		st, failed := s.finishMapWalkDispatch(id, "movement confirmation already pending", false)
 		if msg.Type != "" {
 			s.broadcastMsg(msg)
 		}
+		s.broadcastMsg(mapRecordingMsg(recordingState))
 		return st, failed
 	}
 	if !step.Seam {
 		s.mapTracker.PushMove(strings.ToUpper(step.Dir))
+	}
+	if len(moveCommands) > 0 {
+		beforeRecordingRevision := s.mapRecordingRevision
+		s.recordAcceptedMapMoveLocked(moveCommands[len(moveCommands)-1], strings.ToUpper(step.Dir), "map_walk", &step.To)
+		if s.mapRecordingRevision != beforeRecordingRevision {
+			state := s.mapRecordingStateLocked()
+			defer s.broadcastMsg(mapRecordingMsg(state))
+		}
 	}
 	s.mapWalk.dispatching = false
 	s.mapWalk.inFlight = true
@@ -729,9 +745,15 @@ func (s *Session) finishMapWalkDispatch(id uint64, reason string, ambiguous bool
 		job.dispatching = false
 		job.inFlight = false
 		var positionMsg ServerMsg
+		var recordingMsg ServerMsg
 		s.mapMu.Lock()
 		if s.mapTracker != nil {
 			s.mapTracker.Invalidate("map walk command outcome unknown")
+			before := s.mapRecordingRevision
+			s.stopMapRecordingLocked("map walk command outcome unknown")
+			if s.mapRecordingRevision != before {
+				recordingMsg = mapRecordingMsg(s.mapRecordingStateLocked())
+			}
 			positionMsg = s.roomPositionMsgLocked()
 		}
 		s.mapMu.Unlock()
@@ -752,6 +774,9 @@ func (s *Session) finishMapWalkDispatch(id uint64, reason string, ambiguous bool
 		s.mapWalkMu.Unlock()
 		if positionMsg.Type != "" {
 			s.broadcastMsg(positionMsg)
+		}
+		if recordingMsg.Type != "" {
+			s.broadcastMsg(recordingMsg)
 		}
 		s.broadcastMapWalk(st)
 		return st, true
@@ -844,10 +869,15 @@ func (s *Session) expireMapWalk(id, hop uint64) {
 	if job.stopping && job.desired == nil {
 		job.timer = nil
 		s.mapWalk = nil
-		var positionMsg ServerMsg
+		var positionMsg, recordingMsg ServerMsg
 		s.mapMu.Lock()
 		if s.mapTracker != nil {
 			s.mapTracker.Invalidate("walk confirmation timeout")
+			before := s.mapRecordingRevision
+			s.stopMapRecordingLocked("walk confirmation timeout")
+			if s.mapRecordingRevision != before {
+				recordingMsg = mapRecordingMsg(s.mapRecordingStateLocked())
+			}
 			positionMsg = s.roomPositionMsgLocked()
 		}
 		s.mapMu.Unlock()
@@ -855,6 +885,9 @@ func (s *Session) expireMapWalk(id, hop uint64) {
 		s.mapWalkMu.Unlock()
 		if positionMsg.Type != "" {
 			s.broadcastMsg(positionMsg)
+		}
+		if recordingMsg.Type != "" {
+			s.broadcastMsg(recordingMsg)
 		}
 		s.broadcastMapWalk(st)
 		return
@@ -874,10 +907,15 @@ func (s *Session) expireMapWalk(id, hop uint64) {
 	// Keep the route reservation while the old FIFO is invalidated. Otherwise a
 	// manual write can publish between the timeout state change and Invalidate,
 	// leaving a physical move with no tracker head.
-	var positionMsg ServerMsg
+	var positionMsg, recordingMsg ServerMsg
 	s.mapMu.Lock()
 	if s.mapTracker != nil {
 		s.mapTracker.Invalidate("walk confirmation timeout")
+		before := s.mapRecordingRevision
+		s.stopMapRecordingLocked("walk confirmation timeout")
+		if s.mapRecordingRevision != before {
+			recordingMsg = mapRecordingMsg(s.mapRecordingStateLocked())
+		}
 		positionMsg = s.roomPositionMsgLocked()
 	}
 	s.mapMu.Unlock()
@@ -885,6 +923,9 @@ func (s *Session) expireMapWalk(id, hop uint64) {
 	s.mapWalkMu.Unlock()
 	if positionMsg.Type != "" {
 		s.broadcastMsg(positionMsg)
+	}
+	if recordingMsg.Type != "" {
+		s.broadcastMsg(recordingMsg)
 	}
 	s.broadcastMapWalk(st)
 }

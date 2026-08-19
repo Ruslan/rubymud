@@ -81,6 +81,7 @@ type ZoneMoveBefore struct {
 	Edges       []MapEdge
 	Annotations []RoomAnnotation
 	Inhabitants []RoomInhabitant
+	Layouts     []RoomLayout
 	Revision    int64
 }
 
@@ -398,6 +399,39 @@ func zoneMovePreviewTx(tx *gorm.DB, mapSetID int64, in ZoneMoveInput) (ZoneMoveP
 			p.CollisionsTruncated = true
 		}
 	}
+	// Presentation coordinates share the destination namespace after the move.
+	// Validate the complete prospective effective layout here, under the same
+	// transaction and revision snapshot as topology collision checks. Sparse rooms
+	// without an override display at their logical coordinate.
+	var allRooms []Room
+	if err := tx.Where("map_set_id=?", mapSetID).Find(&allRooms).Error; err != nil {
+		return ZoneMovePreview{}, nil, nil, nil, nil, err
+	}
+	var allLayouts []RoomLayout
+	if err := tx.Where("map_set_id=?", mapSetID).Find(&allLayouts).Error; err != nil {
+		return ZoneMovePreview{}, nil, nil, nil, nil, err
+	}
+	layoutByLogical := make(map[string]RoomLayout, len(allLayouts))
+	for _, layout := range allLayouts {
+		layoutByLogical[zoneCoordKey(layout.Zone, layout.X, layout.Y, layout.L)] = layout
+	}
+	displayOwner := make(map[string]string, len(allRooms))
+	for _, room := range allRooms {
+		logical := zoneCoordKey(room.Zone, room.X, room.Y, room.L)
+		finalZone := room.Zone
+		if selected[logical] {
+			finalZone = in.TargetZone
+		}
+		dx, dy, dl := room.X, room.Y, room.L
+		if layout, ok := layoutByLogical[logical]; ok {
+			dx, dy, dl = layout.DisplayX, layout.DisplayY, layout.DisplayL
+		}
+		display := zoneCoordKey(finalZone, dx, dy, dl)
+		if prior, exists := displayOwner[display]; exists && prior != logical {
+			addCollision(dx, dy, dl)
+		}
+		displayOwner[display] = logical
+	}
 	var collisions []Room
 	where, args := zoneTupleWhere("", rooms, []any{mapSetID, in.TargetZone})
 	if err := tx.Where("map_set_id=? AND zone=? AND "+where, args...).Find(&collisions).Error; err != nil {
@@ -631,7 +665,12 @@ func applyZoneMoveTx(tx *gorm.DB, mapSetID int64, in ZoneMoveInput) (before Topo
 			return err
 		}
 		before.Revision = report.Revision
-		before.ZoneMove = &ZoneMoveBefore{Input: in, Rooms: append([]Room(nil), rooms...), Edges: append([]MapEdge(nil), edges...), Annotations: append([]RoomAnnotation(nil), annos...), Inhabitants: append([]RoomInhabitant(nil), inhabitants...), Revision: report.Revision}
+		var layouts []RoomLayout
+		where, layoutArgs := zoneTupleWhere("", rooms, []any{mapSetID, in.SourceZone})
+		if e := tx.Where("map_set_id=? AND zone=? AND "+where, layoutArgs...).Find(&layouts).Error; e != nil {
+			return e
+		}
+		before.ZoneMove = &ZoneMoveBefore{Input: in, Rooms: append([]Room(nil), rooms...), Edges: append([]MapEdge(nil), edges...), Annotations: append([]RoomAnnotation(nil), annos...), Inhabitants: append([]RoomInhabitant(nil), inhabitants...), Layouts: append([]RoomLayout(nil), layouts...), Revision: report.Revision}
 		if err := prepareZoneSelectionTx(tx, rooms); err != nil {
 			return err
 		}
@@ -668,6 +707,13 @@ func applyZoneMoveTx(tx *gorm.DB, mapSetID int64, in ZoneMoveInput) (before Topo
 					SELECT 1 FROM zone_move_selected s
 					WHERE s.x=room_annotations.x AND s.y=room_annotations.y AND s.l=room_annotations.l
 				)`, in.TargetZone, mapSetID, in.SourceZone).Error; err != nil {
+				return err
+			}
+		}
+		if len(layouts) > 0 {
+			if err := tx.Exec(`UPDATE room_layouts SET zone=? WHERE map_set_id=? AND zone=? AND EXISTS (
+				SELECT 1 FROM zone_move_selected s WHERE s.x=room_layouts.x AND s.y=room_layouts.y AND s.l=room_layouts.l
+			)`, in.TargetZone, mapSetID, in.SourceZone).Error; err != nil {
 				return err
 			}
 		}
@@ -786,6 +832,19 @@ func (s *Store) restoreZoneMoveBeforeUnfenced(mapSetID int64, b ZoneMoveBefore) 
 					SELECT 1 FROM zone_move_selected s
 					WHERE s.x=room_annotations.x AND s.y=room_annotations.y AND s.l=room_annotations.l
 				)`, b.Input.SourceZone, mapSetID, b.Input.TargetZone).Error; err != nil {
+				return err
+			}
+		}
+		if len(b.Layouts) > 0 {
+			if err := tx.Exec(`DELETE FROM room_layouts WHERE map_set_id=? AND zone=? AND EXISTS (
+				SELECT 1 FROM zone_move_selected s WHERE s.x=room_layouts.x AND s.y=room_layouts.y AND s.l=room_layouts.l
+			)`, mapSetID, b.Input.TargetZone).Error; err != nil {
+				return err
+			}
+			for i := range b.Layouts {
+				b.Layouts[i].MapSetID = mapSetID
+			}
+			if err := tx.CreateInBatches(b.Layouts, 500).Error; err != nil {
 				return err
 			}
 		}

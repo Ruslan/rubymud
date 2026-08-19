@@ -663,6 +663,7 @@ function attachSocketHandlers(target: WebSocket) {
     }
 
     if (message.type === "restore_begin") {
+	  renderer.resetMapRecordingRevision();
       logBoot("restore begin", {
         history: message.history?.length || 0,
         hotkeys: message.hotkeys?.length || 0,
@@ -789,6 +790,10 @@ function attachSocketHandlers(target: WebSocket) {
         desc: message.room_desc ?? "",
         exits: message.room_exits ?? "",
       });
+    }
+
+    if (message.type === "map_recording_state" && message.map_recording) {
+      renderer.handleMapRecording(message.map_recording);
     }
 
     // Mapper: the room format this session ended up parsing with. Delivered both

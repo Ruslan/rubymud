@@ -55,6 +55,7 @@ type Server struct {
 	mapSetDeleteAfterLock         func() // test hook: runs while delete holds both locks
 	mapSetDeleteBeforeStoreDelete func() // test hook: runs after image staging
 	restoreAfterCursorHook        func(*session.Session) error
+	mapRecordingTryStop           func(*session.Session) (session.MapRecordingState, bool) // test seam
 }
 
 // MCPConfig holds command-line/environment overrides for MCP. Enabled and Token
@@ -433,6 +434,11 @@ func newServer(listener WebListenerConfig, manager *session.Manager, store *stor
 				r.Post("/map-cell-patch", s.mapCellPatch)
 				r.Get("/map-live-room", s.mapLiveRoom)
 				r.Post("/map-record-room", s.mapRecordRoom)
+				r.Get("/map-recording-state", s.mapRecordingState)
+				r.Post("/map-recording-start", s.mapRecordingStart)
+				r.Post("/map-recording-stop", s.mapRecordingStop)
+				r.Post("/map-reconciliation/preview", s.mapReconciliationPreview)
+				r.Post("/map-reconciliation/apply", s.mapReconciliationApply)
 				r.Post("/map-mark-edge", s.mapMarkEdge)
 				r.Post("/map-edge-attrs", s.mapEdgeAttrs)
 				r.Post("/map-portals", s.mapPortal)
@@ -2906,6 +2912,10 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 		if err := writeJSONMeasured(position); err != nil {
 			return err
 		}
+	}
+	recording := sess.MapRecordingState()
+	if err := writeJSONMeasured(session.ServerMsg{Type: "map_recording_state", MapRecording: &recording}); err != nil {
+		return err
 	}
 	walk, _ := sess.MapWalkSnapshot()
 	// Always replay an explicit stopped snapshot. A transient browser reconnect

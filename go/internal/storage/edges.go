@@ -31,6 +31,10 @@ import (
 const (
 	// EdgeKindGrid is a step between two grid-adjacent cells of one zone.
 	EdgeKindGrid = "grid"
+	// EdgeKindCorridor is an authoritative exact endpoint on one canonical
+	// directional face. Unlike a seam it participates in normal directional
+	// tracking; unlike grid derivation it survives room re-recording.
+	EdgeKindCorridor = "corridor"
 	// EdgeKindSeam is an inter-zone jump imported from one legacy AutoMaps entry:
 	// a command plus a SYMBOLIC target (zone + tag) resolved into to_* here.
 	EdgeKindSeam = "seam"
@@ -44,7 +48,8 @@ const (
 	// EdgeSourceManual owns a face outside ordinary derivation. Most such rows are
 	// hand-drawn; ZoneGuard marks the narrow system-owned exception. Re-derivation
 	// never creates or destroys either, which preserves exact cross-zone endpoints.
-	EdgeSourceManual = "manual"
+	EdgeSourceManual     = "manual"
+	EdgeSourceReconciled = "reconciled"
 )
 
 // MapEdge is one materialized DIRECTED edge of a map set: one traversal, one way.
@@ -690,8 +695,8 @@ func insertEdges(tx *gorm.DB, edges []MapEdge) error {
 // Seams are exempt: they carry no direction, are not covered by the unique index,
 // and a room may legitimately hold both its automaps seams and a hand-drawn jump.
 func manualGridFaces(tx *gorm.DB, mapSetID int64) (map[edgeKey]bool, error) {
-	return manualFacesQuery(tx.Where("map_set_id = ? AND kind = ? AND source = ?",
-		mapSetID, EdgeKindGrid, EdgeSourceManual))
+	return manualFacesQuery(tx.Where("map_set_id = ? AND ((kind = ? AND source = ?) OR kind = ?)",
+		mapSetID, EdgeKindGrid, EdgeSourceManual, EdgeKindCorridor))
 }
 
 // manualGridFacesAt is the same question asked only about the cells a write can
@@ -718,8 +723,8 @@ func manualGridFacesAt(tx *gorm.DB, mapSetID int64, cells []EdgeCell) (map[edgeK
 	taken := map[edgeKey]bool{}
 	for _, c := range cells {
 		part, err := manualFacesQuery(tx.Where(
-			"map_set_id = ? AND kind = ? AND source = ? AND from_zone = ? AND from_x = ? AND from_y = ? AND from_l = ?",
-			mapSetID, EdgeKindGrid, EdgeSourceManual, c.Zone, c.X, c.Y, c.L))
+			"map_set_id = ? AND ((kind = ? AND source = ?) OR kind = ?) AND from_zone = ? AND from_x = ? AND from_y = ? AND from_l = ?",
+			mapSetID, EdgeKindGrid, EdgeSourceManual, EdgeKindCorridor, c.Zone, c.X, c.Y, c.L))
 		if err != nil {
 			return nil, err
 		}
@@ -902,8 +907,8 @@ func manualEdgesAroundTx(tx *gorm.DB, mapSetID int64, cells []EdgeCell) ([]MapEd
 	var out []MapEdge
 	for _, p := range probe {
 		var rows []MapEdge
-		if err := tx.Where("map_set_id = ? AND source = ? AND from_zone = ? AND from_x = ? AND from_y = ? AND from_l = ?",
-			mapSetID, EdgeSourceManual, p.Zone, p.X, p.Y, p.L).Order("id ASC").Find(&rows).Error; err != nil {
+		if err := tx.Where("map_set_id = ? AND kind IN ? AND source = ? AND from_zone = ? AND from_x = ? AND from_y = ? AND from_l = ?",
+			mapSetID, []string{EdgeKindGrid, EdgeKindSeam}, EdgeSourceManual, p.Zone, p.X, p.Y, p.L).Order("id ASC").Find(&rows).Error; err != nil {
 			return nil, err
 		}
 		for _, e := range rows {

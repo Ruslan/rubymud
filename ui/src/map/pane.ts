@@ -50,6 +50,7 @@ import {
 import type {
   Confidence,
   LiveRoom,
+  MapRecordingState,
   MapRoomSearchResult,
   PlayerPosition,
   SlimRoom,
@@ -260,6 +261,10 @@ export class MapPaneController {
   private attrWriteGeneration = new Map<string, number>();
   private attrWriteTail = new Map<string, Promise<void>>();
   private selectionToggle: HTMLButtonElement;
+  private recordingToggle: HTMLButtonElement;
+  private recordingState: MapRecordingState = { mode: "off", pending: 0, revision: 0 };
+  private reconciliationDialog: HTMLDialogElement | null = null;
+  private reconciliationOpener: HTMLElement | null = null;
   private selectionCount: HTMLElement;
   private moveZoneButton: HTMLButtonElement;
   private renameZoneButton: HTMLButtonElement;
@@ -304,6 +309,11 @@ export class MapPaneController {
     this.managerButton = this.iconButton("⌗", "Zone manager");
     this.managerButton.addEventListener("click", () => this.toggleManagerPopover());
     bar.appendChild(this.managerButton);
+
+    this.recordingToggle = this.iconButton("OBS", "Diagnostic movement observation; no rooms are written");
+    this.recordingToggle.setAttribute("aria-pressed", "false");
+    this.recordingToggle.addEventListener("click", () => void this.toggleMapRecording());
+    bar.appendChild(this.recordingToggle);
 
     this.selectionToggle = document.createElement("button");
     this.selectionToggle.type = "button";
@@ -1240,6 +1250,63 @@ export class MapPaneController {
   onRoomEvent(live: LiveRoom): void {
     this.liveRoom = live;
     this.refreshGhost();
+  }
+
+  onMapRecordingState(state: MapRecordingState): void {
+    if (state.revision < this.recordingState.revision) return;
+    this.recordingState = state;
+    const active = state.mode === "recording" || state.mode === "armed";
+    this.recordingToggle.setAttribute("aria-pressed", String(active));
+    this.recordingToggle.classList.toggle("on", active);
+    this.recordingToggle.textContent = state.mode === "conflict" ? "OBS!" : active ? "STOP OBS" : "OBS";
+    this.recordingToggle.title = state.mode === "conflict"
+      ? `Recording paused: ${state.reason ?? "conflict"}`
+      : active
+        ? `Stop recording observation (${state.pending} pending; foundation does not write rooms)`
+        : "Start recording observation (foundation only; no rooms are written)";
+    if (state.mode === "conflict" && state.conflict && !this.reconciliationDialog) this.openReconciliationDialog();
+    if (state.mode !== "conflict") this.closeReconciliationDialog();
+  }
+
+  resetMapRecordingState(state: MapRecordingState): void {
+    this.recordingState = state;
+    this.onMapRecordingState(state);
+  }
+
+  private async toggleMapRecording(): Promise<void> {
+    if (this.config.sessionID == null) return;
+    if (this.recordingState.mode === "conflict") { this.openReconciliationDialog(); return; }
+    const stopping = this.recordingState.mode !== "off";
+    try {
+      const res = await fetchWithToken(`/api/sessions/${this.config.sessionID}/${stopping ? "map-recording-stop" : "map-recording-start"}`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: "{}",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.reason ?? `HTTP ${res.status}`);
+      if (data.state) this.onMapRecordingState(data.state as MapRecordingState);
+      if (!data.started && !stopping) this.setStatus(`Recording not started: ${data.reason ?? "?"}`, { sticky: true });
+    } catch (err) {
+      this.setStatus(`Recording control failed: ${err instanceof Error ? err.message : String(err)}`, { sticky: true });
+    }
+  }
+
+  private closeReconciliationDialog(): void { const d=this.reconciliationDialog;if(!d)return;this.reconciliationDialog=null;d.closest(".map-zone-dialog-backdrop")?.remove();const opener=this.reconciliationOpener;this.reconciliationOpener=null;if(opener?.isConnected)opener.focus(); }
+
+  private openReconciliationDialog(): void {
+    const conflict=this.recordingState.conflict;if(!conflict||this.reconciliationDialog||this.config.sessionID==null)return;
+    this.reconciliationOpener=this.root.contains(document.activeElement)?document.activeElement as HTMLElement:this.recordingToggle;
+    const backdrop=document.createElement("div");backdrop.className="map-zone-dialog-backdrop";
+    const dialog=document.createElement("dialog");dialog.className="map-zone-dialog";dialog.setAttribute("aria-modal","true");dialog.setAttribute("aria-label","Resolve mapper conflict");backdrop.appendChild(dialog);
+    const title=document.createElement("h3");title.textContent="Resolve observed room";dialog.appendChild(title);
+    const summary=document.createElement("p");summary.textContent=`Observed: ${conflict.observed.hint || "(unnamed)"}. Expected: ${conflict.expected_hint || `${conflict.expected.zone} (${conflict.expected.x}, ${conflict.expected.y}, ${conflict.expected.l})`}. Command: ${conflict.move.command}`;dialog.appendChild(summary);
+    const diff=document.createElement("div");diff.className="map-reconciliation-diff";for(const field of ["hint","desc","exits"] as const){const row=document.createElement("div");const heading=document.createElement("strong");heading.textContent=field.toUpperCase();const expected=document.createElement("pre");expected.textContent=`Expected: ${conflict.expected_room?.[field]??""}`;const observed=document.createElement("pre");observed.textContent=`Observed: ${conflict.observed[field]??""}`;row.append(heading,expected,observed);diff.appendChild(row)}dialog.appendChild(diff);
+    const rooms=this.zoneCache.get(this.currentZone)??[];const select=document.createElement("select");select.setAttribute("aria-label","Existing target room");for(const room of rooms){const o=document.createElement("option");o.value=JSON.stringify({zone:room.z,x:room.x,y:room.y,l:room.l});o.textContent=`${room.h||"(unnamed)"} — (${room.x}, ${room.y}, ${room.l})`;select.appendChild(o)}dialog.appendChild(select);
+    const source=conflict.move.from;const coords=["display_x","display_y","display_l"] as const;const values=[source.x,source.y,source.l];const inputs:HTMLInputElement[]=[];coords.forEach((name,i)=>{const label=document.createElement("label");label.textContent=name.replace("display_","Display ").toUpperCase()+" ";const input=document.createElement("input");input.type="number";input.value=String(values[i]);input.setAttribute("aria-label",name);label.appendChild(input);dialog.appendChild(label);inputs.push(input)});
+    const status=document.createElement("p");status.setAttribute("aria-live","polite");dialog.appendChild(status);const actions=document.createElement("div");actions.className="map-zone-dialog__actions";const preview=document.createElement("button");preview.type="button";preview.textContent="Preview";const apply=document.createElement("button");apply.type="button";apply.textContent="Apply";apply.disabled=true;const cancel=document.createElement("button");cancel.type="button";cancel.textContent="Cancel";actions.append(preview,apply,cancel);dialog.appendChild(actions);
+    let token="";const invalidate=()=>{token="";apply.disabled=true};select.addEventListener("change",invalidate);inputs.forEach(i=>i.addEventListener("input",invalidate));
+    preview.addEventListener("click",async()=>{try{if(!select.value)throw new Error("Choose an existing target room");if(inputs.some(input=>input.value.trim()===""||!Number.isSafeInteger(Number(input.value))))throw new Error("Display coordinates must be integers");const target=JSON.parse(select.value);const layouts=[{zone:source.zone,x:source.x,y:source.y,l:source.l,display_x:Number(inputs[0].value),display_y:Number(inputs[1].value),display_l:Number(inputs[2].value),pinned:false}];const res=await fetchWithToken(`/api/sessions/${this.config.sessionID}/map-reconciliation/preview`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({conflict_id:conflict.id,target,layouts})});if(!res.ok)throw new Error(await res.text());const data=await res.json();token=data.token;apply.disabled=!token;status.textContent=`Preview ready: ${data.command} → ${data.target.zone} (${data.target.x}, ${data.target.y}, ${data.target.l})`;}catch(err){invalidate();status.textContent=`Preview failed: ${err instanceof Error?err.message:String(err)}`}});
+    apply.addEventListener("click",async()=>{if(!token)return;apply.disabled=true;try{const res=await fetchWithToken(`/api/sessions/${this.config.sessionID}/map-reconciliation/apply`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({conflict_id:conflict.id,token})});if(!res.ok)throw new Error(await res.text());const data=await res.json();if(data.state)this.onMapRecordingState(data.state);this.closeReconciliationDialog();}catch(err){status.textContent=`Apply failed: ${err instanceof Error?err.message:String(err)}`;token="";apply.disabled=true;}});
+    cancel.addEventListener("click",()=>this.closeReconciliationDialog());dialog.addEventListener("cancel",e=>{e.preventDefault();this.closeReconciliationDialog()});dialog.addEventListener("keydown",event=>{if(event.key==="Escape"){event.preventDefault();this.closeReconciliationDialog();return}if(event.key!=="Tab")return;const focusable=[...dialog.querySelectorAll<HTMLElement>("button:not([disabled]), input, select")];if(focusable.length===0)return;const first=focusable[0]!,last=focusable.at(-1)!;if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus()}});backdrop.addEventListener("mousedown",e=>{if(e.target===backdrop)this.closeReconciliationDialog()});this.root.appendChild(backdrop);this.reconciliationDialog=dialog;if(typeof dialog.showModal==="function"){try{dialog.showModal()}catch{}}select.focus();
   }
 
   // A knowledge write is an overlay invalidation, not a map mutation. Only an

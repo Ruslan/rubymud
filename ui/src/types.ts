@@ -95,6 +95,12 @@ export interface ServerMessage {
   room_x?: number;
   room_y?: number;
   room_l?: number;
+  map_recording?: {
+    mode: "off" | "armed" | "recording" | "conflict";
+    reason?: string;
+    pending: number;
+    revision: number;
+  };
   // Server-owned map walk progress. A map walk is paced by room confirmations;
   // these fields are also replayed during websocket restore.
   walk_active?: boolean;

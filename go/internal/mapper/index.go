@@ -10,10 +10,10 @@ import (
 
 // Coord is a room's grid key within the active set.
 type Coord struct {
-	Zone string
-	X    int
-	Y    int
-	L    int
+	Zone string `json:"zone"`
+	X    int    `json:"x"`
+	Y    int    `json:"y"`
+	L    int    `json:"l"`
 }
 
 // IndexRoom is the tracker's view of one room, distilled from storage.Room. It
@@ -292,7 +292,7 @@ func (idx *Index) attachEdges(edges []storage.MapEdge) {
 			to = &coords[i]
 		}
 		ie := &pool[i]
-		ie.Kind, ie.Source, ie.Passable, ie.To = e.Kind, e.Source, e.Passable, to
+		ie.Kind, ie.Source, ie.Passable, ie.To, ie.Command = e.Kind, e.Source, e.Passable, to, e.Command
 		ie.EdgeAttrs = e.EdgeAttrs
 		if e.Kind == storage.EdgeKindSeam {
 			if e.Source != storage.EdgeSourceManual {

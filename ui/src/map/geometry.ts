@@ -5,10 +5,13 @@ import type { SeamTarget, SlimRoom } from './types';
 //   on screen (north up): screenX = coord `y`, screenY = coord `x`.
 // Step deltas: N→x-1, S→x+1, E→y+1, W→y-1, U→l+1, D→l-1.
 export function screenX(room: { x: number; y: number }): number {
-  return room.y;
+  return 'py' in room && typeof room.py === 'number' ? room.py : room.y;
 }
 export function screenY(room: { x: number; y: number }): number {
-  return room.x;
+  return 'px' in room && typeof room.px === 'number' ? room.px : room.x;
+}
+export function displayLevel(room: { l: number; pl?: number }): number {
+  return typeof room.pl === 'number' ? room.pl : room.l;
 }
 
 // Direction unit vectors in SCREEN space (dx, dy). Used to draw exit stubs.
@@ -114,7 +117,7 @@ export function computeBounds(rooms: SlimRoom[]): Bounds {
 // Sorted list of distinct levels (floors) present in a room list.
 export function levelsOf(rooms: SlimRoom[]): number[] {
   const set = new Set<number>();
-  for (const r of rooms) set.add(r.l);
+  for (const r of rooms) set.add(displayLevel(r));
   return [...set].sort((a, b) => a - b);
 }
 
@@ -123,8 +126,8 @@ export function levelsOf(rooms: SlimRoom[]): number[] {
 export function defaultLevel(rooms: SlimRoom[]): number {
   if (rooms.length === 0) return 0;
   const count = new Map<number, number>();
-  for (const r of rooms) count.set(r.l, (count.get(r.l) || 0) + 1);
-  let best = rooms[0]!.l;
+  for (const r of rooms) count.set(displayLevel(r), (count.get(displayLevel(r)) || 0) + 1);
+  let best = displayLevel(rooms[0]!);
   let bestCount = -1;
   for (const lvl of [...count.keys()].sort((a, b) => a - b)) {
     const c = count.get(lvl)!;

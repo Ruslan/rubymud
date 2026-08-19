@@ -154,6 +154,43 @@ describe("map pane compact toolbar", () => {
     expect(label.classList.contains("on")).toBe(false);
   });
 
+  it("renders OBS lifecycle states, fences stale updates, and resets for restore", async () => {
+    const button = [...pane.root.querySelectorAll<HTMLButtonElement>("button")].find((b) => b.textContent === "OBS")!;
+    pane.onMapRecordingState({ mode: "armed", pending: 0, revision: 5 });
+    expect(button.textContent).toBe("STOP OBS");
+    expect(button.getAttribute("aria-pressed")).toBe("true");
+    pane.onMapRecordingState({ mode: "off", pending: 0, revision: 4 });
+    expect(button.textContent).toBe("STOP OBS");
+    pane.onMapRecordingState({ mode: "recording", pending: 2, revision: 6 });
+    expect(button.title).toContain("2 pending");
+    pane.onMapRecordingState({ mode: "conflict", pending: 0, revision: 7, reason: "mismatch" });
+    expect(button.textContent).toBe("OBS!");
+    expect(button.getAttribute("aria-pressed")).toBe("false");
+    pane.resetMapRecordingState({ mode: "off", pending: 0, revision: 0 });
+    pane.onMapRecordingState({ mode: "armed", pending: 0, revision: 1 });
+    expect(button.textContent).toBe("STOP OBS");
+
+    pane.resetMapRecordingState({ mode: "off", pending: 0, revision: 0 });
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 409, json: async () => ({ reason: "green confirmed anchor required" }) } as Response);
+    button.click();
+    await vi.waitFor(() => expect(pane.root.textContent).toContain("Recording control failed: green confirmed anchor required"));
+  });
+
+  it("keeps reconciliation apply disabled until a server preview and preserves stale dialog", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("A"));
+    const conflict = { id: 9, move: { command: "climb exact", direction: "N", source: "input", from: { zone:"A",x:1,y:0,l:1 }, expected: { zone:"A",x:0,y:0,l:0 } }, expected:{zone:"A",x:0,y:0,l:0}, expected_hint:"Expected", expected_room:{hint:"Expected",desc:"saved description",exits:"N"}, observed:{hint:"Atrium",desc:"seen description",exits:"S"}, reason:"mismatch" };
+    pane.onMapRecordingState({mode:"conflict",pending:0,revision:20,conflict});
+    const dialog=pane.root.querySelector<HTMLDialogElement>('[aria-label="Resolve mapper conflict"]')!;
+    expect(dialog.querySelector(".map-reconciliation-diff")?.textContent).toContain("Expected: saved description");expect(dialog.querySelector(".map-reconciliation-diff")?.textContent).toContain("Observed: seen description");expect(mainStyles).toMatch(/\.map-reconciliation-diff\s*\{[^}]*max-height:[^}]*overflow:\s*auto/s);
+    expect(document.activeElement).toBe(dialog.querySelector("select"));
+    const buttons=[...dialog.querySelectorAll<HTMLButtonElement>("button")];const preview=buttons.find(b=>b.textContent==="Preview")!;const apply=buttons.find(b=>b.textContent==="Apply")!;
+    expect(apply.disabled).toBe(true);
+    fetchMock.mockResolvedValueOnce(json({token:"server-token",command:"climb exact",target:{zone:"A",x:0,y:0,l:0}}));preview.click();await vi.waitFor(()=>expect(apply.disabled).toBe(false));
+    fetchMock.mockResolvedValueOnce({ok:false,status:409,text:async()=>"stale topology revision"} as Response);apply.click();await vi.waitFor(()=>expect(dialog.textContent).toContain("stale topology revision"));expect(pane.root.contains(dialog)).toBe(true);expect(apply.disabled).toBe(true);
+    const cancel=buttons.find(b=>b.textContent==="Cancel")!;cancel.focus();cancel.dispatchEvent(new KeyboardEvent("keydown",{key:"Tab",bubbles:true}));expect(document.activeElement).toBe(dialog.querySelector("select"));
+    dialog.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true,cancelable:true}));expect(pane.root.querySelector('[aria-label="Resolve mapper conflict"]')).toBeNull();expect(document.activeElement?.textContent).toBe("OBS!");
+  });
+
   it("closes either popover when the floor or map-set context changes", async () => {
     await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("A"));
     pane.root.querySelector<HTMLButtonElement>('[aria-label="Find room"]')!.click();

@@ -11,7 +11,7 @@ import type {
 } from "./types";
 import { fetchWithToken } from "./dom";
 import { MapPaneController, MAP_BUFFER, type MapWalkState } from "./map/pane";
-import type { LiveRoom, PlayerPosition } from "./map/types";
+import type { LiveRoom, MapRecordingState, PlayerPosition } from "./map/types";
 
 interface RendererState {
   activePanel: "keyboard" | "variables" | "groups" | null;
@@ -139,6 +139,7 @@ export function createRenderer({
   // Latest live room block, replayed into a map pane mounted after the
   // broadcast (same reason lastMapPosition is cached).
   let lastLiveRoom: LiveRoom | null = null;
+  let lastMapRecording: MapRecordingState | null = null;
   // The session's room-format door-opening template (mapper.ProfileSpec.DoorOpen),
   // "" until the `mapper_profile` message says otherwise — which is also the right
   // value for a format that describes no door verb.
@@ -516,6 +517,7 @@ export function createRenderer({
         if (lastLiveRoom) {
           controller.onRoomEvent(lastLiveRoom);
         }
+        if (lastMapRecording) controller.onMapRecordingState(lastMapRecording);
         controller.setDoorOpenTemplate(lastDoorOpen);
         if (lastMapWalk) {
           controller.onMapWalk(lastMapWalk);
@@ -2257,6 +2259,21 @@ export function createRenderer({
     mapControllers.forEach((c) => c.onRoomEvent(live));
   }
 
+  function handleMapRecording(state: MapRecordingState) {
+    if (lastMapRecording && state.revision < lastMapRecording.revision) return;
+    lastMapRecording = state;
+    mapControllers.forEach((c) => c.onMapRecordingState(state));
+  }
+
+  // Recording revisions are session-local. A reconnect may attach this browser
+  // to a newly created Session whose counter starts below the previous one, so
+  // reset the client-side fence before consuming restore messages.
+  function resetMapRecordingRevision() {
+    const reset: MapRecordingState = { mode: "off", pending: 0, revision: 0 };
+    lastMapRecording = reset;
+    mapControllers.forEach((c) => c.resetMapRecordingState(reset));
+  }
+
   function handleRoomKnowledgeChanged(mapSetID: number, zone: string, x: number, y: number, l: number) {
     mapControllers.forEach((c) => c.onRoomKnowledgeChanged(mapSetID, zone, x, y, l));
   }
@@ -2339,6 +2356,8 @@ export function createRenderer({
     refreshAnsiTheme,
     handleRoomPosition,
     handleRoomEvent,
+    handleMapRecording,
+	resetMapRecordingRevision,
     handleRoomKnowledgeChanged,
     handleDoorOpenTemplate,
     handleMapWalk,

@@ -732,14 +732,17 @@ func (s *Server) mcpSetActiveMapSet(sid, mapSet int64) (string, bool) {
 	if _, err := s.store.GetMapSet(mapSet); err != nil {
 		return fmt.Sprintf("map set %d not found.", mapSet), true
 	}
-	if err := s.store.SetActiveMapSetID(sid, mapSet); err != nil {
+	var switchErr error
+	if sess, ok := s.manager.GetSession(sid); ok {
+		switchErr = sess.SetActiveMapSet(mapSet)
+	} else {
+		switchErr = s.store.SetActiveMapSetID(sid, mapSet)
+	}
+	if err := switchErr; err != nil {
 		return "failed to set active map set: " + err.Error(), true
 	}
 	set, _ := s.store.GetMapSet(mapSet)
 	// Rebuild the tracker index for the live session, if any.
-	if sess, ok := s.manager.GetSession(sid); ok {
-		sess.ReloadActiveMapSet()
-	}
 	return fmt.Sprintf("Active map set for session %d set to id=%d (%s). Tracker index rebuilt.", sid, mapSet, set.Name), false
 }
 

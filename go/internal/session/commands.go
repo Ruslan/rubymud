@@ -2,6 +2,7 @@ package session
 
 import (
 	"errors"
+	"io"
 	"log"
 	"strings"
 	"time"
@@ -39,15 +40,19 @@ func (s *Session) sendTriggerCommand(cmd string, entryID int64, buffer string) e
 	s.broadcastCommandHint(cmd, entryID, buffer)
 
 	if manualMove {
-		return s.commitManualMapMove(cmd, dir)
+		return s.commitManualMapMove(cmd, dir, "trigger")
 	}
-	_, err := s.conn.Write([]byte(cmd + "\n"))
+	payload := []byte(cmd + "\n")
+	n, err := s.conn.Write(payload)
+	if err == nil && n != len(payload) {
+		err = io.ErrShortWrite
+	}
 	if err == nil {
 		// Mapper: detect a movement direction only after the command actually
 		// reached the MUD, covering trigger/alias/speedwalk-sent moves (already
 		// alias/VM-expanded). Queuing before a failed write would leave an unsent
 		// direction in the FIFO and mis-reconcile the next room event.
-		s.observeOutgoingMove(cmd)
+		s.observeOutgoingMove(cmd, "trigger")
 	}
 	return err
 }
@@ -155,19 +160,24 @@ func (s *Session) SendCommandWithTrace(command string, source string) ([]string,
 			}
 		}
 		if manualMove {
-			if err := s.commitManualMapMove(cmd, dir); err != nil {
+			if err := s.commitManualMapMove(cmd, dir, source); err != nil {
 				return canonicalCommands, err
 			}
 			canonicalCommands = append(canonicalCommands, cmd)
 			continue
 		}
-		if _, err := s.conn.Write([]byte(cmd + "\n")); err != nil {
+		payload := []byte(cmd + "\n")
+		n, err := s.conn.Write(payload)
+		if err == nil && n != len(payload) {
+			err = io.ErrShortWrite
+		}
+		if err != nil {
 			return canonicalCommands, err
 		}
 		// Mapper: detect a movement direction after a SUCCESSFUL write (after
 		// alias/VM expansion). Pushing before the write would leave an unsent
 		// direction in the FIFO on a mid-speedwalk write error.
-		s.observeOutgoingMove(cmd)
+		s.observeOutgoingMove(cmd, source)
 		canonicalCommands = append(canonicalCommands, cmd)
 		s.mu.Lock()
 		s.lastCommandAt = time.Now()
@@ -224,13 +234,23 @@ func (s *Session) reserveManualMapMove() error {
 // commitManualMapMove writes and publishes the reserved manual hop without
 // holding lifecycle mutexes. The parser I/O gate gives it the same no-gap FIFO
 // publication guarantee as map-walk dispatch.
-func (s *Session) commitManualMapMove(cmd, dir string) error {
+func (s *Session) commitManualMapMove(cmd, dir, source string) error {
 	s.mapWalkIOMu.Lock()
 	n, err := s.conn.Write([]byte(cmd + "\n"))
+	if err == nil && n != len(cmd)+1 {
+		err = io.ErrShortWrite
+	}
+	var recordingState *MapRecordingState
 	if err == nil {
 		s.mapMu.Lock()
+		beforeRevision := s.mapRecordingRevision
 		if s.mapTracker != nil {
 			s.mapTracker.PushMove(dir)
+			s.recordAcceptedMapMoveLocked(cmd, dir, source, nil)
+		}
+		if s.mapRecordingRevision != beforeRevision {
+			state := s.mapRecordingStateLocked()
+			recordingState = &state
 		}
 		s.mapMu.Unlock()
 	}
@@ -241,6 +261,9 @@ func (s *Session) commitManualMapMove(cmd, dir string) error {
 		s.mapMu.Lock()
 		if s.mapTracker != nil {
 			s.mapTracker.Invalidate("manual movement command outcome unknown")
+			s.stopMapRecordingLocked("manual movement command outcome unknown")
+			state := s.mapRecordingStateLocked()
+			recordingState = &state
 			positionMsg = s.roomPositionMsgLocked()
 		}
 		s.mapMu.Unlock()
@@ -263,6 +286,9 @@ func (s *Session) commitManualMapMove(cmd, dir string) error {
 	}
 	if positionMsg.Type != "" {
 		s.broadcastMsg(positionMsg)
+	}
+	if recordingState != nil {
+		s.broadcastMsg(mapRecordingMsg(*recordingState))
 	}
 	if err != nil {
 		return err

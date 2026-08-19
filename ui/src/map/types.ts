@@ -15,6 +15,10 @@ export interface SlimRoom {
   dx: number;
   dy: number;
   dl: number;
+  px?: number; // sparse presentation x; logical x remains identity
+  py?: number;
+  pl?: number;
+  pin?: boolean;
   img: number; // 0|1 image present (unused here)
   // The MATERIALIZED topology of this cell, per outgoing direction. `e` above is
   // the exits LINE the MUD printed; these are what the graph actually holds, and
@@ -28,12 +32,20 @@ export interface SlimRoom {
   // Outgoing grid edges that land in another zone. These remain grid topology;
   // the sparse marker lets the zone-local renderer show the boundary.
   xz?: SlimCrossZoneGrid[];
+  co?: SlimCorridor[]; // exact directional corridors; one command, no phantom cells
   m: string[]; // hand-drawn hidden exits ("there is a way, whatever the line says")
   mb: string[]; // hand-drawn negations   ("there is NO way, whatever the line says")
   g: string[]; // rows PARSED from the room's own exit data
   gf: string[]; // rows that exist only because BOTH ends carry no exit data at all
   // (the permissive grid fallback) — nothing in either room's text says there is a
   // way, so this is a different statement from `g` and the edge editor says so.
+}
+
+export interface SlimCorridor {
+  dir: string; r: string; p: boolean;
+  z: string; x: number; y: number; l: number;
+  c: string; weight?: number; phrase?: string; door?: boolean; locked?: boolean;
+  open_cmd?: string; no_route?: boolean;
 }
 
 export interface MapRoomSearchResult {
@@ -142,4 +154,20 @@ export interface LiveRoom {
   hint: string;
   desc: string;
   exits: string;
+}
+
+export interface MapRecordingState {
+  mode: "off" | "armed" | "recording" | "conflict";
+  reason?: string;
+  pending: number;
+  revision: number;
+  conflict?: {
+    id: number;
+    move: { command: string; direction: string; source: string; from: { zone: string; x: number; y: number; l: number }; expected: { zone: string; x: number; y: number; l: number } };
+    expected: { zone: string; x: number; y: number; l: number };
+    expected_hint: string;
+    expected_room: { hint: string; desc: string; exits: string };
+    observed: { hint: string; desc: string; exits: string };
+    reason: string;
+  };
 }

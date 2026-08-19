@@ -268,6 +268,19 @@ func (s *Store) ForkMapSet(srcID int64) (int64, error) {
 			return err
 		}
 
+		var srcLayouts []RoomLayout
+		if err := tx.Where("map_set_id = ?", srcID).Find(&srcLayouts).Error; err != nil {
+			return err
+		}
+		for i := range srcLayouts {
+			srcLayouts[i].MapSetID = newID
+		}
+		if len(srcLayouts) > 0 {
+			if err := tx.CreateInBatches(srcLayouts, 500).Error; err != nil {
+				return err
+			}
+		}
+
 		// Copy room_annotations (keyed by logical coord, not rooms.id): re-key the
 		// map_set_id to the fork so the overlay travels with the copy.
 		var srcAnnos []RoomAnnotation
@@ -450,6 +463,9 @@ func (s *Store) DeleteMapSetWithAffectedSessions(id int64) ([]int64, error) {
 		if err := tx.Exec("DELETE FROM map_edges WHERE map_set_id = ?", id).Error; err != nil {
 			return err
 		}
+		if err := tx.Exec("DELETE FROM room_layouts WHERE map_set_id = ?", id).Error; err != nil {
+			return err
+		}
 		if err := tx.Exec("DELETE FROM room_annotations WHERE map_set_id = ?", id).Error; err != nil {
 			return err
 		}
@@ -489,22 +505,26 @@ func (s *Store) ListZones(mapSetID int64) ([]ZoneInfo, error) {
 // SlimRoom is the compact wire form for map rendering and MCP. img is 1 when a
 // room_images row exists for the room, else 0.
 type SlimRoom struct {
-	Z   string   `json:"z"` // zone
-	T   *int     `json:"t"` // tag
-	H   string   `json:"h"` // hint
-	X   int      `json:"x"`
-	Y   int      `json:"y"`
-	L   int      `json:"l"`
-	E   []string `json:"e"`  // exit dirs (edirs)
-	D   []string `json:"d"`  // door dirs
-	Ch  int      `json:"ch"` // connectivity bitmask
-	P   bool     `json:"p"`  // pipe
-	I   *int     `json:"i"`  // imageindex
-	S   bool     `json:"s"`  // is_dt
-	DX  int      `json:"dx"`
-	DY  int      `json:"dy"`
-	DL  int      `json:"dl"`
-	Img int      `json:"img"` // 0|1 image present
+	Z      string   `json:"z"` // zone
+	T      *int     `json:"t"` // tag
+	H      string   `json:"h"` // hint
+	X      int      `json:"x"`
+	Y      int      `json:"y"`
+	L      int      `json:"l"`
+	E      []string `json:"e"`  // exit dirs (edirs)
+	D      []string `json:"d"`  // door dirs
+	Ch     int      `json:"ch"` // connectivity bitmask
+	P      bool     `json:"p"`  // pipe
+	I      *int     `json:"i"`  // imageindex
+	S      bool     `json:"s"`  // is_dt
+	DX     int      `json:"dx"`
+	DY     int      `json:"dy"`
+	DL     int      `json:"dl"`
+	Img    int      `json:"img"`          // 0|1 image present
+	PX     *int     `json:"px,omitempty"` // presentation x override
+	PY     *int     `json:"py,omitempty"` // presentation y override
+	PL     *int     `json:"pl,omitempty"` // presentation level override
+	Pinned bool     `json:"pin,omitempty"`
 
 	// The MATERIALIZED topology of this cell, per outgoing direction. `e` above is
 	// the room's exits LINE (what the MUD printed); these three are what the graph
@@ -544,6 +564,21 @@ type SlimRoom struct {
 	// They remain grid edges (and therefore keep their routing/editor meaning),
 	// but a zone-local canvas needs their endpoint to make the boundary visible.
 	XZ []SlimCrossZoneGrid `json:"xz"`
+	// CO is exact ordinary corridor topology. Unlike XZ it may be same-zone and
+	// unlike SE it is a directional one-command passage, not a portal.
+	CO []SlimCorridor `json:"co"`
+}
+
+type SlimCorridor struct {
+	Dir      string `json:"dir"`
+	Source   string `json:"r"`
+	Passable bool   `json:"p"`
+	ToZone   string `json:"z"`
+	ToX      int    `json:"x"`
+	ToY      int    `json:"y"`
+	ToL      int    `json:"l"`
+	Command  string `json:"c"`
+	EdgeAttrs
 }
 
 // SlimCrossZoneGrid is a resolved outgoing grid contact. A room has at most one
@@ -674,6 +709,14 @@ func (s *Store) ListSlimRooms(mapSetID int64, zone string) ([]SlimRoom, error) {
 	if len(rooms) == 0 {
 		return []SlimRoom{}, nil
 	}
+	layouts, err := s.ListRoomLayouts(mapSetID, zone)
+	if err != nil {
+		return nil, err
+	}
+	layoutByCell := make(map[EdgeCell]RoomLayout, len(layouts))
+	for _, l := range layouts {
+		layoutByCell[EdgeCell{l.Zone, l.X, l.Y, l.L}] = l
+	}
 
 	// One query for which room ids have an image, to avoid N+1.
 	ids := make([]int64, len(rooms))
@@ -715,6 +758,7 @@ func (s *Store) ListSlimRooms(mapSetID int64, zone string) ([]SlimRoom, error) {
 		attrs        []SlimEdgeAttr
 		seams        []SlimSeam
 		crossZone    []SlimCrossZoneGrid
+		corridors    []SlimCorridor
 	}
 	edgesByCell := map[EdgeCell]*dirSets{}
 	edgeRows, err := s.db.Raw(`SELECT source, passable, from_x, from_y, from_l, dir, to_zone, to_x, to_y, to_l,
@@ -767,6 +811,28 @@ func (s *Store) ListSlimRooms(mapSetID int64, zone string) ([]SlimRoom, error) {
 		}
 	}
 	if err := edgeRows.Err(); err != nil {
+		return nil, err
+	}
+	corridorRows, err := s.db.Raw(`SELECT source,passable,from_x,from_y,from_l,dir,to_zone,to_x,to_y,to_l,command,weight,phrase,door,locked,open_cmd,no_route FROM map_edges WHERE map_set_id=? AND from_zone=? AND kind=?`, mapSetID, zone, EdgeKindCorridor).Rows()
+	if err != nil {
+		return nil, err
+	}
+	defer corridorRows.Close()
+	for corridorRows.Next() {
+		var fx, fy, fl int
+		var c SlimCorridor
+		if err := corridorRows.Scan(&c.Source, &c.Passable, &fx, &fy, &fl, &c.Dir, &c.ToZone, &c.ToX, &c.ToY, &c.ToL, &c.Command, &c.Weight, &c.Phrase, &c.Door, &c.Locked, &c.OpenCmd, &c.NoRoute); err != nil {
+			return nil, err
+		}
+		cell := EdgeCell{zone, fx, fy, fl}
+		d := edgesByCell[cell]
+		if d == nil {
+			d = &dirSets{}
+			edgesByCell[cell] = d
+		}
+		d.corridors = append(d.corridors, c)
+	}
+	if err := corridorRows.Err(); err != nil {
 		return nil, err
 	}
 	for _, d := range edgesByCell {
@@ -883,10 +949,11 @@ func (s *Store) ListSlimRooms(mapSetID int64, zone string) ([]SlimRoom, error) {
 		var ea []SlimEdgeAttr
 		var se []SlimSeam
 		var xz []SlimCrossZoneGrid
+		var co []SlimCorridor
 		if d := edgesByCell[(EdgeCell{r.Zone, r.X, r.Y, r.L})]; d != nil {
-			m, mb, g, gf, ea, se, xz = d.m, d.mb, d.g, d.gf, d.attrs, d.seams, d.crossZone
+			m, mb, g, gf, ea, se, xz, co = d.m, d.mb, d.g, d.gf, d.attrs, d.seams, d.crossZone, d.corridors
 		}
-		out = append(out, SlimRoom{
+		sr := SlimRoom{
 			Z:   r.Zone,
 			T:   r.Tag,
 			H:   r.Hint,
@@ -910,7 +977,13 @@ func (s *Store) ListSlimRooms(mapSetID int64, zone string) ([]SlimRoom, error) {
 			EA:  emptyAttrsIfNil(ea),
 			SE:  emptySeamsIfNil(se),
 			XZ:  emptyCrossZoneIfNil(xz),
-		})
+			CO:  emptyCorridorsIfNil(co),
+		}
+		if layout, ok := layoutByCell[EdgeCell{r.Zone, r.X, r.Y, r.L}]; ok {
+			sx, sy, sl := layout.DisplayX, layout.DisplayY, layout.DisplayL
+			sr.PX, sr.PY, sr.PL, sr.Pinned = &sx, &sy, &sl, layout.Pinned
+		}
+		out = append(out, sr)
 	}
 	return out, nil
 }
@@ -918,6 +991,12 @@ func (s *Store) ListSlimRooms(mapSetID int64, zone string) ([]SlimRoom, error) {
 func emptyCrossZoneIfNil(v []SlimCrossZoneGrid) []SlimCrossZoneGrid {
 	if v == nil {
 		return []SlimCrossZoneGrid{}
+	}
+	return v
+}
+func emptyCorridorsIfNil(v []SlimCorridor) []SlimCorridor {
+	if v == nil {
+		return []SlimCorridor{}
 	}
 	return v
 }
@@ -1885,11 +1964,34 @@ func (s *Store) deleteRoomWithSnapshot(mapSetID int64, zone string, x, y, l int)
 		found = true
 		before.Rooms = []RoomSnapshot{snap}
 		cells := []EdgeCell{{zone, x, y, l}}
+		deletedCell := cells[0]
+		// Exact corridors are authoritative assertions about two existing logical
+		// rooms. Capture BOTH outgoing and incoming rows, including non-adjacent
+		// targets, then remove them with the room so a later unrelated room at the
+		// same coordinate cannot inherit stale topology.
+		var incidentCorridors []MapEdge
+		if serr := tx.Where(`map_set_id=? AND kind=? AND (
+			(from_zone=? AND from_x=? AND from_y=? AND from_l=?) OR
+			(to_zone=? AND to_x=? AND to_y=? AND to_l=?))`,
+			mapSetID, EdgeKindCorridor,
+			deletedCell.Zone, deletedCell.X, deletedCell.Y, deletedCell.L,
+			deletedCell.Zone, deletedCell.X, deletedCell.Y, deletedCell.L).
+			Order("id ASC").Find(&incidentCorridors).Error; serr != nil {
+			return serr
+		}
+		for _, edge := range incidentCorridors {
+			before.Faces = append(before.Faces, DirectionalFaceSnapshot{Cell: edge.From(), Dir: edge.Dir, Existed: true, Edge: edge})
+		}
 		if before.Manual, serr = captureManualEdgesTx(tx, mapSetID, cells); serr != nil {
 			return serr
 		}
 		if err := tx.Delete(&Room{}, snap.Room.ID).Error; err != nil {
 			return err
+		}
+		for _, edge := range incidentCorridors {
+			if err := tx.Delete(&MapEdge{}, edge.ID).Error; err != nil {
+				return err
+			}
 		}
 		// The HAND-DRAWN rows touching this cell go with it — including the ones a
 		// SURVIVING neighbour owns that point INTO the cell. Unlike annotations (left
@@ -2040,6 +2142,40 @@ func (s *Store) restoreTopologyBeforeUnfenced(mapSetID int64, before TopologyBef
 			}
 			cells = append(cells, before.Manual.Cells...)
 		}
+		for _, snap := range before.Layouts {
+			if derr := tx.Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=?", mapSetID, snap.Cell.Zone, snap.Cell.X, snap.Cell.Y, snap.Cell.L).Delete(&RoomLayout{}).Error; derr != nil {
+				return derr
+			}
+			if snap.Existed {
+				row := snap.Layout
+				row.MapSetID = mapSetID
+				if cerr := tx.Create(&row).Error; cerr != nil {
+					return cerr
+				}
+			}
+			applied = true
+		}
+		// Recompute room-derived topology first, then restore literal authoritative
+		// faces. This prevents derivation from changing kind/source or any attrs.
+		if len(cells) > 0 {
+			if rerr := recomputeEdgesTx(tx, mapSetID, cells, tagsChanged); rerr != nil {
+				return rerr
+			}
+		}
+		for _, snap := range before.Faces {
+			if derr := tx.Where("map_set_id=? AND kind IN ? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=?", mapSetID, []string{EdgeKindGrid, EdgeKindCorridor}, snap.Cell.Zone, snap.Cell.X, snap.Cell.Y, snap.Cell.L, snap.Dir).Delete(&MapEdge{}).Error; derr != nil {
+				return derr
+			}
+			if snap.Existed {
+				row := snap.Edge
+				row.ID = 0
+				row.MapSetID = mapSetID
+				if cerr := tx.Create(&row).Error; cerr != nil {
+					return cerr
+				}
+			}
+			applied = true
+		}
 		if !applied {
 			return nil
 		}
@@ -2050,7 +2186,10 @@ func (s *Store) restoreTopologyBeforeUnfenced(mapSetID int64, before TopologyBef
 		// It runs AFTER the manual restore so the freshly restored manual rows own
 		// their faces here (dropFacesTakenByManual), instead of colliding with a
 		// derived row on the partial UNIQUE index and rolling the undo back.
-		return recomputeEdgesTx(tx, mapSetID, cells, tagsChanged)
+		if len(before.Faces) > 0 || len(before.Layouts) > 0 {
+			return validateEffectiveLayoutTx(tx, mapSetID)
+		}
+		return nil
 	})
 	if err != nil {
 		return false, err

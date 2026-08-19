@@ -165,6 +165,29 @@ func (m *Manager) RefreshSharedZoneMove(mapSetID, skipSessionID int64, move stor
 	}
 }
 
+func (m *Manager) RefreshSharedTopology(mapSetID, skipSessionID int64) {
+	m.mu.Lock()
+	items := make([]struct {
+		id int64
+		s  *Session
+	}, 0, len(m.sessions))
+	for id, s := range m.sessions {
+		if id != skipSessionID && !s.IsClosed() {
+			items = append(items, struct {
+				id int64
+				s  *Session
+			}{id, s})
+		}
+	}
+	m.mu.Unlock()
+	for _, item := range items {
+		active, ok, err := m.store.GetActiveMapSetID(item.id)
+		if err == nil && ok && active == mapSetID {
+			item.s.RefreshSharedTopology(mapSetID)
+		}
+	}
+}
+
 func (m *Manager) Connect(id int64) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

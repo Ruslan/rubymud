@@ -1,6 +1,7 @@
 import {
   computeBounds,
   defaultLevel,
+  displayLevel,
   DIR_SCREEN_VEC,
   levelsOf,
   screenX,
@@ -298,14 +299,18 @@ export class MapRenderer {
   // Center the view on a game coord and (optionally) switch floors, used by both
   // seam jumps and follow-player. Assumes the coord belongs to the loaded zone.
   centerOn(x: number, y: number, l: number): void {
-    if (l !== this.level && this.levels.includes(l)) {
-      this.level = l;
-      this.onLevelChange?.(l);
+    const room = this.findRoom(x, y, l);
+    const targetLevel = room ? displayLevel(room) : l;
+    const targetX = room ? screenY(room) : x;
+    const targetY = room ? screenX(room) : y;
+    if (targetLevel !== this.level && this.levels.includes(targetLevel)) {
+      this.level = targetLevel;
+      this.onLevelChange?.(targetLevel);
     }
     const w = this.canvas.clientWidth;
     const h = this.canvas.clientHeight;
-    this.view.ox = w / 2 - y * CELL * this.view.s;
-    this.view.oy = h / 2 - x * CELL * this.view.s;
+    this.view.ox = w / 2 - targetY * CELL * this.view.s;
+    this.view.oy = h / 2 - targetX * CELL * this.view.s;
     this.render();
   }
 
@@ -423,7 +428,7 @@ export class MapRenderer {
     // Ghost rooms of inactive levels (faint underlay).
     ctx.fillStyle = "rgba(47,138,82,.12)";
     for (const r of this.rooms) {
-      if (r.l === AL) continue;
+      if (displayLevel(r) === AL) continue;
       const cx = this.sx(r);
       const cy = this.sy(r);
       this.roundRect(cx - half, cy - half, half * 2, half * 2, 2 * S);
@@ -440,7 +445,7 @@ export class MapRenderer {
     ctx.lineWidth = Math.max(2, 4 * S);
     ctx.strokeStyle = "rgba(47,138,82,.6)";
     for (const r of this.rooms) {
-      if (r.l !== AL) continue;
+      if (displayLevel(r) !== AL) continue;
       const cx = this.sx(r);
       const cy = this.sy(r);
       for (const d of r.e) {
@@ -460,9 +465,51 @@ export class MapRenderer {
 
     this.paintHandDrawn(S, AL);
 
+    // Exact corridors are a single topology hop even when presentation layout
+    // puts their endpoints far apart. Paint one clipped primitive and never
+    // synthesize intermediate rooms/cells.
+    const byLogical = new Map(this.rooms.map((r) => [`${r.z}\0${r.x}\0${r.y}\0${r.l}`, r]));
+    ctx.lineWidth = Math.max(2, 4 * S);
+    ctx.strokeStyle = "rgba(47,138,82,.75)";
+    for (const from of this.rooms) {
+      if (displayLevel(from) !== AL) continue;
+      for (const edge of from.co ?? []) {
+        if (!edge.p || edge.z !== from.z) continue;
+        const to = byLogical.get(`${edge.z}\0${edge.x}\0${edge.y}\0${edge.l}`);
+        if (!to || displayLevel(to) !== AL) continue;
+        const ax = this.sx(from), ay = this.sy(from), bx = this.sx(to), by = this.sy(to);
+        const dx = bx - ax, dy = by - ay, distance = Math.hypot(dx, dy);
+        if (distance <= half * 2) continue;
+        const clip = half / distance;
+        ctx.beginPath();
+        ctx.moveTo(ax + dx * clip, ay + dy * clip);
+        ctx.lineTo(bx - dx * clip, by - dy * clip);
+        ctx.stroke();
+      }
+    }
+    // A normal grid edge can also become visually long after relayout (the
+    // five-room loop moves room 5 under room 1, stretching old 4–5). Draw one
+    // primitive for the physical pair; two directed rows must not double-paint it.
+    const paintedGrid = new Set<string>();
+    for (const from of this.rooms) {
+      if (displayLevel(from) !== AL) continue;
+      for (const dir of [...from.m, ...from.g, ...from.gf]) {
+        const delta = stepDelta(dir); if (!delta) continue;
+        const targetKey = `${from.z}\0${from.x + delta.dx}\0${from.y + delta.dy}\0${from.l + delta.dl}`;
+        const to = byLogical.get(targetKey); if (!to || displayLevel(to) !== AL) continue;
+        const sourceKey = `${from.z}\0${from.x}\0${from.y}\0${from.l}`;
+        const pair = sourceKey < targetKey ? `${sourceKey}|${targetKey}` : `${targetKey}|${sourceKey}`;
+        if (paintedGrid.has(pair)) continue;
+        const ax=this.sx(from),ay=this.sy(from),bx=this.sx(to),by=this.sy(to),dx=bx-ax,dy=by-ay,distance=Math.hypot(dx,dy);
+        if (distance <= CELL * S * 1.01) continue;
+        paintedGrid.add(pair);
+        const clip=half/distance;ctx.beginPath();ctx.moveTo(ax+dx*clip,ay+dy*clip);ctx.lineTo(bx-dx*clip,by-dy*clip);ctx.stroke();
+      }
+    }
+
     // Rooms (active level).
     for (const r of this.rooms) {
-      if (r.l !== AL) continue;
+      if (displayLevel(r) !== AL) continue;
       const cx = this.sx(r);
       const cy = this.sy(r);
       const up = r.e.includes("U");
@@ -592,15 +639,11 @@ export class MapRenderer {
       ctx.strokeStyle = "#f0b64e";
       ctx.lineWidth = Math.max(1.5, 2 * S);
       ctx.setLineDash([]);
-      const extent = half + 3 * S;
-      const minY = Math.floor((-extent - this.view.ox) / (CELL * S));
-      const maxY = Math.ceil((this.canvas.clientWidth + extent - this.view.ox) / (CELL * S));
-      const minX = Math.floor((-extent - this.view.oy) / (CELL * S));
-      const maxX = Math.ceil((this.canvas.clientHeight + extent - this.view.oy) / (CELL * S));
-      for (let x = minX; x <= maxX; x++) for (let y = minY; y <= maxY; y++) {
-        if (!this.selected.has(`${x},${y},${AL}`)) continue;
-        const cx = y * CELL * S + this.view.ox;
-        const cy = x * CELL * S + this.view.oy;
+      for (const room of this.rooms) {
+        if (displayLevel(room) !== AL || !this.selected.has(this.key(room))) continue;
+        const cx = this.sx(room);
+        const cy = this.sy(room);
+        if (cx < -half || cy < -half || cx > this.canvas.clientWidth + half || cy > this.canvas.clientHeight + half) continue;
         this.roundRect(cx - half - 3 * S, cy - half - 3 * S, (half + 3 * S) * 2, (half + 3 * S) * 2, 3 * S);
         ctx.stroke();
       }
@@ -624,9 +667,12 @@ export class MapRenderer {
   // rooms and the candidate cell — including on an empty zone, where the room
   // drawing bails out early but the player is still somewhere.
   private paintMarker(S: number, half: number, AL: number): void {
-    if (!this.marker || this.marker.l !== AL) return;
+    if (!this.marker) return;
+    const room = this.findRoom(this.marker.x, this.marker.y, this.marker.l);
+    const markerLevel = room ? displayLevel(room) : this.marker.l;
+    if (markerLevel !== AL) return;
     const ctx = this.ctx;
-    const fake = { x: this.marker.x, y: this.marker.y } as SlimRoom;
+    const fake = room ?? ({ x: this.marker.x, y: this.marker.y } as SlimRoom);
     const cx = screenX(fake) * CELL * S + this.view.ox;
     const cy = screenY(fake) * CELL * S + this.view.oy;
     ctx.strokeStyle = this.marker.color;
@@ -688,7 +734,7 @@ export class MapRenderer {
     const reach = CELL * S * 0.5;
     ctx.save();
     for (const r of this.rooms) {
-      if (r.l !== AL) continue;
+      if (displayLevel(r) !== AL) continue;
       if (r.m.length === 0 && r.mb.length === 0) continue;
       const cx = this.sx(r);
       const cy = this.sy(r);
@@ -778,7 +824,7 @@ export class MapRenderer {
     let best: { room: SlimRoom; dir: string } | null = null;
     let bestD2 = Infinity;
     for (const r of this.rooms) {
-      if (r.l !== this.level) continue;
+      if (displayLevel(r) !== this.level) continue;
       for (const dir of ["S", "E"]) {
         const d = stepDelta(dir);
         if (!d) continue;
@@ -835,7 +881,7 @@ export class MapRenderer {
   private roomAt(px: number, py: number): SlimRoom | null {
     const half = this.hitHalf();
     for (const r of this.rooms) {
-      if (r.l !== this.level) continue;
+      if (displayLevel(r) !== this.level) continue;
       if (
         Math.abs(px - this.sx(r)) <= half &&
         Math.abs(py - this.sy(r)) <= half
@@ -1117,7 +1163,7 @@ export class MapRenderer {
     const top = Math.min(start.y, end.y), bottom = Math.max(start.y, end.y);
     if (!toggle) this.selected.clear();
     for (const room of this.rooms) {
-      if (room.l !== this.level) continue;
+      if (displayLevel(room) !== this.level) continue;
       const x = this.sx(room), y = this.sy(room);
       if (x < left || x > right || y < top || y > bottom) continue;
       const key = this.key(room);

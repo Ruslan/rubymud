@@ -46,7 +46,8 @@ type ServerMsg struct {
 	// room-event behind this position actually describes the cell at the coord.
 	// The map pane uses it to disable «Записать комнату» (the backend re-checks it
 	// authoritatively — this is UX, not the gate).
-	EventDescribesCell bool `json:"event_describes_cell,omitempty"`
+	EventDescribesCell bool               `json:"event_describes_cell,omitempty"`
+	MapRecording       *MapRecordingState `json:"map_recording,omitempty"`
 
 	// Room-format status (Type:"mapper_profile"), broadcast whenever the session
 	// (re)builds its detector.
