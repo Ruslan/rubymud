@@ -23,7 +23,8 @@ The frontend is split into two main parts:
 ## Communication
 
 - **WebSocket**: Used for real-time bidirectional communication.
-    - Incoming: `LogEntry` objects, status updates, event notifications.
+    - Incoming: `LogEntry` objects, status updates, event notifications, and the
+      instance-wide `app_language_changed` event.
     - Outgoing: Commands, input history requests.
 - **REST API**: Used for static data and settings.
     - `/api/variables`, `/api/profiles`, etc.
@@ -81,11 +82,27 @@ raw MUD output, parser direction vocabulary, and server/game values passed as
 interpolation parameters must never be translated.
 
 Keep English wording backward-compatible. Add both en/ru entries with matching
-placeholders, and use the catalog plural API for counts. The controller's
-`setLocale` closes locale-bound overlays before rebuilding static copy, which is
-safe for a future live settings broadcast; today Settings applies the
-instance-wide language on page reload. `i18nExtraction.test.ts` is the guard for
-accidental Cyrillic UI literals and contains the narrow parser allowlist.
+placeholders, and use the catalog plural API for counts. The room Knowledge
+surface has its own typed catalogue in `ui/src/map/inhabitantsI18n.ts`; it updates
+marked authored nodes in place so a language change preserves focus, unsaved
+form values, the current catalogue query, and pending async work. NPC fields and
+other MUD data remain raw interpolation values.
+
+Saving the instance language reloads the Settings page. After the database
+commit, the server also sends one `app_language_changed` event to each active
+session. The game client accepts only a supported locale, applies it to all
+active mapper controllers and degraded-pane notices, retains it for panes mounted
+later, and only then updates `window.APP_LANGUAGE`. Invalid live values are a
+strict no-op. This path does not reconnect the game, reload a VM, or fetch locale
+data at runtime.
+
+`MapPaneController.setLocale` closes locale-bound overlays before rebuilding
+static copy. Cached server-authored recording, walk, and tracker reasons cannot
+be safely replayed in their old language: controls use a localized fallback,
+terminal status is cleared, and cached `position_reason` is omitted until a fresh
+`room_position` event restores it in the new locale. `i18nExtraction.test.ts` and
+the Knowledge extraction test guard authored literals; parser direction tokens
+remain on their narrow allowlists.
 
 ## Development
 
