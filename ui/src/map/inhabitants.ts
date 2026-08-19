@@ -96,6 +96,7 @@ export class RoomKnowledgeDialog {
   private addButton: HTMLButtonElement | null = null;
 	private placeExistingButton: HTMLButtonElement | null = null;
   private form: HTMLFormElement | null = null;
+  private catalog: HTMLElement | null = null;
   private loadRequest: AbortController | null = null;
 	private catalogRequest: AbortController | null = null;
   private writeRequest: AbortController | null = null;
@@ -211,10 +212,7 @@ export class RoomKnowledgeDialog {
     const returnFocus = this.returnFocus;
     this.loadRequest?.abort();
     this.loadRequest = null;
-	this.catalogRequest?.abort();
-	this.catalogRequest = null;
-	if (this.catalogTimer) clearTimeout(this.catalogTimer);
-	this.catalogTimer = null;
+	this.clearCatalog();
     this.writeRequest?.abort();
     this.writeRequest = null;
     this.generation++;
@@ -250,6 +248,16 @@ export class RoomKnowledgeDialog {
     if (!sameRoom(this.room, mapSetID, zone, x, y, l)) return;
     // Preserve unsaved edits when another UI/client changes the same room. The
     // latest server state is fetched as soon as this form is saved or cancelled.
+    if (this.form) {
+      this.pendingRefresh = true;
+      this.setMessage("Room data changed; the list will refresh after the form closes.");
+      return;
+    }
+    void this.load();
+  }
+
+  changedMapSet(mapSetID: number): void {
+    if (!this.room || this.room.mapSetID !== mapSetID) return;
     if (this.form) {
       this.pendingRefresh = true;
       this.setMessage("Room data changed; the list will refresh after the form closes.");
@@ -297,13 +305,16 @@ export class RoomKnowledgeDialog {
 
   private renderList(): void {
     if (!this.list) return;
+    const restoreCatalogFocus = this.catalog !== null;
     this.form?.remove();
     this.form = null;
+    this.clearCatalog();
     this.list.hidden = false;
     if (this.addButton) this.addButton.hidden = false;
 	if (this.placeExistingButton) this.placeExistingButton.hidden = false;
     this.list.replaceChildren();
     for (const row of this.rows) this.list.appendChild(this.card(row));
+    if (restoreCatalogFocus) this.placeExistingButton?.focus();
     if (this.pendingRefresh) {
       this.pendingRefresh = false;
       void this.load();
@@ -313,6 +324,7 @@ export class RoomKnowledgeDialog {
   private card(row: RoomInhabitant): HTMLElement {
     const card = document.createElement("article");
     card.className = "map-inhabitant-card";
+    card.dataset.inhabitantId = String(row.id);
     const header = document.createElement("div");
     header.className = "map-inhabitant-card__header";
     const name = document.createElement("strong");
@@ -368,6 +380,7 @@ export class RoomKnowledgeDialog {
     }
     this.writeRequest?.abort();
     this.writeRequest = null;
+    this.clearCatalog();
     this.form?.remove();
     this.list.hidden = true;
     if (this.addButton) this.addButton.hidden = true;
@@ -442,6 +455,7 @@ export class RoomKnowledgeDialog {
 	  }
 	  this.writeRequest?.abort();
 	  this.writeRequest = null;
+	  this.clearCatalog();
 	  this.form?.remove();
 	  this.form = null;
 	  this.list.hidden = true;
@@ -450,6 +464,7 @@ export class RoomKnowledgeDialog {
 
 	  const panel = document.createElement("section");
 	  panel.className = "map-inhabitant-catalog";
+	  this.catalog = panel;
 	  const heading = document.createElement("h3");
 	  heading.textContent = "Place existing inhabitant";
 	  const search = textInput("catalog_query", "", nameLimit);
@@ -463,9 +478,8 @@ export class RoomKnowledgeDialog {
 	  cancel.type = "button";
 	  cancel.textContent = "Cancel";
 	  cancel.addEventListener("click", () => {
-		this.catalogRequest?.abort();
-		panel.remove();
 		this.renderList();
+		this.placeExistingButton?.focus();
 	  });
 	  panel.append(heading, labelWrap("Search catalog", search), status, results, cancel);
 	  this.list.after(panel);
@@ -496,7 +510,8 @@ export class RoomKnowledgeDialog {
 			const place = document.createElement("button");
 			place.type = "button";
 			place.textContent = "Place";
-			place.addEventListener("click", () => this.openPlacementForm(item, panel));
+			place.setAttribute("aria-label", `Place ${item.name}`);
+			place.addEventListener("click", () => this.openPlacementForm(item, panel, place));
 			card.append(label, place);
 			results.appendChild(card);
 		  }
@@ -519,8 +534,14 @@ export class RoomKnowledgeDialog {
 	  void loadCatalog();
 	}
 
-	private openPlacementForm(item: InhabitantCatalogItem, catalog: HTMLElement): void {
-	  if (!this.room || !catalog.isConnected || !this.list) return;
+	private openPlacementForm(item: InhabitantCatalogItem, catalog: HTMLElement, opener: HTMLButtonElement): void {
+	  if (!this.room || this.catalog !== catalog || !catalog.isConnected || !this.list) return;
+	  if (this.loadRequest) {
+		this.loadRequest.abort();
+		this.loadRequest = null;
+		this.generation++;
+		this.pendingRefresh = true;
+	  }
 	  this.catalogRequest?.abort();
 	  catalog.hidden = true;
 	  const form = document.createElement("form");
@@ -542,7 +563,17 @@ export class RoomKnowledgeDialog {
 	  const back = document.createElement("button");
 	  back.type = "button";
 	  back.textContent = "Back";
-	  back.addEventListener("click", () => { form.remove(); catalog.hidden = false; this.form = null; });
+	  back.addEventListener("click", () => {
+		if (this.pendingRefresh) {
+		  this.renderList();
+		  this.placeExistingButton?.focus();
+		  return;
+		}
+		form.remove();
+		catalog.hidden = false;
+		this.form = null;
+		opener.focus();
+	  });
 	  const save = document.createElement("button");
 	  save.type = "submit";
 	  save.textContent = "Place";
@@ -580,9 +611,9 @@ export class RoomKnowledgeDialog {
 		if (controller.signal.aborted || this.room !== room || this.form !== form) return;
 		this.rows.push(saved);
 		this.rows.sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
-		form.previousElementSibling?.remove();
 		this.setMessage("");
 		this.renderList();
+		this.list?.querySelector<HTMLButtonElement>(`[data-inhabitant-id="${saved.id}"] button`)?.focus();
 	  } catch (error) {
 		if (controller.signal.aborted || this.room !== room || this.form !== form) return;
 		message.textContent = `Failed to place: ${error instanceof Error ? error.message : String(error)}`;
@@ -590,6 +621,15 @@ export class RoomKnowledgeDialog {
 	  } finally {
 		if (this.writeRequest === controller) this.writeRequest = null;
 	  }
+	}
+
+	private clearCatalog(): void {
+	  this.catalogRequest?.abort();
+	  this.catalogRequest = null;
+	  if (this.catalogTimer) clearTimeout(this.catalogTimer);
+	  this.catalogTimer = null;
+	  this.catalog?.remove();
+	  this.catalog = null;
 	}
 
   private formBody(form: HTMLFormElement): Record<string, unknown> {

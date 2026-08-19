@@ -174,12 +174,23 @@ func TestRESTRoomInhabitantsLazyCRUDOnFrozenMapSet(t *testing.T) {
 	if len(sets) != 1 || after.Editable || after.TopologyRevision != before.TopologyRevision || !ok || active != setID {
 		t.Fatalf("knowledge changed topology: before=%+v after=%+v sets=%+v active=%d/%v", before, after, sets, active, ok)
 	}
-	if len(notices) != 6 { // two creates, attach, two cells for shared-entity patch, delete
-		t.Fatalf("notices=%+v, want six room invalidations", notices)
+	if len(notices) != 5 { // two creates, attach, one coalesced shared-entity patch, delete
+		t.Fatalf("notices=%+v, want four room invalidations and one map-set invalidation", notices)
 	}
 	betaNotice := false
+	mapNotice := false
 	for _, notice := range notices {
-		if notice.Type != "room_knowledge_changed" || notice.MapSetID != setID {
+		if notice.MapSetID != setID {
+			t.Fatalf("unexpected notice: %+v", notice)
+		}
+		if notice.Type == "map_knowledge_changed" {
+			if mapNotice || notice.Zone != "" {
+				t.Fatalf("unexpected map-set notice: %+v", notice)
+			}
+			mapNotice = true
+			continue
+		}
+		if notice.Type != "room_knowledge_changed" {
 			t.Fatalf("unexpected notice: %+v", notice)
 		}
 		if notice.Zone == "Beta" && notice.RoomX == 9 && notice.RoomY == 8 && notice.RoomL == 1 {
@@ -189,7 +200,10 @@ func TestRESTRoomInhabitantsLazyCRUDOnFrozenMapSet(t *testing.T) {
 		}
 	}
 	if !betaNotice {
-		t.Fatal("shared entity patch did not invalidate its second room")
+		t.Fatal("second-room placement did not emit its exact invalidation")
+	}
+	if !mapNotice {
+		t.Fatal("shared entity patch did not emit a map-set invalidation")
 	}
 
 	// The zone feed stays slim. Full knowledge is only on the room-scoped endpoint.

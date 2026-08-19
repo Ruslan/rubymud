@@ -28,6 +28,11 @@ type Store struct {
 	// frozen set. Guarded by topoMu for the lazy per-key create.
 	topoMu    sync.Mutex
 	topoLocks map[int64]*sync.Mutex
+
+	// Inhabitant patches use bounded lock striping so concurrent partial writes
+	// to one normalized entity cannot interleave with a full replacement and
+	// reintroduce stale-field overwrites. SQLite still owns durability/atomicity.
+	inhabitantPatchLocks [64]sync.Mutex
 }
 
 type mcpSettingsListener struct {

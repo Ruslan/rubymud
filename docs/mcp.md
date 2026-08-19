@@ -374,14 +374,18 @@ and up to 100 placements from the active map set.
 Arguments: required `operation` and exact `room`; optional `session_id`.
 `create` requires `name` and `kind` and creates an entity plus its first
 placement. `place` requires `inhabitant_id` and reuses it in another room.
-`update` requires `inhabitant_id`, `name`, and `kind`; it replaces the shared
-entity fields and the selected room's placement fields. `remove` removes only
-the selected placement and deletes the catalogue entity only when its last
-placement is gone. Optional text fields may be cleared with an empty string.
+`update` requires `inhabitant_id` and at least one field to patch; omitted
+shared-entity and selected-room placement fields are preserved. `remove`
+removes only the selected placement and deletes the catalogue entity only when
+its last placement is gone. Optional text fields may be cleared with an
+explicit empty string, and an explicit `resident=false` is distinct from
+omission.
 
 These are knowledge-overlay writes: they work on frozen sets in place, do not
-advance `topology_revision`, and broadcast room-scoped refreshes to open browser
-dialogs. The catalogue records expected/known locations, not live presence.
+advance `topology_revision`, and refresh only open browser dialogs. Exact
+placement writes use room-scoped notifications; shared-field updates use one
+map-set notification per active session. The catalogue records expected/known
+locations, not live presence.
 
 ### `mud_path`
 

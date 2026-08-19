@@ -63,7 +63,7 @@ describe("map room inhabitants knowledge dialog", () => {
 			look_target: "лекарь", strategy: "Купить бинты.", placement_count: 1,
 		  }], truncated: false }));
 		}
-        return Promise.resolve(response(initialRows));
+        return Promise.resolve(response(initialRows.map((row) => ({ ...row }))));
       }
       if (url.endsWith("/api/map-sets/5/inhabitants") && init?.method === "POST") {
         const body = JSON.parse(String(init.body));
@@ -180,14 +180,16 @@ describe("map room inhabitants knowledge dialog", () => {
 	  const search = dialog.querySelector<HTMLInputElement>('input[name="catalog_query"]')!;
 	  search.value = "лекарь";
 	  search.dispatchEvent(new Event("input", { bubbles: true }));
-	  await vi.waitFor(() => expect(dialog.textContent).toContain("Странствующий лекарь"));
-	  [...dialog.querySelectorAll<HTMLButtonElement>("button")]
-		.find((button) => button.textContent === "Place")!.click();
+	  await vi.waitFor(() => expect(dialog.querySelector(".map-inhabitant-catalog__item")?.textContent).toContain("Странствующий лекарь"));
+	  const place = [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+		.find((button) => button.textContent === "Place")!;
+	  expect(place.getAttribute("aria-label")).toContain("Странствующий лекарь");
+	  place.click();
 	  const form = dialog.querySelector<HTMLFormElement>(".map-inhabitant-placement-form")!;
 	  (form.elements.namedItem("presence_text") as HTMLTextAreaElement).value = "Лекарь осматривает раненых.";
 	  (form.elements.namedItem("resident") as HTMLInputElement).checked = false;
 	  form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
-	  await vi.waitFor(() => expect(dialog.textContent).toContain("Странствующий лекарь"));
+	  await vi.waitFor(() => expect(dialog.querySelector(".map-inhabitant-card[data-inhabitant-id=\"8\"]")?.textContent).toContain("Странствующий лекарь"));
 	  const placementCall = fetchMock.mock.calls.find(([, init]) => {
 		if (init?.method !== "POST") return false;
 		return JSON.parse(String(init.body)).inhabitant_id === 8;
@@ -196,7 +198,33 @@ describe("map room inhabitants knowledge dialog", () => {
 		inhabitant_id: 8, zone: "Город", x: 3, y: 4, l: 0,
 		presence_text: "Лекарь осматривает раненых.", resident: false,
 	  });
+	  expect(document.activeElement?.closest(".map-inhabitant-card")?.textContent).toContain("Странствующий лекарь");
 	});
+
+  it("restores catalog focus on cancel and placement back", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
+    clickRoom();
+    [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
+      .find((button) => button.textContent === "Knowledge…")!.click();
+    const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
+    await vi.waitFor(() => expect(dialog.textContent).toContain("Кузнец"));
+    const catalogOpener = [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Place existing")!;
+    catalogOpener.click();
+    await vi.waitFor(() => expect(dialog.querySelector(".map-inhabitant-catalog__item")?.textContent).toContain("Странствующий лекарь"));
+    [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Cancel")!.click();
+    expect(document.activeElement).toBe(catalogOpener);
+
+    catalogOpener.click();
+    await vi.waitFor(() => expect(dialog.querySelector(".map-inhabitant-catalog__item")?.textContent).toContain("Странствующий лекарь"));
+    const place = [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Place")!;
+    place.click();
+    [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Back")!.click();
+    expect(document.activeElement).toBe(place);
+  });
 
   it("refreshes only an open matching room on room_knowledge_changed", async () => {
     await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
@@ -217,6 +245,90 @@ describe("map room inhabitants knowledge dialog", () => {
     pane.onRoomKnowledgeChanged(5, "Город", 3, 4, 0);
     await vi.waitFor(() => expect(knowledgeCalls()).toBe(beforeKnowledge + 1));
     expect(roomCalls()).toBe(beforeRooms);
+  });
+
+  it("refreshes an open room on a map-set knowledge invalidation", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
+    clickRoom();
+    [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
+      .find((button) => button.textContent === "Knowledge…")!.click();
+    await vi.waitFor(() => expect(pane.root.querySelector(".map-knowledge-dialog")?.textContent).toContain("Кузнец"));
+    const knowledgeCalls = () => fetchMock.mock.calls.filter(([url]) => {
+      const decoded = decodeURIComponent(String(url));
+      return decoded.includes("/inhabitants?") && !decoded.includes("/catalog?");
+    }).length;
+    const before = knowledgeCalls();
+
+    pane.onMapKnowledgeChanged(4);
+    await Promise.resolve();
+    expect(knowledgeCalls()).toBe(before);
+    pane.onMapKnowledgeChanged(5);
+    await vi.waitFor(() => expect(knowledgeCalls()).toBe(before + 1));
+  });
+
+  it("closes the catalog panel when room knowledge refreshes", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
+    clickRoom();
+    [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
+      .find((button) => button.textContent === "Knowledge…")!.click();
+    const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
+    await vi.waitFor(() => expect(dialog.textContent).toContain("Кузнец"));
+    [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Place existing")!.click();
+    await vi.waitFor(() => expect(dialog.querySelectorAll(".map-inhabitant-catalog")).toHaveLength(1));
+    dialog.querySelector<HTMLInputElement>('input[name="catalog_query"]')!.focus();
+
+    const listCalls = () => fetchMock.mock.calls.filter(([url]) => {
+      const decoded = decodeURIComponent(String(url));
+      return decoded.includes("/inhabitants?") && !decoded.includes("/catalog?");
+    }).length;
+    const before = listCalls();
+    pane.onRoomKnowledgeChanged(5, "Город", 3, 4, 0);
+    await vi.waitFor(() => expect(listCalls()).toBe(before + 1));
+    await vi.waitFor(() => expect(dialog.querySelectorAll(".map-inhabitant-catalog")).toHaveLength(0));
+    expect(dialog.querySelector<HTMLElement>(".map-knowledge-dialog__list")!.hidden).toBe(false);
+    expect(document.activeElement).toBe([...dialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Place existing"));
+  });
+
+  it("preserves a placement form when an invalidation load resolves late and refreshes on Back", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
+    clickRoom();
+    [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
+      .find((button) => button.textContent === "Knowledge…")!.click();
+    const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
+    await vi.waitFor(() => expect(dialog.textContent).toContain("Кузнец"));
+    const catalogOpener = [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Place existing")!;
+    catalogOpener.click();
+    await vi.waitFor(() => expect(dialog.querySelector(".map-inhabitant-catalog__item")?.textContent).toContain("Странствующий лекарь"));
+
+    let resolveRefresh!: (value: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveRefresh = resolve; }));
+    const listCalls = () => fetchMock.mock.calls.filter(([url]) => {
+      const decoded = decodeURIComponent(String(url));
+      return decoded.includes("/inhabitants?") && !decoded.includes("/catalog?");
+    }).length;
+    const before = listCalls();
+    pane.onRoomKnowledgeChanged(5, "Город", 3, 4, 0);
+    await vi.waitFor(() => expect(listCalls()).toBe(before + 1));
+
+    const place = dialog.querySelector<HTMLButtonElement>('.map-inhabitant-catalog__item button')!;
+    place.click();
+    const form = dialog.querySelector<HTMLFormElement>(".map-inhabitant-placement-form")!;
+    (form.elements.namedItem("presence_text") as HTMLTextAreaElement).value = "Несохранённое размещение";
+    resolveRefresh(response(initialRows.map((row) => ({ ...row }))));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(dialog.querySelector(".map-inhabitant-placement-form")).toBe(form);
+    expect((form.elements.namedItem("presence_text") as HTMLTextAreaElement).value).toBe("Несохранённое размещение");
+
+    [...form.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Back")!.click();
+    await vi.waitFor(() => expect(listCalls()).toBe(before + 2));
+    expect(dialog.querySelector(".map-inhabitant-placement-form")).toBeNull();
+    expect(dialog.querySelector(".map-inhabitant-catalog")).toBeNull();
+    expect(document.activeElement).toBe(catalogOpener);
   });
 
   it("applies input limits and blocks a missing name before REST validation", async () => {

@@ -259,16 +259,7 @@ func (s *Server) updateRoomInhabitant(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "room inhabitant not found", http.StatusNotFound)
 		return
 	}
-	placements, err := s.store.ListInhabitantPlacements(mapSetID, inhabitantID)
-	if err != nil {
-		http.Error(w, "inhabitant storage failed", http.StatusInternalServerError)
-		return
-	}
-	cells := make([]storage.EdgeCell, len(placements))
-	for i, placement := range placements {
-		cells[i] = storage.EdgeCell{Zone: placement.Zone, X: placement.X, Y: placement.Y, L: placement.L}
-	}
-	s.manager.BroadcastRoomsKnowledgeChanged(mapSetID, cells)
+	s.manager.BroadcastMapKnowledgeChanged(mapSetID)
 	writeJSON(w, row)
 }
 

@@ -95,9 +95,35 @@ func (m *Manager) BroadcastRoomKnowledgeChanged(mapSetID int64, zone string, x, 
 	m.BroadcastRoomsKnowledgeChanged(mapSetID, []storage.EdgeCell{{Zone: zone, X: x, Y: y, L: l}})
 }
 
-// BroadcastRoomsKnowledgeChanged batches an entity-wide invalidation. Active
-// map-set lookup happens once per session, not once per placement; duplicate
-// coordinates are collapsed before any WebSocket fanout.
+// BroadcastMapKnowledgeChanged coalesces an entity-wide shared-field update to
+// one message per active session. Each browser can then refresh its one open
+// room dialog, avoiding an unbounded placement read and coordinate fanout.
+func (m *Manager) BroadcastMapKnowledgeChanged(mapSetID int64) {
+	m.mu.Lock()
+	sessions := make([]struct {
+		id   int64
+		sess *Session
+	}, 0, len(m.sessions))
+	for id, sess := range m.sessions {
+		if !sess.IsClosed() {
+			sessions = append(sessions, struct {
+				id   int64
+				sess *Session
+			}{id: id, sess: sess})
+		}
+	}
+	m.mu.Unlock()
+	for _, item := range sessions {
+		active, ok, err := m.store.GetActiveMapSetID(item.id)
+		if err == nil && ok && active == mapSetID {
+			item.sess.BroadcastServerMsg(ServerMsg{Type: "map_knowledge_changed", MapSetID: mapSetID})
+		}
+	}
+}
+
+// BroadcastRoomsKnowledgeChanged batches caller-supplied exact-room
+// invalidations. Active map-set lookup happens once per session and duplicate
+// coordinates are collapsed before WebSocket fanout.
 func (m *Manager) BroadcastRoomsKnowledgeChanged(mapSetID int64, cells []storage.EdgeCell) {
 	unique := make([]storage.EdgeCell, 0, len(cells))
 	seen := make(map[string]bool, len(cells))

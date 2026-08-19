@@ -1,12 +1,16 @@
 package storage
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"unicode"
 	"unicode/utf8"
 
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 	"gorm.io/gorm"
 )
 
@@ -78,6 +82,19 @@ type RoomInhabitantFields struct {
 	Resident     bool   `json:"resident"`
 }
 
+// RoomInhabitantPatch distinguishes omitted fields from explicit empty strings
+// and false. PatchRoomInhabitant applies only non-nil fields atomically.
+type RoomInhabitantPatch struct {
+	Name         *string
+	Kind         *string
+	LookTarget   *string
+	LookText     *string
+	Note         *string
+	Strategy     *string
+	PresenceText *string
+	Resident     *bool
+}
+
 // RoomInhabitantView is the lazy room-read wire model: entity fields and the
 // selected room's placement fields are flattened for a compact UI payload.
 type RoomInhabitantView struct {
@@ -113,6 +130,15 @@ type MapInhabitantSummary struct {
 	PlacementCount int    `json:"placement_count"`
 }
 
+// RoomInhabitantSummary is the compact exact-room catalogue projection used by
+// bounded list callers. It includes the selected placement fields without the
+// entity's potentially large look_text or note bodies.
+type RoomInhabitantSummary struct {
+	MapInhabitantSummary
+	PresenceText string `json:"presence_text"`
+	Resident     bool   `json:"resident"`
+}
+
 type InhabitantListOptions struct {
 	Query       string
 	Zone        string
@@ -121,34 +147,60 @@ type InhabitantListOptions struct {
 	Limit       int
 }
 
-func normalizeInhabitantFields(fields InhabitantFields) (InhabitantFields, error) {
-	fields.Name = strings.TrimSpace(fields.Name)
-	fields.Kind = strings.TrimSpace(fields.Kind)
-	fields.LookTarget = strings.TrimSpace(fields.LookTarget)
-	if fields.Name == "" {
-		return fields, fmt.Errorf("%w: name is required", ErrInvalidInhabitant)
+func normalizeInhabitantName(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return value, fmt.Errorf("%w: name is required", ErrInvalidInhabitant)
 	}
-	if utf8.RuneCountInString(fields.Name) > inhabitantNameLimit {
-		return fields, fmt.Errorf("%w: name exceeds %d characters", ErrInvalidInhabitant, inhabitantNameLimit)
+	if utf8.RuneCountInString(value) > inhabitantNameLimit {
+		return value, fmt.Errorf("%w: name exceeds %d characters", ErrInvalidInhabitant, inhabitantNameLimit)
 	}
-	for _, r := range fields.Name {
+	for _, r := range value {
 		if unicode.IsControl(r) {
-			return fields, fmt.Errorf("%w: name contains a control character", ErrInvalidInhabitant)
+			return value, fmt.Errorf("%w: name contains a control character", ErrInvalidInhabitant)
 		}
 	}
-	switch fields.Kind {
+	return value, nil
+}
+
+func normalizeInhabitantKind(value string) (string, error) {
+	value = strings.TrimSpace(value)
+	switch value {
 	case InhabitantKindNPC, InhabitantKindMonster, InhabitantKindOther:
 	default:
-		return fields, fmt.Errorf("%w: kind must be npc, monster, or other", ErrInvalidInhabitant)
+		return value, fmt.Errorf("%w: kind must be npc, monster, or other", ErrInvalidInhabitant)
 	}
-	for name, value := range map[string]string{
-		"look_target": fields.LookTarget,
-		"look_text":   fields.LookText,
-		"note":        fields.Note,
-		"strategy":    fields.Strategy,
+	return value, nil
+}
+
+func normalizeInhabitantText(field, value string, trim bool) (string, error) {
+	if trim {
+		value = strings.TrimSpace(value)
+	}
+	if utf8.RuneCountInString(value) > InhabitantTextLimit {
+		return value, fmt.Errorf("%w: %s exceeds %d characters", ErrInvalidInhabitant, field, InhabitantTextLimit)
+	}
+	return value, nil
+}
+
+func normalizeInhabitantFields(fields InhabitantFields) (InhabitantFields, error) {
+	var err error
+	if fields.Name, err = normalizeInhabitantName(fields.Name); err != nil {
+		return fields, err
+	}
+	if fields.Kind, err = normalizeInhabitantKind(fields.Kind); err != nil {
+		return fields, err
+	}
+	if fields.LookTarget, err = normalizeInhabitantText("look_target", fields.LookTarget, true); err != nil {
+		return fields, err
+	}
+	for field, value := range map[string]*string{
+		"look_text": &fields.LookText,
+		"note":      &fields.Note,
+		"strategy":  &fields.Strategy,
 	} {
-		if utf8.RuneCountInString(value) > InhabitantTextLimit {
-			return fields, fmt.Errorf("%w: %s exceeds %d characters", ErrInvalidInhabitant, name, InhabitantTextLimit)
+		if *value, err = normalizeInhabitantText(field, *value, false); err != nil {
+			return fields, err
 		}
 	}
 	return fields, nil
@@ -245,10 +297,17 @@ func (s *Store) ListMapInhabitants(mapSetID int64, options InhabitantListOptions
 			COUNT(ri.id) AS placement_count`).
 		Joins("LEFT JOIN room_inhabitants AS ri ON ri.map_set_id=mi.map_set_id AND ri.inhabitant_id=mi.id").
 		Where("mi.map_set_id=?", mapSetID)
-	if needle := strings.TrimSpace(options.Query); needle != "" {
+	searchNeedle := strings.TrimSpace(options.Query)
+	unicodeNeedle := ""
+	if needle := searchNeedle; needle != "" && isASCII(needle) {
 		needle = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(strings.ToLower(needle))
 		like := "%" + needle + "%"
 		query = query.Where(`(LOWER(mi.name) LIKE ? ESCAPE '\' OR LOWER(mi.look_target) LIKE ? ESCAPE '\')`, like, like)
+	} else if needle != "" {
+		// SQLite's built-in LOWER/NOCASE only handles ASCII. Keep the common
+		// ASCII search in SQL, but stream non-ASCII candidates through Go's
+		// Unicode case folder so Cyrillic and other scripts work correctly.
+		unicodeNeedle = foldInhabitantSearch(needle)
 	}
 	if options.Cell != nil {
 		cell, err := normalizeInhabitantCell(*options.Cell)
@@ -275,9 +334,36 @@ func (s *Store) ListMapInhabitants(mapSetID int64, options InhabitantListOptions
 			WHERE e.map_set_id=mi.map_set_id AND e.inhabitant_id=mi.id
 			AND e.zone=? AND e.x=? AND e.y=? AND e.l=?)`, cell.Zone, cell.X, cell.Y, cell.L)
 	}
+	ordered := query.Group("mi.id, mi.map_set_id, mi.name, mi.kind, mi.look_target, mi.strategy").
+		Order("mi.name COLLATE NOCASE ASC, mi.id ASC")
 	var rows []MapInhabitantSummary
-	err := query.Group("mi.id, mi.map_set_id, mi.name, mi.kind, mi.look_target, mi.strategy").
-		Order("mi.name COLLATE NOCASE ASC, mi.id ASC").Limit(limit + 1).Scan(&rows).Error
+	var err error
+	if unicodeNeedle == "" {
+		err = ordered.Limit(limit + 1).Scan(&rows).Error
+	} else {
+		var sqlRows *sql.Rows
+		sqlRows, err = ordered.Rows()
+		if err == nil {
+			defer sqlRows.Close()
+			for sqlRows.Next() {
+				var row MapInhabitantSummary
+				if err = s.db.ScanRows(sqlRows, &row); err != nil {
+					break
+				}
+				if !strings.Contains(foldInhabitantSearch(row.Name), unicodeNeedle) &&
+					!strings.Contains(foldInhabitantSearch(row.LookTarget), unicodeNeedle) {
+					continue
+				}
+				rows = append(rows, row)
+				if len(rows) > limit {
+					break
+				}
+			}
+			if err == nil {
+				err = sqlRows.Err()
+			}
+		}
+	}
 	if err != nil {
 		return nil, false, err
 	}
@@ -289,6 +375,19 @@ func (s *Store) ListMapInhabitants(mapSetID int64, options InhabitantListOptions
 		rows = []MapInhabitantSummary{}
 	}
 	return rows, truncated, nil
+}
+
+func isASCII(value string) bool {
+	for i := 0; i < len(value); i++ {
+		if value[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
+func foldInhabitantSearch(value string) string {
+	return norm.NFC.String(cases.Fold().String(norm.NFC.String(value)))
 }
 
 func updateMapInhabitantTx(tx *gorm.DB, mapSetID, inhabitantID int64, fields InhabitantFields) (MapInhabitant, bool, error) {
@@ -318,6 +417,9 @@ func updateMapInhabitantTx(tx *gorm.DB, mapSetID, inhabitantID int64, fields Inh
 }
 
 func (s *Store) UpdateMapInhabitant(mapSetID, inhabitantID int64, fields InhabitantFields) (MapInhabitant, bool, error) {
+	lock := s.inhabitantPatchLock(mapSetID, inhabitantID)
+	lock.Lock()
+	defer lock.Unlock()
 	var out MapInhabitant
 	found := false
 	err := s.db.Transaction(func(tx *gorm.DB) error {
@@ -513,9 +615,81 @@ func (s *Store) ListRoomInhabitantsBounded(mapSetID int64, cell EdgeCell, limit 
 	return rows, truncated, nil
 }
 
-// ListInhabitantPlacements returns every room binding for one entity. The REST
-// update path uses it to invalidate all open room views after changing shared
-// entity fields such as name/strategy.
+func (s *Store) ListRoomInhabitantSummariesBounded(mapSetID int64, cell EdgeCell, search string, limit int) ([]RoomInhabitantSummary, bool, error) {
+	cell, err := normalizeInhabitantCell(cell)
+	if err != nil {
+		return nil, false, err
+	}
+	if utf8.RuneCountInString(search) > InhabitantQueryLimit {
+		return nil, false, fmt.Errorf("%w: query exceeds %d characters", ErrInvalidInhabitant, InhabitantQueryLimit)
+	}
+	if limit <= 0 {
+		limit = InhabitantListDefaultLimit
+	}
+	if limit > InhabitantListMaxLimit {
+		limit = InhabitantListMaxLimit
+	}
+	query := s.db.Table("room_inhabitants AS selected").
+		Select(`mi.id, mi.map_set_id, mi.name, mi.kind, mi.look_target, mi.strategy,
+			(SELECT COUNT(*) FROM room_inhabitants placements
+			 WHERE placements.map_set_id=mi.map_set_id AND placements.inhabitant_id=mi.id) AS placement_count,
+			selected.presence_text, selected.resident`).
+		Joins("JOIN map_inhabitants AS mi ON mi.id=selected.inhabitant_id AND mi.map_set_id=selected.map_set_id").
+		Where("selected.map_set_id=? AND selected.zone=? AND selected.x=? AND selected.y=? AND selected.l=?",
+			mapSetID, cell.Zone, cell.X, cell.Y, cell.L)
+	searchNeedle := strings.TrimSpace(search)
+	unicodeNeedle := ""
+	if searchNeedle != "" && isASCII(searchNeedle) {
+		needle := strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(strings.ToLower(searchNeedle))
+		like := "%" + needle + "%"
+		query = query.Where(`(LOWER(mi.name) LIKE ? ESCAPE '\' OR LOWER(mi.look_target) LIKE ? ESCAPE '\')`, like, like)
+	} else if searchNeedle != "" {
+		unicodeNeedle = foldInhabitantSearch(searchNeedle)
+	}
+	ordered := query.Order("mi.name COLLATE NOCASE ASC, mi.id ASC")
+	var rows []RoomInhabitantSummary
+	if unicodeNeedle == "" {
+		err = ordered.Limit(limit + 1).Scan(&rows).Error
+	} else {
+		var sqlRows *sql.Rows
+		sqlRows, err = ordered.Rows()
+		if err == nil {
+			defer sqlRows.Close()
+			for sqlRows.Next() {
+				var row RoomInhabitantSummary
+				if err = s.db.ScanRows(sqlRows, &row); err != nil {
+					break
+				}
+				if !strings.Contains(foldInhabitantSearch(row.Name), unicodeNeedle) &&
+					!strings.Contains(foldInhabitantSearch(row.LookTarget), unicodeNeedle) {
+					continue
+				}
+				rows = append(rows, row)
+				if len(rows) > limit {
+					break
+				}
+			}
+			if err == nil {
+				err = sqlRows.Err()
+			}
+		}
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	truncated := len(rows) > limit
+	if truncated {
+		rows = rows[:limit]
+	}
+	if rows == nil {
+		rows = []RoomInhabitantSummary{}
+	}
+	return rows, truncated, nil
+}
+
+// ListInhabitantPlacements returns every room binding for controlled internal
+// uses. User-facing reads use ListInhabitantPlacementsBounded; shared-field
+// invalidation is map-set scoped and must not enumerate this result.
 func (s *Store) ListInhabitantPlacements(mapSetID, inhabitantID int64) ([]RoomInhabitant, error) {
 	var rows []RoomInhabitant
 	err := s.db.Where("map_set_id=? AND inhabitant_id=?", mapSetID, inhabitantID).
@@ -562,6 +736,9 @@ func (s *Store) UpdateRoomInhabitant(mapSetID int64, cell EdgeCell, inhabitantID
 	if err != nil {
 		return RoomInhabitantView{}, false, err
 	}
+	lock := s.inhabitantPatchLock(mapSetID, inhabitantID)
+	lock.Lock()
+	defer lock.Unlock()
 	var out RoomInhabitantView
 	found := false
 	err = s.db.Transaction(func(tx *gorm.DB) error {
@@ -585,6 +762,92 @@ func (s *Store) UpdateRoomInhabitant(mapSetID int64, cell EdgeCell, inhabitantID
 		if err := tx.Save(&placement).Error; err != nil {
 			return err
 		}
+		out, found, err = roomInhabitantViewTx(tx, mapSetID, cell, inhabitantID)
+		return err
+	})
+	return out, found, err
+}
+
+func (s *Store) inhabitantPatchLock(mapSetID, inhabitantID int64) *sync.Mutex {
+	key := uint64(mapSetID)*11400714819323198485 ^ uint64(inhabitantID)
+	return &s.inhabitantPatchLocks[key%uint64(len(s.inhabitantPatchLocks))]
+}
+
+// PatchRoomInhabitant updates only fields present in patch. The first UPDATE
+// acquires SQLite's write lock and verifies the selected placement before any
+// shared entity field changes, while the bounded stripe serializes same-entity
+// full and partial writes within this Store.
+func (s *Store) PatchRoomInhabitant(mapSetID int64, cell EdgeCell, inhabitantID int64, patch RoomInhabitantPatch) (RoomInhabitantView, bool, error) {
+	cell, err := normalizeInhabitantCell(cell)
+	if err != nil {
+		return RoomInhabitantView{}, false, err
+	}
+	entityUpdates := map[string]any{"updated_at": nowSQLiteTimePtr()}
+	placementUpdates := map[string]any{"updated_at": nowSQLiteTimePtr()}
+	if patch.Name != nil {
+		value, err := normalizeInhabitantName(*patch.Name)
+		if err != nil {
+			return RoomInhabitantView{}, false, err
+		}
+		entityUpdates["name"] = value
+	}
+	if patch.Kind != nil {
+		value, err := normalizeInhabitantKind(*patch.Kind)
+		if err != nil {
+			return RoomInhabitantView{}, false, err
+		}
+		entityUpdates["kind"] = value
+	}
+	for field, input := range map[string]*string{
+		"look_target": patch.LookTarget, "look_text": patch.LookText,
+		"note": patch.Note, "strategy": patch.Strategy,
+	} {
+		if input == nil {
+			continue
+		}
+		value, err := normalizeInhabitantText(field, *input, field == "look_target")
+		if err != nil {
+			return RoomInhabitantView{}, false, err
+		}
+		entityUpdates[field] = value
+	}
+	if patch.PresenceText != nil {
+		value, err := normalizePresenceText(*patch.PresenceText)
+		if err != nil {
+			return RoomInhabitantView{}, false, err
+		}
+		placementUpdates["presence_text"] = value
+	}
+	if patch.Resident != nil {
+		placementUpdates["resident"] = *patch.Resident
+	}
+
+	lock := s.inhabitantPatchLock(mapSetID, inhabitantID)
+	lock.Lock()
+	defer lock.Unlock()
+	var out RoomInhabitantView
+	found := false
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&RoomInhabitant{}).
+			Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=? AND inhabitant_id=?",
+				mapSetID, cell.Zone, cell.X, cell.Y, cell.L, inhabitantID).
+			Updates(placementUpdates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return nil
+		}
+		result = tx.Model(&MapInhabitant{}).
+			Where("map_set_id=? AND id=?", mapSetID, inhabitantID).
+			Updates(entityUpdates)
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return ErrInhabitantNotFound
+		}
+		var err error
 		out, found, err = roomInhabitantViewTx(tx, mapSetID, cell, inhabitantID)
 		return err
 	})

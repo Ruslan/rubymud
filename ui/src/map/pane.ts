@@ -1317,6 +1317,10 @@ export class MapPaneController {
     this.knowledgeDialog.changed(mapSetID, zone, x, y, l);
   }
 
+  onMapKnowledgeChanged(mapSetID: number): void {
+    this.knowledgeDialog.changedMapSet(mapSetID);
+  }
+
   // Handle server-owned map-walk progress. This is intentionally independent of
   // room_position: a page may restore while a hop is in flight, before another
   // room event arrives, and must still offer Stop.

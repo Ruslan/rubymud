@@ -59,11 +59,17 @@ Knowledge writes are overlays: they do not reload the zone or tracker. The
 server broadcasts `room_knowledge_changed`, and only an open dialog for the
 affected room refetches. Abort/generation guards preserve unsaved forms across
 late GET responses and discard responses after closing or switching rooms.
+Shared entity updates use one `map_knowledge_changed` event per active session;
+each mapper pane refetches only its open dialog in that map set, without an
+unbounded per-placement WebSocket fanout.
 Entity fields are shared across placements, while `presence_text` and
 `resident` belong to one room. `Place existing` searches a bounded catalogue
 endpoint and attaches the selected entity by id, so shared fields are not
 duplicated; entities already attached to the room are excluded. Live NPC
 detection remains intentionally out of scope.
+Catalog-to-placement transitions abort any in-flight room refresh and keep its
+generation stale, preserving the unsaved placement form. Back completes a
+pending refresh; automatic catalog closure restores focus to `Place existing`.
 
 ## Development
 

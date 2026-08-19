@@ -58,8 +58,12 @@ a handler-only compatibility alias for `mud_look_map`, not a `tools/list` item.
   do not fork and may intentionally be dangling.
 - Inhabitant catalogue reads are bounded. Only the explicit `mud_inhabitant`
   detail tool returns `look_text`; list and `mud_look_map` stay compact.
-  Inhabitant writes are overlays and broadcast every affected placement when a
-  shared entity field changes.
+  Inhabitant writes are overlays. A shared entity-field update emits one
+  map-set knowledge invalidation per active session; clients refresh only their
+  open room dialog, so notification work is independent of placement count.
+  MCP updates are storage-level atomic patches: omitted fields are absent SQL
+  assignments, while explicit empty strings and `false` remain real updates.
+  Placement-only patches keep the exact-room notification.
 
 ## Change And Debug Workflow
 

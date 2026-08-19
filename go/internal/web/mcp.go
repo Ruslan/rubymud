@@ -532,7 +532,7 @@ func (s *Server) mcpListTools() any {
 			},
 			map[string]any{
 				"name":        "mud_inhabitant_write",
-				"description": "Write the inhabitants overlay of the session's active map set without topology fork/revision changes. operation=create creates an entity and placement; place reuses inhabitant_id in another room; update replaces shared entity fields and the selected placement fields; remove removes only that placement and deletes the entity only when no placements remain. room is always required. update requires name and kind; empty optional text clears it.",
+				"description": "Write the inhabitants overlay of the session's active map set without topology fork/revision changes. operation=create creates an entity and placement; place reuses inhabitant_id in another room; update patches only the provided shared entity and selected placement fields; remove removes only that placement and deletes the entity only when no placements remain. room is always required. Explicit empty optional text clears it; explicit resident=false is preserved.",
 				"inputSchema": map[string]any{
 					"type": "object", "additionalProperties": false,
 					"properties": map[string]any{
@@ -548,6 +548,30 @@ func (s *Server) mcpListTools() any {
 						"presence_text": map[string]any{"type": "string", "maxLength": 2048}, "resident": map[string]any{"type": "boolean"},
 					},
 					"required": []string{"operation", "room"},
+					"oneOf": []any{
+						map[string]any{
+							"properties": map[string]any{"operation": map[string]any{"const": "create"}},
+							"required":   []string{"name", "kind"},
+						},
+						map[string]any{
+							"properties": map[string]any{"operation": map[string]any{"const": "place"}},
+							"required":   []string{"inhabitant_id"},
+						},
+						map[string]any{
+							"properties": map[string]any{"operation": map[string]any{"const": "update"}},
+							"required":   []string{"inhabitant_id"},
+							"anyOf": []any{
+								map[string]any{"required": []string{"name"}}, map[string]any{"required": []string{"kind"}},
+								map[string]any{"required": []string{"look_target"}}, map[string]any{"required": []string{"look_text"}},
+								map[string]any{"required": []string{"note"}}, map[string]any{"required": []string{"strategy"}},
+								map[string]any{"required": []string{"presence_text"}}, map[string]any{"required": []string{"resident"}},
+							},
+						},
+						map[string]any{
+							"properties": map[string]any{"operation": map[string]any{"const": "remove"}},
+							"required":   []string{"inhabitant_id"},
+						},
+					},
 				},
 			},
 			map[string]any{

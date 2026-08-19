@@ -3,8 +3,12 @@ package web
 import (
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"gorm.io/gorm"
+
+	"rubymud/go/internal/session"
 	"rubymud/go/internal/storage"
 )
 
@@ -67,6 +71,43 @@ func TestMCPInhabitantsListReadWriteAndLookSummary(t *testing.T) {
 		t.Fatalf("mud_look_map leaked detailed look text:\n%s", look)
 	}
 
+	var notices []session.ServerMsg
+	sess.AttachClient("inhabitant update observer", func(msg session.ServerMsg) error {
+		notices = append(notices, msg)
+		return nil
+	})
+	updated := callTool(t, s, "mud_inhabitant_write", fmt.Sprintf(`{
+		"session_id":%d,"operation":"update","inhabitant_id":%d,
+		"room":{"zone":"Z","x":0,"y":0,"l":0},"strategy":"","resident":false}`, sid, entity.ID))
+	if updated["isError"] == true {
+		t.Fatalf("partial update = %#v", updated)
+	}
+	view, found, err := s.store.GetRoomInhabitant(setID, storage.EdgeCell{Zone: "Z", X: 0, Y: 0, L: 0}, entity.ID)
+	if err != nil || !found {
+		t.Fatalf("updated view: found=%v err=%v", found, err)
+	}
+	if view.Name != "Keeper" || view.Kind != storage.InhabitantKindNPC || view.LookText != "A silver-eyed guardian." || view.PresenceText != "The keeper watches the gate." {
+		t.Fatalf("omitted update fields were not preserved: %+v", view)
+	}
+	if view.Strategy != "" || view.Resident {
+		t.Fatalf("explicit empty/false update fields were not applied: %+v", view)
+	}
+	if len(notices) != 1 || notices[0].Type != "map_knowledge_changed" || notices[0].MapSetID != setID {
+		t.Fatalf("shared update notices = %+v, want one map-set invalidation", notices)
+	}
+
+	notices = nil
+	placementOnly := callTool(t, s, "mud_inhabitant_write", fmt.Sprintf(`{
+		"session_id":%d,"operation":"update","inhabitant_id":%d,
+		"room":{"zone":"Z","x":0,"y":0,"l":0},"presence_text":"Standing watch.","resident":true}`, sid, entity.ID))
+	if placementOnly["isError"] == true {
+		t.Fatalf("placement-only update = %#v", placementOnly)
+	}
+	if len(notices) != 1 || notices[0].Type != "room_knowledge_changed" || notices[0].MapSetID != setID ||
+		notices[0].Zone != "Z" || notices[0].RoomX != 0 || notices[0].RoomY != 0 || notices[0].RoomL != 0 {
+		t.Fatalf("placement-only notices = %+v, want one exact-room invalidation", notices)
+	}
+
 	removed := callTool(t, s, "mud_inhabitant_write", fmt.Sprintf(`{
 		"session_id":%d,"operation":"remove","inhabitant_id":%d,
 		"room":{"zone":"Z","x":1,"y":0,"l":0}}`, sid, entity.ID))
@@ -76,6 +117,85 @@ func TestMCPInhabitantsListReadWriteAndLookSummary(t *testing.T) {
 	placements, err := s.store.ListInhabitantPlacements(setID, entity.ID)
 	if err != nil || len(placements) != 1 {
 		t.Fatalf("placements after remove = %+v err=%v", placements, err)
+	}
+}
+
+func TestMCPInhabitantsExactRoomUsesBoundedSingleRead(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	setID := seedTrackerSet(t, s, sess.SessionID())
+	cell := storage.EdgeCell{Zone: "Z", X: 0, Y: 0, L: 0}
+	for _, name := range []string{"Keeper", "Rat"} {
+		if _, err := s.store.CreateRoomInhabitant(setID, cell, storage.RoomInhabitantFields{
+			InhabitantFields: storage.InhabitantFields{Name: name, Kind: storage.InhabitantKindNPC},
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var queryCount atomic.Int64
+	const callbackName = "test:count_mcp_exact_inhabitant_queries"
+	if err := s.store.DB().Callback().Query().Before("gorm:query").Register(callbackName, func(*gorm.DB) {
+		queryCount.Add(1)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.store.DB().Callback().Query().Remove(callbackName) })
+
+	result := callTool(t, s, "mud_inhabitants", fmt.Sprintf(`{
+		"session_id":%d,"room":{"zone":"Z","x":0,"y":0,"l":0},"query":"rat","limit":20}`, sess.SessionID()))
+	if result["isError"] == true {
+		t.Fatalf("exact-room list = %#v", result)
+	}
+	text := toolText(t, result)
+	if !strings.Contains(text, "Rat") || strings.Contains(text, "Keeper") {
+		t.Fatalf("exact-room query was not applied:\n%s", text)
+	}
+	if got := queryCount.Load(); got > 2 {
+		t.Fatalf("exact-room list executed %d reads, want active-set lookup plus one bounded room query", got)
+	}
+}
+
+func TestMCPInhabitantWriteSchemaHasOperationSpecificRequirements(t *testing.T) {
+	tools := (&Server{}).mcpListTools().(map[string]any)["tools"].([]any)
+	var schema map[string]any
+	for _, raw := range tools {
+		tool := raw.(map[string]any)
+		if tool["name"] == "mud_inhabitant_write" {
+			schema = tool["inputSchema"].(map[string]any)
+			break
+		}
+	}
+	if schema == nil {
+		t.Fatal("mud_inhabitant_write schema missing")
+	}
+	branches, ok := schema["oneOf"].([]any)
+	if !ok || len(branches) != 4 {
+		t.Fatalf("operation-specific oneOf = %#v", schema["oneOf"])
+	}
+	wantRequired := map[string][]string{
+		"create": {"name", "kind"},
+		"place":  {"inhabitant_id"},
+		"update": {"inhabitant_id"},
+		"remove": {"inhabitant_id"},
+	}
+	seen := map[string]bool{}
+	for _, raw := range branches {
+		branch := raw.(map[string]any)
+		operation := branch["properties"].(map[string]any)["operation"].(map[string]any)["const"].(string)
+		required := branch["required"].([]string)
+		for _, want := range wantRequired[operation] {
+			found := false
+			for _, got := range required {
+				found = found || got == want
+			}
+			if !found {
+				t.Errorf("%s required=%v, missing %s", operation, required, want)
+			}
+		}
+		seen[operation] = true
+	}
+	if len(seen) != 4 {
+		t.Fatalf("schema operations = %v", seen)
 	}
 }
 

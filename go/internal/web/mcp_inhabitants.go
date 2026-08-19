@@ -13,14 +13,25 @@ type mcpInhabitantWriteArgs struct {
 	Operation    string            `json:"operation"`
 	InhabitantID int64             `json:"inhabitant_id"`
 	Room         *mcpRequiredCoord `json:"room"`
-	Name         string            `json:"name"`
-	Kind         string            `json:"kind"`
-	LookTarget   string            `json:"look_target"`
-	LookText     string            `json:"look_text"`
-	Note         string            `json:"note"`
-	Strategy     string            `json:"strategy"`
-	PresenceText string            `json:"presence_text"`
-	Resident     bool              `json:"resident"`
+	Name         *string           `json:"name"`
+	Kind         *string           `json:"kind"`
+	LookTarget   *string           `json:"look_target"`
+	LookText     *string           `json:"look_text"`
+	Note         *string           `json:"note"`
+	Strategy     *string           `json:"strategy"`
+	PresenceText *string           `json:"presence_text"`
+	Resident     *bool             `json:"resident"`
+}
+
+func mcpStringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func mcpBoolValue(value *bool) bool {
+	return value != nil && *value
 }
 
 func (s *Server) mcpActiveMapSet(sid int64) (int64, string) {
@@ -48,7 +59,6 @@ func (s *Server) mcpInhabitants(sid int64, room *mcpRequiredCoord, zone, query s
 	if problem != "" {
 		return problem, true
 	}
-	options := storage.InhabitantListOptions{Query: query, Zone: zone, Limit: limit}
 	var exact *mcpCoordArg
 	if room != nil {
 		coord, ok := room.value()
@@ -56,9 +66,43 @@ func (s *Server) mcpInhabitants(sid int64, room *mcpRequiredCoord, zone, query s
 			return "room requires nonblank zone and integer x, y, l.", true
 		}
 		exact = &coord
-		cell := storage.EdgeCell{Zone: coord.Zone, X: coord.X, Y: coord.Y, L: coord.L}
-		options.Cell = &cell
 	}
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Map set: %d\n", mapSetID))
+	if exact != nil {
+		sb.WriteString(fmt.Sprintf("Room: zone=%q x=%d y=%d l=%d\n", exact.Zone, exact.X, exact.Y, exact.L))
+		rows, truncated, err := s.store.ListRoomInhabitantSummariesBounded(mapSetID,
+			storage.EdgeCell{Zone: exact.Zone, X: exact.X, Y: exact.Y, L: exact.L}, query, limit)
+		if err != nil {
+			if errors.Is(err, storage.ErrInvalidZoneName) || errors.Is(err, storage.ErrInvalidInhabitant) {
+				return err.Error(), true
+			}
+			return "inhabitant list failed", true
+		}
+		if len(rows) == 0 {
+			sb.WriteString("No known inhabitants matched.\n")
+		}
+		for _, row := range rows {
+			line := fmt.Sprintf("[id=%d] %s kind=%s placements=%d resident=%t", row.ID, row.Name, row.Kind, row.PlacementCount, row.Resident)
+			if row.PresenceText != "" {
+				line += fmt.Sprintf(" presence=%q", row.PresenceText)
+			}
+			if row.LookTarget != "" {
+				line += fmt.Sprintf(" look_target=%q", row.LookTarget)
+			}
+			if row.Strategy != "" {
+				line += fmt.Sprintf(" strategy=%q", row.Strategy)
+			}
+			sb.WriteString(line + "\n")
+		}
+		if truncated {
+			sb.WriteString(fmt.Sprintf("... truncated after %d inhabitants; refine the filter.\n", limit))
+		}
+		return sb.String(), false
+	} else if strings.TrimSpace(zone) != "" {
+		sb.WriteString(fmt.Sprintf("Zone filter: %q\n", strings.TrimSpace(zone)))
+	}
+	options := storage.InhabitantListOptions{Query: query, Zone: zone, Limit: limit}
 	rows, truncated, err := s.store.ListMapInhabitants(mapSetID, options)
 	if err != nil {
 		if errors.Is(err, storage.ErrInvalidZoneName) || errors.Is(err, storage.ErrInvalidInhabitant) {
@@ -66,29 +110,11 @@ func (s *Server) mcpInhabitants(sid int64, room *mcpRequiredCoord, zone, query s
 		}
 		return "inhabitant list failed", true
 	}
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Map set: %d\n", mapSetID))
-	if exact != nil {
-		sb.WriteString(fmt.Sprintf("Room: zone=%q x=%d y=%d l=%d\n", exact.Zone, exact.X, exact.Y, exact.L))
-	} else if strings.TrimSpace(zone) != "" {
-		sb.WriteString(fmt.Sprintf("Zone filter: %q\n", strings.TrimSpace(zone)))
-	}
 	if len(rows) == 0 {
 		sb.WriteString("No known inhabitants matched.\n")
 	}
 	for _, row := range rows {
 		line := fmt.Sprintf("[id=%d] %s kind=%s placements=%d", row.ID, row.Name, row.Kind, row.PlacementCount)
-		if exact != nil {
-			view, found, err := s.store.GetRoomInhabitant(mapSetID,
-				storage.EdgeCell{Zone: exact.Zone, X: exact.X, Y: exact.Y, L: exact.L}, row.ID)
-			if err != nil || !found {
-				continue
-			}
-			line += fmt.Sprintf(" resident=%t", view.Resident)
-			if view.PresenceText != "" {
-				line += fmt.Sprintf(" presence=%q", view.PresenceText)
-			}
-		}
 		if row.LookTarget != "" {
 			line += fmt.Sprintf(" look_target=%q", row.LookTarget)
 		}
@@ -152,17 +178,20 @@ func (s *Server) mcpInhabitantWrite(sid int64, args mcpInhabitantWriteArgs) (str
 		return "room requires nonblank zone and integer x, y, l.", true
 	}
 	cell := storage.EdgeCell{Zone: coord.Zone, X: coord.X, Y: coord.Y, L: coord.L}
-	fields := storage.RoomInhabitantFields{
-		InhabitantFields: storage.InhabitantFields{
-			Name: args.Name, Kind: args.Kind, LookTarget: args.LookTarget,
-			LookText: args.LookText, Note: args.Note, Strategy: args.Strategy,
-		},
-		PresenceText: args.PresenceText, Resident: args.Resident,
-	}
 	var text string
 	var err error
 	switch strings.ToLower(strings.TrimSpace(args.Operation)) {
 	case "create":
+		if args.Name == nil || args.Kind == nil {
+			return "name and kind are required for create.", true
+		}
+		fields := storage.RoomInhabitantFields{
+			InhabitantFields: storage.InhabitantFields{
+				Name: *args.Name, Kind: *args.Kind, LookTarget: mcpStringValue(args.LookTarget),
+				LookText: mcpStringValue(args.LookText), Note: mcpStringValue(args.Note), Strategy: mcpStringValue(args.Strategy),
+			},
+			PresenceText: mcpStringValue(args.PresenceText), Resident: mcpBoolValue(args.Resident),
+		}
 		var row storage.RoomInhabitantView
 		row, err = s.store.CreateRoomInhabitant(mapSetID, cell, fields)
 		if err == nil {
@@ -173,7 +202,7 @@ func (s *Server) mcpInhabitantWrite(sid int64, args mcpInhabitantWriteArgs) (str
 		if args.InhabitantID <= 0 {
 			return "inhabitant_id is required for place.", true
 		}
-		_, err = s.store.PlaceRoomInhabitant(mapSetID, cell, args.InhabitantID, args.PresenceText, args.Resident)
+		_, err = s.store.PlaceRoomInhabitant(mapSetID, cell, args.InhabitantID, mcpStringValue(args.PresenceText), mcpBoolValue(args.Resident))
 		if err == nil {
 			text = fmt.Sprintf("placed inhabitant id=%d at zone=%q x=%d y=%d l=%d", args.InhabitantID, coord.Zone, coord.X, coord.Y, coord.L)
 			s.manager.BroadcastRoomKnowledgeChanged(mapSetID, coord.Zone, coord.X, coord.Y, coord.L)
@@ -182,22 +211,29 @@ func (s *Server) mcpInhabitantWrite(sid int64, args mcpInhabitantWriteArgs) (str
 		if args.InhabitantID <= 0 {
 			return "inhabitant_id is required for update.", true
 		}
+		if args.Name == nil && args.Kind == nil && args.LookTarget == nil && args.LookText == nil && args.Note == nil &&
+			args.Strategy == nil && args.PresenceText == nil && args.Resident == nil {
+			return "update requires at least one inhabitant or placement field.", true
+		}
+		patch := storage.RoomInhabitantPatch{
+			Name: args.Name, Kind: args.Kind, LookTarget: args.LookTarget,
+			LookText: args.LookText, Note: args.Note, Strategy: args.Strategy,
+			PresenceText: args.PresenceText, Resident: args.Resident,
+		}
 		var found bool
-		_, found, err = s.store.UpdateRoomInhabitant(mapSetID, cell, args.InhabitantID, fields)
+		_, found, err = s.store.PatchRoomInhabitant(mapSetID, cell, args.InhabitantID, patch)
 		if err == nil && !found {
 			return "room inhabitant not found.", true
 		}
 		if err == nil {
 			text = fmt.Sprintf("updated inhabitant id=%d and its selected room placement", args.InhabitantID)
-			placements, listErr := s.store.ListInhabitantPlacements(mapSetID, args.InhabitantID)
-			if listErr != nil {
-				return "updated inhabitant but could not broadcast placement changes", true
+			sharedChanged := args.Name != nil || args.Kind != nil || args.LookTarget != nil ||
+				args.LookText != nil || args.Note != nil || args.Strategy != nil
+			if sharedChanged {
+				s.manager.BroadcastMapKnowledgeChanged(mapSetID)
+			} else {
+				s.manager.BroadcastRoomKnowledgeChanged(mapSetID, coord.Zone, coord.X, coord.Y, coord.L)
 			}
-			cells := make([]storage.EdgeCell, len(placements))
-			for i, placement := range placements {
-				cells[i] = storage.EdgeCell{Zone: placement.Zone, X: placement.X, Y: placement.Y, L: placement.L}
-			}
-			s.manager.BroadcastRoomsKnowledgeChanged(mapSetID, cells)
 		}
 	case "remove":
 		if args.InhabitantID <= 0 {

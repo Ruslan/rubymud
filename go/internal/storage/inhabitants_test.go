@@ -3,6 +3,7 @@ package storage
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -150,6 +151,82 @@ func TestListMapInhabitantsFiltersExcludesAndBoundsCatalog(t *testing.T) {
 	})
 	if err != nil || truncated || len(rows) != 0 {
 		t.Fatalf("room-excluded catalog = %+v truncated=%v err=%v", rows, truncated, err)
+	}
+}
+
+func TestListMapInhabitantsSearchesCyrillicCaseInsensitively(t *testing.T) {
+	store := newMapperTestStore(t)
+	setID, err := store.CreateMapSet(sampleInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	created, err := store.CreateMapInhabitant(setID, InhabitantFields{
+		Name:       "КУЗНЕЦ",
+		Kind:       InhabitantKindNPC,
+		LookTarget: "мастер",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rows, truncated, err := store.ListMapInhabitants(setID, InhabitantListOptions{
+		Query: "кузнец",
+		Limit: 20,
+	})
+	if err != nil || truncated || len(rows) != 1 || rows[0].ID != created.ID {
+		t.Fatalf("Cyrillic case-insensitive search = %+v truncated=%v err=%v", rows, truncated, err)
+	}
+}
+
+func TestPatchRoomInhabitantConcurrentPartialUpdatesDoNotLoseFields(t *testing.T) {
+	store := newMapperTestStore(t)
+	setID, err := store.CreateMapSet(sampleInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cell := EdgeCell{Zone: "Alpha", X: 0, Y: 0, L: 0}
+	created, err := store.CreateRoomInhabitant(setID, cell, RoomInhabitantFields{
+		InhabitantFields: inhabitantFields("Keeper", InhabitantKindNPC),
+		PresenceText:     "At the gate.",
+		Resident:         true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	name := "Gate Keeper"
+	strategy := "Offer the passphrase."
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, patch := range []RoomInhabitantPatch{{Name: &name}, {Strategy: &strategy}} {
+		patch := patch
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, found, err := store.PatchRoomInhabitant(setID, cell, created.ID, patch)
+			if err == nil && !found {
+				err = errors.New("room inhabitant not found")
+			}
+			errs <- err
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent patch: %v", err)
+		}
+	}
+
+	view, found, err := store.GetRoomInhabitant(setID, cell, created.ID)
+	if err != nil || !found {
+		t.Fatalf("GetRoomInhabitant: found=%v err=%v", found, err)
+	}
+	if view.Name != name || view.Strategy != strategy || view.PresenceText != "At the gate." || !view.Resident {
+		t.Fatalf("concurrent partial patches lost data: %+v", view)
 	}
 }
 
