@@ -18,6 +18,7 @@ export interface ZoneMovePreview {
   components: number;
   disconnected: boolean;
   annotations_moved: number;
+  inhabitants_moved?: number;
   collision_count: number;
   collisions?: ZoneCoord[];
   collisions_truncated?: boolean;
@@ -66,6 +67,9 @@ export function previewSummary(preview: ZoneMovePreview): string {
     `${preview.incoming} incoming / ${preview.outgoing} outgoing`,
     plural(preview.cross_zone_contacts, "cross-zone contact"),
     plural(preview.annotations_moved, "annotation"),
+    ...(preview.inhabitants_moved
+      ? [plural(preview.inhabitants_moved, "inhabitant placement")]
+      : []),
     preview.target_exists ? "existing target" : "new target",
   ];
   if (preview.collision_count) parts.push(`${plural(preview.collision_count, "collision")} (apply blocked)`);

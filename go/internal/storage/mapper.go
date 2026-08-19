@@ -162,6 +162,8 @@ func (s *Store) CreateMapSet(in MapSetInput) (int64, error) {
 //   - all rooms          (rooms.map_set_id -> newID)
 //   - all room_annotations (room_annotations.map_set_id -> newID; the overlay is
 //     keyed by logical coord, not rooms.id, so it copies by re-keying the set id)
+//   - all map_inhabitants + room_inhabitants (entities get fresh ids and their
+//     coordinate placements are re-pointed to those copied entities)
 //   - all room_images     (re-pointed to the copied rooms by logical coord, so the
 //     image travels with its room even though rooms.id changes on copy; FullPath
 //     deliberately remains a shared filesystem reference, so the source must
@@ -284,6 +286,51 @@ func (s *Store) ForkMapSet(srcID int64) (int64, error) {
 				return err
 			}
 		}
+
+		// Copy the normalized inhabitant catalogue, then re-point every logical
+		// room placement to the freshly inserted entity id. IDs are scoped to one
+		// map set and must not keep a cross-fork reference to the frozen source.
+		var srcInhabitants []MapInhabitant
+		if err := tx.Where("map_set_id = ?", srcID).Order("id ASC").Find(&srcInhabitants).Error; err != nil {
+			return err
+		}
+		newInhabitantIDByOldID := make(map[int64]int64, len(srcInhabitants))
+		if len(srcInhabitants) > 0 {
+			newInhabitants := make([]MapInhabitant, len(srcInhabitants))
+			oldIDs := make([]int64, len(srcInhabitants))
+			for i, srcInhabitant := range srcInhabitants {
+				oldIDs[i] = srcInhabitant.ID
+				srcInhabitant.ID = 0
+				srcInhabitant.MapSetID = newID
+				newInhabitants[i] = srcInhabitant
+			}
+			if err := tx.CreateInBatches(newInhabitants, 500).Error; err != nil {
+				return err
+			}
+			for i := range newInhabitants {
+				newInhabitantIDByOldID[oldIDs[i]] = newInhabitants[i].ID
+			}
+		}
+		var srcPlacements []RoomInhabitant
+		if err := tx.Where("map_set_id = ?", srcID).Order("id ASC").Find(&srcPlacements).Error; err != nil {
+			return err
+		}
+		if len(srcPlacements) > 0 {
+			newPlacements := make([]RoomInhabitant, 0, len(srcPlacements))
+			for _, placement := range srcPlacements {
+				newInhabitantID, ok := newInhabitantIDByOldID[placement.InhabitantID]
+				if !ok {
+					return fmt.Errorf("inhabitant placement %d has no entity in map set %d", placement.ID, srcID)
+				}
+				placement.ID = 0
+				placement.MapSetID = newID
+				placement.InhabitantID = newInhabitantID
+				newPlacements = append(newPlacements, placement)
+			}
+			if err := tx.CreateInBatches(newPlacements, 500).Error; err != nil {
+				return err
+			}
+		}
 		return nil
 	})
 	return newID, err
@@ -389,6 +436,12 @@ func (s *Store) DeleteMapSetWithAffectedSessions(id int64) ([]int64, error) {
 			return err
 		}
 		if err := tx.Exec("DELETE FROM room_images WHERE room_id IN (SELECT id FROM rooms WHERE map_set_id = ?)", id).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec("DELETE FROM room_inhabitants WHERE map_set_id = ?", id).Error; err != nil {
+			return err
+		}
+		if err := tx.Exec("DELETE FROM map_inhabitants WHERE map_set_id = ?", id).Error; err != nil {
 			return err
 		}
 		if err := tx.Exec("DELETE FROM rooms WHERE map_set_id = ?", id).Error; err != nil {

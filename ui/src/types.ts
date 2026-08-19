@@ -91,6 +91,10 @@ export interface ServerMessage {
   // Change-notification scope. A positive id on map_sets_changed identifies the
   // COW fork that became active; missing/zero is a generic map-set invalidation.
   map_set_id?: number;
+  zone?: string;
+  room_x?: number;
+  room_y?: number;
+  room_l?: number;
   // Server-owned map walk progress. A map walk is paced by room confirmations;
   // these fields are also replayed during websocket restore.
   walk_active?: boolean;

@@ -17,8 +17,9 @@ describe("zone CRUD request shape", () => {
       revision: 4, rooms: 3, internal_edges: 0, boundary_grid_edges: 0,
       portals: 0, incoming: 0, outgoing: 0, cross_zone_contacts: 0,
       components: 2, disconnected: true, annotations_moved: 0,
+      inhabitants_moved: 2,
       collision_count: 1, source_empties: false, target_exists: true,
-    })).toBe("3 rooms · 2 connected components · 0 internal grid edges · 0 boundary grid edges · 0 portals · 0 incoming / 0 outgoing · 0 cross-zone contacts · 0 annotations · existing target · 1 collision (apply blocked) · warning: disconnected result");
+    })).toBe("3 rooms · 2 connected components · 0 internal grid edges · 0 boundary grid edges · 0 portals · 0 incoming / 0 outgoing · 0 cross-zone contacts · 0 annotations · 2 inhabitant placements · existing target · 1 collision (apply blocked) · warning: disconnected result");
   });
 
   it("normalizes integer zero and rejects coordinates JSON cannot represent exactly", () => {

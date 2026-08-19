@@ -38,6 +38,7 @@ import {
   seamsOf,
 } from "./geometry";
 import { MapRenderer } from "./renderer";
+import { RoomKnowledgeDialog } from "./inhabitants";
 import {
   canonicalZoneName,
   canonicalCoords,
@@ -271,10 +272,12 @@ export class MapPaneController {
   private zoneListGeneration = 0;
   private zoneOperationBusy = false;
   private keyboardListeners = new AbortController();
+  private knowledgeDialog: RoomKnowledgeDialog;
 
   constructor(private config: MapPaneConfig) {
     this.root = document.createElement("div");
     this.root.className = "map-pane";
+    this.knowledgeDialog = new RoomKnowledgeDialog(this.root);
 
     // --- control bar -------------------------------------------------------
     const bar = document.createElement("div");
@@ -508,6 +511,7 @@ export class MapPaneController {
     this.closeSearchPopover(false);
     this.closeManagerPopover(false);
     this.closeZoneDialog(false);
+    this.knowledgeDialog.dispose();
     this.keyboardListeners.abort();
     this.renderer.destroy();
   }
@@ -536,6 +540,10 @@ export class MapPaneController {
   // Refresh rooms within the active corpus after an editor write. This keeps an
   // administrator's selected zone and camera independent from player follow.
   async refreshRooms(): Promise<void> {
+    // A topology edit may remove or move the selected room. Do not leave a
+    // coordinate-bound knowledge editor open against a cell that is no longer
+    // the room the operator selected.
+    this.knowledgeDialog.close(false);
     await this.reload({ preserveView: true, applyPosition: false });
   }
 
@@ -557,6 +565,7 @@ export class MapPaneController {
     this.closeCellMenu();
     this.closeSearchPopover(false);
     this.closeManagerPopover(false);
+    this.knowledgeDialog.close(false);
     this.renderer.clear();
   }
 
@@ -604,6 +613,7 @@ export class MapPaneController {
       this.closeZoneDialog();
       this.closeSearchPopover(false);
       this.closeManagerPopover(false);
+      this.knowledgeDialog.close(false);
     }
     const preserveSelection = opts.preserveView === true &&
       opts.preferredZone === this.currentZone && id === this.mapSetID;
@@ -693,6 +703,7 @@ export class MapPaneController {
         this.closeZoneDialog();
         this.closeSearchPopover(false);
         this.closeManagerPopover(false);
+        this.knowledgeDialog.close(false);
         this.clearZoneSelection();
       }
       const preserveTransform = !opts.resetView && zone === this.currentZone;
@@ -1231,6 +1242,13 @@ export class MapPaneController {
     this.refreshGhost();
   }
 
+  // A knowledge write is an overlay invalidation, not a map mutation. Only an
+  // open dialog for this exact cell refetches; the zone cache and tracker stay
+  // untouched.
+  onRoomKnowledgeChanged(mapSetID: number, zone: string, x: number, y: number, l: number): void {
+    this.knowledgeDialog.changed(mapSetID, zone, x, y, l);
+  }
+
   // Handle server-owned map-walk progress. This is intentionally independent of
   // room_position: a page may restore while a hop is in flight, before another
   // room event arrives, and must still offer Stop.
@@ -1573,6 +1591,19 @@ export class MapPaneController {
       portal.classList.add("map-cell-menu__portal-add");
       portal.title = "Create a transition to an exact cell in this or another zone";
       menu.appendChild(portal);
+      const knowledge = this.menuButton("Знания…", () => {
+        if (this.mapSetID == null) return;
+        this.knowledgeDialog.open({
+          mapSetID: this.mapSetID,
+          zone: room.z,
+          x: room.x,
+          y: room.y,
+          l: room.l,
+          name: room.h,
+        }, this.managerButton);
+      });
+      knowledge.classList.add("map-cell-menu__knowledge");
+      menu.appendChild(knowledge);
     }
 
     // 2) «Записать комнату» — the human autorecord. One action, two labels:

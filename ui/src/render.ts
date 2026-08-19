@@ -2257,6 +2257,10 @@ export function createRenderer({
     mapControllers.forEach((c) => c.onRoomEvent(live));
   }
 
+  function handleRoomKnowledgeChanged(mapSetID: number, zone: string, x: number, y: number, l: number) {
+    mapControllers.forEach((c) => c.onRoomKnowledgeChanged(mapSetID, zone, x, y, l));
+  }
+
   // Deliver the session's room-format door-opening template (`mapper_profile`
   // message) to every map pane. Cached like the two above so a pane mounted later
   // — or after a page reload, where the message arrives during restore — still knows
@@ -2335,6 +2339,7 @@ export function createRenderer({
     refreshAnsiTheme,
     handleRoomPosition,
     handleRoomEvent,
+    handleRoomKnowledgeChanged,
     handleDoorOpenTemplate,
     handleMapWalk,
     clearLiveRoom,

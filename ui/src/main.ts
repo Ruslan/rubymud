@@ -836,6 +836,15 @@ function attachSocketHandlers(target: WebSocket) {
     if (message.type === "rooms_changed") {
       renderer.refreshMapPanes();
     }
+    if (message.type === "room_knowledge_changed" && message.map_set_id != null && message.zone != null) {
+      renderer.handleRoomKnowledgeChanged(
+        message.map_set_id,
+        message.zone,
+        message.room_x ?? 0,
+        message.room_y ?? 0,
+        message.room_l ?? 0,
+      );
+    }
     // A different map set means the cached live room may describe a room that
     // does not belong to the new corpus. (rooms_changed does NOT clear it — the
     // player is still standing in the same room after a topology write.)

@@ -87,6 +87,58 @@ func (m *Manager) BroadcastMapSetsChanged() {
 	}
 }
 
+// BroadcastRoomKnowledgeChanged invalidates only the lazy knowledge view for
+// one logical room. It deliberately does not reload mapper indexes or rooms:
+// inhabitants are a non-topological overlay, and a full zone/tracker refresh
+// would both waste work and risk disturbing live position state.
+func (m *Manager) BroadcastRoomKnowledgeChanged(mapSetID int64, zone string, x, y, l int) {
+	m.BroadcastRoomsKnowledgeChanged(mapSetID, []storage.EdgeCell{{Zone: zone, X: x, Y: y, L: l}})
+}
+
+// BroadcastRoomsKnowledgeChanged batches an entity-wide invalidation. Active
+// map-set lookup happens once per session, not once per placement; duplicate
+// coordinates are collapsed before any WebSocket fanout.
+func (m *Manager) BroadcastRoomsKnowledgeChanged(mapSetID int64, cells []storage.EdgeCell) {
+	unique := make([]storage.EdgeCell, 0, len(cells))
+	seen := make(map[string]bool, len(cells))
+	for _, cell := range cells {
+		key := fmt.Sprintf("%s\x00%d\x00%d\x00%d", cell.Zone, cell.X, cell.Y, cell.L)
+		if !seen[key] {
+			seen[key] = true
+			unique = append(unique, cell)
+		}
+	}
+	if len(unique) == 0 {
+		return
+	}
+	m.mu.Lock()
+	sessions := make([]struct {
+		id   int64
+		sess *Session
+	}, 0, len(m.sessions))
+	for id, sess := range m.sessions {
+		if !sess.IsClosed() {
+			sessions = append(sessions, struct {
+				id   int64
+				sess *Session
+			}{id: id, sess: sess})
+		}
+	}
+	m.mu.Unlock()
+	for _, item := range sessions {
+		active, ok, err := m.store.GetActiveMapSetID(item.id)
+		if err != nil || !ok || active != mapSetID {
+			continue
+		}
+		for _, cell := range unique {
+			item.sess.BroadcastServerMsg(ServerMsg{
+				Type: "room_knowledge_changed", MapSetID: mapSetID,
+				Zone: cell.Zone, RoomX: cell.X, RoomY: cell.Y, RoomL: cell.L,
+			})
+		}
+	}
+}
+
 // RefreshSharedZoneMove keeps other live sessions on an editable shared set
 // coherent after a namespace move. A COW fork has no peers on its new id, but an
 // ordinary editable set can be active in several sessions.

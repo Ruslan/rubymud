@@ -25,6 +25,13 @@ func TestZoneMovePreservesIncidentTopologyAndUndo(t *testing.T) {
 	if _, err := store.UpsertRoomAnnotation(id, "A", 0, 0, 0, AnnotationFields{Note: strPtr("moves too")}); err != nil {
 		t.Fatal(err)
 	}
+	inhabitant, err := store.CreateRoomInhabitant(id, EdgeCell{Zone: "A", X: 0, Y: 0, L: 0}, RoomInhabitantFields{
+		InhabitantFields: InhabitantFields{Name: "Keeper", Kind: InhabitantKindNPC, Strategy: "ask first"},
+		PresenceText:     "The keeper waits here.", Resident: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 	// Same-zone outgoing portal and a separate incoming portal prove that exact
 	// endpoint updates do not depend on direction or on zone/tag provenance.
 	if _, found, err := store.ApplyTopologyOp(id, TopologyOp{Kind: TopoCreatePortal, Zone: "A", X: 0, Y: 0, L: 0, Portal: &PortalTarget{Zone: "A", X: 0, Y: 1, L: 0}, PortalCommand: "out"}); err != nil || !found {
@@ -41,7 +48,7 @@ func TestZoneMovePreservesIncidentTopologyAndUndo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Rooms != 1 || p.BoundaryGridEdges != 4 || p.Incoming != 1 || p.Outgoing != 1 || p.AnnotationsMoved != 1 || p.TargetExists != true {
+	if p.Rooms != 1 || p.BoundaryGridEdges != 4 || p.Incoming != 1 || p.Outgoing != 1 || p.AnnotationsMoved != 1 || p.InhabitantsMoved != 1 || p.TargetExists != true {
 		t.Fatalf("preview=%+v", p)
 	}
 	before, applied, found, err := store.ApplyZoneMove(id, ZoneMoveInput{SourceZone: "A", TargetZone: "B", Rooms: []ZoneCoord{{0, 0, 0}, {0, 0, 0}}, ExpectedRevision: p.Revision})
@@ -57,6 +64,10 @@ func TestZoneMovePreservesIncidentTopologyAndUndo(t *testing.T) {
 	var anno RoomAnnotation
 	if err := store.DB().Where("map_set_id=? AND zone='B' AND x=0 AND y=0 AND l=0", id).First(&anno).Error; err != nil {
 		t.Fatalf("annotation did not move: %v", err)
+	}
+	movedInhabitants, err := store.ListRoomInhabitants(id, EdgeCell{Zone: "B", X: 0, Y: 0, L: 0})
+	if err != nil || len(movedInhabitants) != 1 || movedInhabitants[0].ID != inhabitant.ID {
+		t.Fatalf("inhabitant did not move: %+v err=%v", movedInhabitants, err)
 	}
 	edges, err := store.ListMapEdges(id)
 	if err != nil {
@@ -111,6 +122,10 @@ func TestZoneMovePreservesIncidentTopologyAndUndo(t *testing.T) {
 	if err := store.DB().Where("map_set_id=? AND zone='A' AND x=0 AND y=0 AND l=0", id).First(&anno).Error; err != nil {
 		t.Fatalf("undo did not restore annotation: %v", err)
 	}
+	restoredInhabitants, err := store.ListRoomInhabitants(id, EdgeCell{Zone: "A", X: 0, Y: 0, L: 0})
+	if err != nil || len(restoredInhabitants) != 1 || restoredInhabitants[0].ID != inhabitant.ID {
+		t.Fatalf("undo did not restore inhabitant: %+v err=%v", restoredInhabitants, err)
+	}
 }
 
 func TestZoneMoveRejectsCollisionAndStaleRevision(t *testing.T) {
@@ -139,6 +154,102 @@ func TestZoneMoveRejectsCollisionAndStaleRevision(t *testing.T) {
 	// A different target makes the stale compare-and-swap observable.
 	if _, _, found, err := store.ApplyZoneMove(id, ZoneMoveInput{SourceZone: "A", TargetZone: "C", Rooms: []ZoneCoord{{0, 0, 0}}, ExpectedRevision: p.Revision + 1}); err == nil || found {
 		t.Fatalf("stale found=%v err=%v", found, err)
+	}
+}
+
+func TestZoneMoveUndoMovesOnlyCapturedInhabitantPlacements(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		move ZoneMoveInput
+	}{
+		{name: "partial move", move: ZoneMoveInput{SourceZone: "A", TargetZone: "B", Rooms: []ZoneCoord{{0, 0, 0}}}},
+		{name: "whole-zone rename", move: ZoneMoveInput{SourceZone: "A", TargetZone: "B", AllSource: true}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newMapperTestStore(t)
+			id, err := store.CreateMapSet(MapSetInput{Name: tc.name, Rooms: []Room{
+				{Zone: "A", X: 0, Y: 0, L: 0, EDirs: "[]", Doors: "[]"},
+				{Zone: "B", X: 9, Y: 0, L: 0, EDirs: "[]", Doors: "[]"},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			source, err := store.CreateRoomInhabitant(id, EdgeCell{Zone: "A", X: 0, Y: 0, L: 0}, RoomInhabitantFields{
+				InhabitantFields: InhabitantFields{Name: "source", Kind: InhabitantKindNPC},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			preexisting, err := store.CreateRoomInhabitant(id, EdgeCell{Zone: "B", X: 0, Y: 0, L: 0}, RoomInhabitantFields{
+				InhabitantFields: InhabitantFields{Name: "preexisting target", Kind: InhabitantKindOther},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			preview, err := store.PreviewZoneMove(id, tc.move)
+			if err != nil || preview.CollisionCount != 0 {
+				t.Fatalf("preview=%+v err=%v", preview, err)
+			}
+			move := tc.move
+			move.ExpectedRevision = preview.Revision
+			before, _, found, err := store.ApplyZoneMove(id, move)
+			if err != nil || !found {
+				t.Fatalf("apply found=%v err=%v", found, err)
+			}
+			createdAfter, err := store.CreateRoomInhabitant(id, EdgeCell{Zone: "B", X: 0, Y: 0, L: 0}, RoomInhabitantFields{
+				InhabitantFields: InhabitantFields{Name: "created after move", Kind: InhabitantKindMonster},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if ok, err := store.RestoreTopologyBefore(id, before); err != nil || !ok {
+				t.Fatalf("undo ok=%v err=%v", ok, err)
+			}
+			sourceRows, err := store.ListRoomInhabitants(id, EdgeCell{Zone: "A", X: 0, Y: 0, L: 0})
+			if err != nil || len(sourceRows) != 1 || sourceRows[0].ID != source.ID {
+				t.Fatalf("source after undo=%+v err=%v", sourceRows, err)
+			}
+			targetRows, err := store.ListRoomInhabitants(id, EdgeCell{Zone: "B", X: 0, Y: 0, L: 0})
+			if err != nil || len(targetRows) != 2 {
+				t.Fatalf("target after undo=%+v err=%v", targetRows, err)
+			}
+			got := map[int64]bool{}
+			for _, row := range targetRows {
+				got[row.ID] = true
+			}
+			if !got[preexisting.ID] || !got[createdAfter.ID] || got[source.ID] {
+				t.Fatalf("undo moved unrelated target knowledge: %+v", targetRows)
+			}
+		})
+	}
+}
+
+func TestZoneMovePreviewRejectsSameEntityPlacementCollision(t *testing.T) {
+	store := newMapperTestStore(t)
+	id, err := store.CreateMapSet(MapSetInput{Name: "placement collision", Rooms: []Room{
+		{Zone: "A", X: 0, Y: 0, L: 0, EDirs: "[]", Doors: "[]"},
+		{Zone: "B", X: 9, Y: 0, L: 0, EDirs: "[]", Doors: "[]"},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entity, err := store.CreateRoomInhabitant(id, EdgeCell{Zone: "A", X: 0, Y: 0, L: 0}, RoomInhabitantFields{
+		InhabitantFields: InhabitantFields{Name: "traveller", Kind: InhabitantKindNPC},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PlaceRoomInhabitant(id, EdgeCell{Zone: "B", X: 0, Y: 0, L: 0}, entity.ID, "already here", false); err != nil {
+		t.Fatal(err)
+	}
+	move := ZoneMoveInput{SourceZone: "A", TargetZone: "B", Rooms: []ZoneCoord{{0, 0, 0}}}
+	preview, err := store.PreviewZoneMove(id, move)
+	if err != nil || preview.CollisionCount != 1 {
+		t.Fatalf("preview=%+v err=%v, want one placement collision", preview, err)
+	}
+	move.ExpectedRevision = preview.Revision
+	if _, _, found, err := store.ApplyZoneMove(id, move); err == nil || found {
+		t.Fatalf("same-entity placement collision applied: found=%v err=%v", found, err)
 	}
 }
 

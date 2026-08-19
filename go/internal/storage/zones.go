@@ -65,6 +65,7 @@ type ZoneMovePreview struct {
 	Components          int         `json:"components"`
 	Disconnected        bool        `json:"disconnected"`
 	AnnotationsMoved    int         `json:"annotations_moved"`
+	InhabitantsMoved    int         `json:"inhabitants_moved"`
 	CollisionCount      int         `json:"collision_count"`
 	Collisions          []ZoneCoord `json:"collisions,omitempty"`
 	CollisionsTruncated bool        `json:"collisions_truncated,omitempty"`
@@ -79,6 +80,7 @@ type ZoneMoveBefore struct {
 	Rooms       []Room
 	Edges       []MapEdge
 	Annotations []RoomAnnotation
+	Inhabitants []RoomInhabitant
 	Revision    int64
 }
 
@@ -358,20 +360,20 @@ func selectedZoneRooms(db *gorm.DB, mapSetID int64, in ZoneMoveInput) ([]Room, e
 	return rooms, nil
 }
 
-func zoneMovePreviewTx(tx *gorm.DB, mapSetID int64, in ZoneMoveInput) (ZoneMovePreview, []Room, []MapEdge, []RoomAnnotation, error) {
+func zoneMovePreviewTx(tx *gorm.DB, mapSetID int64, in ZoneMoveInput) (ZoneMovePreview, []Room, []MapEdge, []RoomAnnotation, []RoomInhabitant, error) {
 	var set MapSet
 	if err := tx.First(&set, mapSetID).Error; err != nil {
-		return ZoneMovePreview{}, nil, nil, nil, err
+		return ZoneMovePreview{}, nil, nil, nil, nil, err
 	}
 	rooms, err := selectedZoneRooms(tx, mapSetID, in)
 	if err != nil {
-		return ZoneMovePreview{}, nil, nil, nil, err
+		return ZoneMovePreview{}, nil, nil, nil, nil, err
 	}
 	if len(rooms) == 0 {
-		return ZoneMovePreview{}, nil, nil, nil, fmt.Errorf("source zone has no rooms")
+		return ZoneMovePreview{}, nil, nil, nil, nil, fmt.Errorf("source zone has no rooms")
 	}
 	if len(rooms) > zoneSelectionCap {
-		return ZoneMovePreview{}, nil, nil, nil, fmt.Errorf("source zone exceeds %d rooms", zoneSelectionCap)
+		return ZoneMovePreview{}, nil, nil, nil, nil, fmt.Errorf("source zone exceeds %d rooms", zoneSelectionCap)
 	}
 	selected := make(map[string]bool, len(rooms))
 	for _, r := range rooms {
@@ -379,25 +381,34 @@ func zoneMovePreviewTx(tx *gorm.DB, mapSetID int64, in ZoneMoveInput) (ZoneMoveP
 	}
 	var targetCount int64
 	if err := tx.Model(&Room{}).Where("map_set_id=? AND zone=?", mapSetID, in.TargetZone).Count(&targetCount).Error; err != nil {
-		return ZoneMovePreview{}, nil, nil, nil, err
+		return ZoneMovePreview{}, nil, nil, nil, nil, err
 	}
 	p := ZoneMovePreview{Revision: set.TopologyRevision, Rooms: len(rooms), TargetExists: targetCount > 0}
-	var collisions []Room
-	where, args := zoneTupleWhere("", rooms, []any{mapSetID, in.TargetZone})
-	if err := tx.Where("map_set_id=? AND zone=? AND "+where, args...).Find(&collisions).Error; err != nil {
-		return ZoneMovePreview{}, nil, nil, nil, err
-	}
-	p.CollisionCount = len(collisions)
-	for _, r := range collisions {
+	collisionKeys := make(map[string]bool)
+	addCollision := func(x, y, l int) {
+		key := fmt.Sprintf("%d\x00%d\x00%d", x, y, l)
+		if collisionKeys[key] {
+			return
+		}
+		collisionKeys[key] = true
+		p.CollisionCount++
 		if len(p.Collisions) < zoneCollisionCap {
-			p.Collisions = append(p.Collisions, ZoneCoord{r.X, r.Y, r.L})
+			p.Collisions = append(p.Collisions, ZoneCoord{x, y, l})
 		} else {
 			p.CollisionsTruncated = true
 		}
 	}
+	var collisions []Room
+	where, args := zoneTupleWhere("", rooms, []any{mapSetID, in.TargetZone})
+	if err := tx.Where("map_set_id=? AND zone=? AND "+where, args...).Find(&collisions).Error; err != nil {
+		return ZoneMovePreview{}, nil, nil, nil, nil, err
+	}
+	for _, r := range collisions {
+		addCollision(r.X, r.Y, r.L)
+	}
 	var edges []MapEdge
 	if err := tx.Where("map_set_id = ?", mapSetID).Find(&edges).Error; err != nil {
-		return ZoneMovePreview{}, nil, nil, nil, err
+		return ZoneMovePreview{}, nil, nil, nil, nil, err
 	}
 	affected := make([]MapEdge, 0)
 	adj := make(map[string][]string)
@@ -458,15 +469,38 @@ func zoneMovePreviewTx(tx *gorm.DB, mapSetID int64, in ZoneMoveInput) (ZoneMoveP
 	var annos []RoomAnnotation
 	where, args = zoneTupleWhere("", rooms, []any{mapSetID, in.SourceZone})
 	if err := tx.Where("map_set_id=? AND zone=? AND "+where, args...).Find(&annos).Error; err != nil {
-		return ZoneMovePreview{}, nil, nil, nil, err
+		return ZoneMovePreview{}, nil, nil, nil, nil, err
 	}
 	p.AnnotationsMoved = len(annos)
+	var inhabitants []RoomInhabitant
+	if err := tx.Where("map_set_id=? AND zone=? AND "+where, args...).Find(&inhabitants).Error; err != nil {
+		return ZoneMovePreview{}, nil, nil, nil, nil, err
+	}
+	p.InhabitantsMoved = len(inhabitants)
+	if len(inhabitants) > 0 {
+		sourcePlacements := make(map[string]bool, len(inhabitants))
+		for _, placement := range inhabitants {
+			key := fmt.Sprintf("%d\x00%d\x00%d\x00%d", placement.X, placement.Y, placement.L, placement.InhabitantID)
+			sourcePlacements[key] = true
+		}
+		var targetPlacements []RoomInhabitant
+		where, args = zoneTupleWhere("", rooms, []any{mapSetID, in.TargetZone})
+		if err := tx.Where("map_set_id=? AND zone=? AND "+where, args...).Find(&targetPlacements).Error; err != nil {
+			return ZoneMovePreview{}, nil, nil, nil, nil, err
+		}
+		for _, placement := range targetPlacements {
+			key := fmt.Sprintf("%d\x00%d\x00%d\x00%d", placement.X, placement.Y, placement.L, placement.InhabitantID)
+			if sourcePlacements[key] {
+				addCollision(placement.X, placement.Y, placement.L)
+			}
+		}
+	}
 	var sourceCount int64
 	if err := tx.Model(&Room{}).Where("map_set_id=? AND zone=?", mapSetID, in.SourceZone).Count(&sourceCount).Error; err != nil {
-		return ZoneMovePreview{}, nil, nil, nil, err
+		return ZoneMovePreview{}, nil, nil, nil, nil, err
 	}
 	p.SourceEmpties = int64(len(rooms)) == sourceCount
-	return p, rooms, affected, annos, nil
+	return p, rooms, affected, annos, inhabitants, nil
 }
 
 // PreviewZoneMove is read-only; it deliberately does not fork frozen sets.
@@ -476,7 +510,11 @@ func (s *Store) PreviewZoneMove(mapSetID int64, input ZoneMoveInput) (ZoneMovePr
 		return ZoneMovePreview{}, err
 	}
 	var out ZoneMovePreview
-	err = s.db.Transaction(func(tx *gorm.DB) error { var e error; out, _, _, _, e = zoneMovePreviewTx(tx, mapSetID, in); return e })
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		var e error
+		out, _, _, _, _, e = zoneMovePreviewTx(tx, mapSetID, in)
+		return e
+	})
 	return out, err
 }
 
@@ -578,7 +616,8 @@ func applyZoneMoveTx(tx *gorm.DB, mapSetID int64, in ZoneMoveInput) (before Topo
 		var rooms []Room
 		var edges []MapEdge
 		var annos []RoomAnnotation
-		report, rooms, edges, annos, e = zoneMovePreviewTx(tx, mapSetID, in)
+		var inhabitants []RoomInhabitant
+		report, rooms, edges, annos, inhabitants, e = zoneMovePreviewTx(tx, mapSetID, in)
 		if e != nil {
 			return e
 		}
@@ -592,7 +631,7 @@ func applyZoneMoveTx(tx *gorm.DB, mapSetID int64, in ZoneMoveInput) (before Topo
 			return err
 		}
 		before.Revision = report.Revision
-		before.ZoneMove = &ZoneMoveBefore{Input: in, Rooms: append([]Room(nil), rooms...), Edges: append([]MapEdge(nil), edges...), Annotations: append([]RoomAnnotation(nil), annos...), Revision: report.Revision}
+		before.ZoneMove = &ZoneMoveBefore{Input: in, Rooms: append([]Room(nil), rooms...), Edges: append([]MapEdge(nil), edges...), Annotations: append([]RoomAnnotation(nil), annos...), Inhabitants: append([]RoomInhabitant(nil), inhabitants...), Revision: report.Revision}
 		if err := prepareZoneSelectionTx(tx, rooms); err != nil {
 			return err
 		}
@@ -629,6 +668,17 @@ func applyZoneMoveTx(tx *gorm.DB, mapSetID int64, in ZoneMoveInput) (before Topo
 					SELECT 1 FROM zone_move_selected s
 					WHERE s.x=room_annotations.x AND s.y=room_annotations.y AND s.l=room_annotations.l
 				)`, in.TargetZone, mapSetID, in.SourceZone).Error; err != nil {
+				return err
+			}
+		}
+		if len(inhabitants) > 0 {
+			ids := make([]int64, len(inhabitants))
+			for i := range inhabitants {
+				ids[i] = inhabitants[i].ID
+			}
+			if err := tx.Model(&RoomInhabitant{}).
+				Where("map_set_id=? AND zone=? AND id IN ?", mapSetID, in.SourceZone, ids).
+				Update("zone", in.TargetZone).Error; err != nil {
 				return err
 			}
 		}
@@ -736,6 +786,17 @@ func (s *Store) restoreZoneMoveBeforeUnfenced(mapSetID int64, b ZoneMoveBefore) 
 					SELECT 1 FROM zone_move_selected s
 					WHERE s.x=room_annotations.x AND s.y=room_annotations.y AND s.l=room_annotations.l
 				)`, b.Input.SourceZone, mapSetID, b.Input.TargetZone).Error; err != nil {
+				return err
+			}
+		}
+		if len(b.Inhabitants) > 0 {
+			ids := make([]int64, len(b.Inhabitants))
+			for i := range b.Inhabitants {
+				ids[i] = b.Inhabitants[i].ID
+			}
+			if err := tx.Model(&RoomInhabitant{}).
+				Where("map_set_id=? AND zone=? AND id IN ?", mapSetID, b.Input.TargetZone, ids).
+				Update("zone", b.Input.SourceZone).Error; err != nil {
 				return err
 			}
 		}

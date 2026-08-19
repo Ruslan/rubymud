@@ -510,17 +510,24 @@ func TestDeleteMapSetCascadesAndClearsSessions(t *testing.T) {
 	var room Room
 	store.DB().Where("map_set_id = ?", id).First(&room)
 	store.DB().Create(&RoomImage{RoomID: room.ID, FullPath: "x.png"})
+	if _, err := store.CreateRoomInhabitant(id, EdgeCell{Zone: room.Zone, X: room.X, Y: room.Y, L: room.L}, RoomInhabitantFields{
+		InhabitantFields: InhabitantFields{Name: "Keeper", Kind: InhabitantKindNPC}, Resident: true,
+	}); err != nil {
+		t.Fatalf("CreateRoomInhabitant: %v", err)
+	}
 
 	if err := store.DeleteMapSet(id); err != nil {
 		t.Fatalf("DeleteMapSet: %v", err)
 	}
 
-	var roomCount, imgCount, setCount int64
+	var roomCount, imgCount, setCount, inhabitantCount, placementCount int64
 	store.DB().Model(&Room{}).Where("map_set_id = ?", id).Count(&roomCount)
 	store.DB().Model(&RoomImage{}).Count(&imgCount)
 	store.DB().Model(&MapSet{}).Where("id = ?", id).Count(&setCount)
-	if roomCount != 0 || imgCount != 0 || setCount != 0 {
-		t.Errorf("after delete: rooms=%d images=%d sets=%d, want all 0", roomCount, imgCount, setCount)
+	store.DB().Model(&MapInhabitant{}).Where("map_set_id = ?", id).Count(&inhabitantCount)
+	store.DB().Model(&RoomInhabitant{}).Where("map_set_id = ?", id).Count(&placementCount)
+	if roomCount != 0 || imgCount != 0 || setCount != 0 || inhabitantCount != 0 || placementCount != 0 {
+		t.Errorf("after delete: rooms=%d images=%d sets=%d inhabitants=%d placements=%d, want all 0", roomCount, imgCount, setCount, inhabitantCount, placementCount)
 	}
 	if _, ok, _ := store.GetActiveMapSetID(rec.ID); ok {
 		t.Error("session active_map_set_id should be NULL after delete")

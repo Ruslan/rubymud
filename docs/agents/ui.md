@@ -48,6 +48,21 @@ Blocked contacts and contacts whose exact zone or room no longer exists are not
 treated as successful jumps. Async jumps use the pane load generation guard so
 a late response cannot replace a newer zone selection.
 
+## Mapper Room Knowledge
+
+The cell menu action `Знания…` opens a room-scoped dialog. Its `Обитатели` tab
+loads lazily from `/api/map-sets/{id}/inhabitants`; the full catalogue must not
+be added to the hot slim-room/zone payload. Cards and forms use DOM `textContent`
+and native controls rather than HTML interpolation.
+
+Knowledge writes are overlays: they do not reload the zone or tracker. The
+server broadcasts `room_knowledge_changed`, and only an open dialog for the
+affected room refetches. Abort/generation guards preserve unsaved forms across
+late GET responses and discard responses after closing or switching rooms.
+Entity fields are shared across placements, while `presence_text` and
+`resident` belong to one room. The current browser UI creates new entities;
+placing an existing catalogue entity and live NPC detection remain later work.
+
 ## Development
 
 - **Build**: Vite compiles everything into `go/internal/web/static/`.
