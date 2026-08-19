@@ -18,6 +18,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -57,6 +58,9 @@ type Server struct {
 	mapSetDeleteBeforeStoreDelete func() // test hook: runs after image staging
 	restoreAfterCursorHook        func(*session.Session) error
 	mapRecordingTryStop           func(*session.Session) (session.MapRecordingState, bool) // test seam
+	appSettingsMu                 sync.Mutex
+	appSettingsAfterCommit        func(appi18n.Locale) // test seam; called under appSettingsMu
+	mapperLanguageCode            atomic.Uint32
 }
 
 // MCPConfig holds command-line/environment overrides for MCP. Enabled and Token
@@ -262,6 +266,7 @@ func newServer(listener WebListenerConfig, manager *session.Manager, store *stor
 			},
 		},
 	}
+	s.setMapperLanguage(s.appLanguage())
 	s.mcpSettingsUnsubscribe = store.SubscribeMCPSettings(func(settings storage.MCPSettings) {
 		_ = s.applyPersistedMCPSettings(settings)
 	})
@@ -671,6 +676,23 @@ func (s *Server) appLanguage() appi18n.Locale {
 		return appi18n.English
 	}
 	return appi18n.NormalizeLocale(value)
+}
+
+// mapperLanguage is the request-hot locale snapshot. Mapper route/status calls
+// must not hit SQLite merely to serialize authored UI copy.
+func (s *Server) mapperLanguage() appi18n.Locale {
+	if s.mapperLanguageCode.Load() == 1 {
+		return appi18n.Russian
+	}
+	return appi18n.English
+}
+
+func (s *Server) setMapperLanguage(locale appi18n.Locale) {
+	if locale == appi18n.Russian {
+		s.mapperLanguageCode.Store(1)
+		return
+	}
+	s.mapperLanguageCode.Store(0)
 }
 
 func injectAppBoot(html, apiToken string, locale appi18n.Locale) string {
@@ -1122,8 +1144,11 @@ func (s *Server) appSettingsPayload() appSettingsJSON {
 }
 
 func (s *Server) getAppSettings(w http.ResponseWriter, r *http.Request) {
+	s.appSettingsMu.Lock()
+	payload := s.appSettingsPayload()
+	s.appSettingsMu.Unlock()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(s.appSettingsPayload())
+	json.NewEncoder(w).Encode(payload)
 }
 
 func (s *Server) updateAppSettings(w http.ResponseWriter, r *http.Request) {
@@ -1141,6 +1166,9 @@ func (s *Server) updateAppSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	s.appSettingsMu.Lock()
+	defer s.appSettingsMu.Unlock()
+	previousLanguage := s.mapperLanguage()
 	updates := make(map[string]string, 3)
 	if payload.AllowExecCommand != nil {
 		updates["allow_exec_command"] = boolSettingValue(*payload.AllowExecCommand)
@@ -1154,6 +1182,15 @@ func (s *Server) updateAppSettings(w http.ResponseWriter, r *http.Request) {
 	if err := s.store.SetSettings(updates); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if payload.Language != nil && s.appSettingsAfterCommit != nil {
+		s.appSettingsAfterCommit(language)
+	}
+	if payload.Language != nil {
+		s.setMapperLanguage(language)
+		if language != previousLanguage {
+			s.manager.BroadcastAppLanguageChanged(string(language))
+		}
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(s.appSettingsPayload())
@@ -2653,7 +2690,7 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 		writeMu.Lock()
 		defer writeMu.Unlock()
 		ws.SetWriteDeadline(time.Now().Add(10 * time.Second))
-		return ws.WriteJSON(msg)
+		return ws.WriteJSON(localizeMapperServerMsg(s.mapperLanguage(), msg))
 	}
 
 	var currentSess *session.Session

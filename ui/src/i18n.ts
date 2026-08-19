@@ -53,10 +53,9 @@ export function createTranslator(localeValue: unknown): Translator {
   const locale = normalizeLocale(localeValue);
   return (key, values = {}) => {
     const template = catalogs[locale][key] ?? englishCatalog[key] ?? key;
-    return Object.entries(values).reduce(
-      (message, [name, value]) => message.replaceAll(`{${name}}`, String(value)),
-      template as string,
-    );
+    return (template as string).replace(/\{([a-zA-Z0-9_]+)\}/g, (placeholder, name: string) => (
+      Object.prototype.hasOwnProperty.call(values, name) ? String(values[name]) : placeholder
+    ));
   };
 }
 

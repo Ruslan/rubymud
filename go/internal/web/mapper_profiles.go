@@ -3,7 +3,6 @@ package web
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"sort"
 	"strconv"
@@ -11,6 +10,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	appi18n "rubymud/go/internal/i18n"
 	"rubymud/go/internal/mapper"
 	"rubymud/go/internal/storage"
 )
@@ -139,9 +139,10 @@ func mapperProfileRowJSON(row storage.MapperProfile) mapperProfileJSON {
 // listMapperProfiles handles GET /api/mapper-profiles. The compiled-in detectors
 // come first (ordered by key), then the stored rows.
 func (s *Server) listMapperProfiles(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	rows, err := s.store.ListMapperProfiles()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeMapperProfileError(w, http.StatusInternalServerError, locale, err)
 		return
 	}
 	builtins := registeredDetectorEntries()
@@ -190,20 +191,25 @@ func normalizeMapperSpec(name string, raw json.RawMessage) (string, error) {
 
 // createMapperProfile handles POST /api/mapper-profiles.
 func (s *Server) createMapperProfile(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	var body mapperProfileBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperInvalidBody, map[string]any{"detail": err.Error()})
 		return
 	}
 	name := strings.TrimSpace(body.Name)
 	specJSON, err := normalizeMapperSpec(name, body.Spec)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		key := appi18n.MapperProfileValidationFailed
+		if err.Error() == "missing spec" {
+			key = appi18n.MapperProfileMissingSpec
+		}
+		writeMapperTextError(w, http.StatusBadRequest, locale, key, map[string]any{"detail": err.Error()})
 		return
 	}
 	row, err := s.store.CreateMapperProfile(name, specJSON)
 	if err != nil {
-		http.Error(w, err.Error(), mapperProfileWriteStatus(err))
+		writeMapperProfileError(w, mapperProfileWriteStatus(err), locale, err)
 		return
 	}
 	writeJSON(w, mapperProfileRowJSON(row))
@@ -214,32 +220,37 @@ func (s *Server) createMapperProfile(w http.ResponseWriter, r *http.Request) {
 // format a session is currently parsing with must take effect immediately
 // (AGENTS #2), without disturbing that session's tracker.
 func (s *Server) updateMapperProfile(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	id, err := mapperProfileIDParam(r)
 	if err != nil {
-		http.Error(w, "invalid mapper profile id", http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperProfileInvalidID, nil)
 		return
 	}
-	if rejectBuiltinMapperProfile(w, id) {
+	if rejectBuiltinMapperProfile(w, id, locale) {
 		return
 	}
 	var body mapperProfileBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperInvalidBody, map[string]any{"detail": err.Error()})
 		return
 	}
 	name := strings.TrimSpace(body.Name)
 	specJSON, err := normalizeMapperSpec(name, body.Spec)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		key := appi18n.MapperProfileValidationFailed
+		if err.Error() == "missing spec" {
+			key = appi18n.MapperProfileMissingSpec
+		}
+		writeMapperTextError(w, http.StatusBadRequest, locale, key, map[string]any{"detail": err.Error()})
 		return
 	}
 	row, found, err := s.store.UpdateMapperProfile(id, name, specJSON)
 	if err != nil {
-		http.Error(w, err.Error(), mapperProfileWriteStatus(err))
+		writeMapperProfileError(w, mapperProfileWriteStatus(err), locale, err)
 		return
 	}
 	if !found {
-		http.Error(w, "mapper profile not found", http.StatusNotFound)
+		writeMapperTextError(w, http.StatusNotFound, locale, appi18n.MapperProfileNotFound, nil)
 		return
 	}
 	s.reapplyMapperProfile(id)
@@ -251,12 +262,13 @@ func (s *Server) updateMapperProfile(w http.ResponseWriter, r *http.Request) {
 // reports which ones it cleared, so the re-apply afterwards resolves exactly
 // those sessions to the builtin.
 func (s *Server) deleteMapperProfile(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	id, err := mapperProfileIDParam(r)
 	if err != nil {
-		http.Error(w, "invalid mapper profile id", http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperProfileInvalidID, nil)
 		return
 	}
-	if rejectBuiltinMapperProfile(w, id) {
+	if rejectBuiltinMapperProfile(w, id, locale) {
 		return
 	}
 	// The affected session ids come back FROM the delete transaction — see
@@ -264,11 +276,11 @@ func (s *Server) deleteMapperProfile(w http.ResponseWriter, r *http.Request) {
 	// assigned in the window between the two statements.
 	found, affected, err := s.store.DeleteMapperProfile(id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeMapperProfileError(w, http.StatusInternalServerError, locale, err)
 		return
 	}
 	if !found {
-		http.Error(w, "mapper profile not found", http.StatusNotFound)
+		writeMapperTextError(w, http.StatusNotFound, locale, appi18n.MapperProfileNotFound, nil)
 		return
 	}
 	for _, sid := range affected {
@@ -285,13 +297,21 @@ func (s *Server) deleteMapperProfile(w http.ResponseWriter, r *http.Request) {
 // the BACKEND stays the single source of validation truth and the TS side never
 // reimplements a rule.
 func (s *Server) validateMapperProfileSpec(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	var body mapperProfileBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		writeJSON(w, map[string]any{"ok": false, "error": "invalid body: " + err.Error()})
+		writeJSON(w, map[string]any{
+			"ok": false, "error": renderMapperWireText(locale, string(appi18n.MapperInvalidBody), map[string]any{"detail": err.Error()}),
+			"error_code": string(appi18n.MapperInvalidBody), "error_args": map[string]any{"detail": err.Error()}, "error_detail": err.Error(),
+		})
 		return
 	}
 	if _, err := normalizeMapperSpec(strings.TrimSpace(body.Name), body.Spec); err != nil {
-		writeJSON(w, map[string]any{"ok": false, "error": err.Error()})
+		key := appi18n.MapperProfileValidationFailed
+		if err.Error() == "missing spec" {
+			key = appi18n.MapperProfileMissingSpec
+		}
+		writeMapperProfileValidationJSON(w, http.StatusOK, locale, key, err.Error())
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "error": ""})
@@ -307,44 +327,45 @@ type mapperProfileReplayBody struct {
 // canonical MUD output. It is an explicit admin action and performs no writes;
 // in particular it never touches the live detector or mapper tracker.
 func (s *Server) replayMapperProfileSpec(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	var body mapperProfileReplayBody
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperInvalidBody, map[string]any{"detail": err.Error()})
 		return
 	}
 	if body.SessionID <= 0 {
-		http.Error(w, "session not found", http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperProfileSessionNotFound, nil)
 		return
 	}
 	if _, err := s.store.GetSession(body.SessionID); err != nil {
-		http.Error(w, "session not found", http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperProfileSessionNotFound, nil)
 		return
 	}
 	if body.Limit == 0 {
 		body.Limit = mapperReplayDefaultLines
 	}
 	if body.Limit < 1 || body.Limit > mapperReplayMaxLines {
-		http.Error(w, fmt.Sprintf("limit must be between 1 and %d", mapperReplayMaxLines), http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperProfileReplayLimit, map[string]any{"max": mapperReplayMaxLines})
 		return
 	}
 	if len(body.Spec) == 0 {
-		http.Error(w, "missing spec", http.StatusBadRequest)
+		writeMapperProfileValidationJSON(w, http.StatusBadRequest, locale, appi18n.MapperProfileMissingSpec, "missing spec")
 		return
 	}
 	spec, err := mapper.ParseSpecJSON(body.Spec)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeMapperProfileValidationJSON(w, http.StatusBadRequest, locale, appi18n.MapperProfileValidationFailed, err.Error())
 		return
 	}
 	spec.Name = strings.TrimSpace(body.Name)
 	profile, err := mapper.Compile(spec)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeMapperProfileValidationJSON(w, http.StatusBadRequest, locale, appi18n.MapperProfileValidationFailed, err.Error())
 		return
 	}
 	entries, err := s.store.RecentMudLogs(body.SessionID, body.Limit)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeMapperProfileError(w, http.StatusInternalServerError, locale, err)
 		return
 	}
 	lines := make([]mapper.ReplayLine, len(entries))
@@ -364,14 +385,15 @@ func (s *Server) replayMapperProfileSpec(w http.ResponseWriter, r *http.Request)
 // actually ended up parsing with — those differ exactly when a stored profile
 // failed to load, which is the case the user needs to see.
 func (s *Server) getSessionMapperProfile(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	sess, id, err := s.getSession(r)
 	if err != nil {
-		http.Error(w, "invalid session id", http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperInvalidSessionID, nil)
 		return
 	}
 	stored, err := s.store.GetSessionMapperFormat(id)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeMapperProfileError(w, http.StatusInternalServerError, locale, err)
 		return
 	}
 	out := map[string]any{
@@ -395,7 +417,7 @@ func (s *Server) getSessionMapperProfile(w http.ResponseWriter, r *http.Request)
 		out["active_ref"] = activeRef
 		out["active_id"] = sess.MapperProfileRowID()
 		out["active_name"] = activeName
-		out["error"] = warn
+		addMapperProfileWarning(out, locale, warn)
 	}
 	writeJSON(w, out)
 }
@@ -412,9 +434,10 @@ func (s *Server) getSessionMapperProfile(w http.ResponseWriter, r *http.Request)
 // ONLY the detector — the tracker's position, confidence, pending queue and index
 // are untouched.
 func (s *Server) setSessionMapperProfile(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	sess, id, err := s.getSession(r)
 	if err != nil {
-		http.Error(w, "invalid session id", http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperInvalidSessionID, nil)
 		return
 	}
 	var body struct {
@@ -423,7 +446,7 @@ func (s *Server) setSessionMapperProfile(w http.ResponseWriter, r *http.Request)
 		ProfileID *int64 `json:"profile_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperInvalidBody, map[string]any{"detail": err.Error()})
 		return
 	}
 
@@ -437,7 +460,7 @@ func (s *Server) setSessionMapperProfile(w http.ResponseWriter, r *http.Request)
 
 	kind, key, rowID, ok := mapper.ParseFormatRef(ref)
 	if !ok {
-		http.Error(w, fmt.Sprintf("unknown room format reference %q", ref), http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperProfileUnknownRef, map[string]any{"ref": ref})
 		return
 	}
 	// CANONICALIZE before storing. ParseFormatRef is deliberately lenient (it
@@ -455,7 +478,7 @@ func (s *Server) setSessionMapperProfile(w http.ResponseWriter, r *http.Request)
 		// Checking it HERE rather than in the store is what keeps the store free of
 		// any knowledge of the detector registry.
 		if _, found := mapper.LookupDetectorInfo(key); !found {
-			http.Error(w, fmt.Sprintf("room format %q is not compiled into this build", ref), http.StatusBadRequest)
+			writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperProfileNotCompiled, map[string]any{"ref": ref})
 			return
 		}
 	}
@@ -466,15 +489,15 @@ func (s *Server) setSessionMapperProfile(w http.ResponseWriter, r *http.Request)
 	// the FK never caught it anyway; see the store method).
 	sessionFound, refFound, err := s.store.AssignSessionMapperFormat(id, ref, rowID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		writeMapperProfileError(w, http.StatusInternalServerError, locale, err)
 		return
 	}
 	if !sessionFound {
-		http.Error(w, fmt.Sprintf("session %d not found", id), http.StatusNotFound)
+		writeMapperTextError(w, http.StatusNotFound, locale, appi18n.MapperAdminSessionNotFound, map[string]any{"id": id})
 		return
 	}
 	if !refFound {
-		http.Error(w, "mapper profile not found", http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperProfileNotFound, nil)
 		return
 	}
 
@@ -495,7 +518,7 @@ func (s *Server) setSessionMapperProfile(w http.ResponseWriter, r *http.Request)
 		out["live"] = true
 		out["active_ref"] = activeRef
 		out["active_name"] = activeName
-		out["error"] = warn
+		addMapperProfileWarning(out, locale, warn)
 	}
 	writeJSON(w, out)
 }
@@ -523,9 +546,9 @@ func mapperProfileIDParam(r *http.Request) (int64, error) {
 // entry. The builtin is not a row, so id 0 could never match one and the write
 // would 404 anyway — but saying so explicitly states the INTENT (the builtin is
 // read-only by construction) instead of leaning on AUTOINCREMENT never issuing 0.
-func rejectBuiltinMapperProfile(w http.ResponseWriter, id int64) bool {
+func rejectBuiltinMapperProfile(w http.ResponseWriter, id int64, locale appi18n.Locale) bool {
 	if id == builtinMapperProfileID {
-		http.Error(w, "the builtin room format is read-only — make a copy of it instead", http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperProfileBuiltinReadOnly, nil)
 		return true
 	}
 	return false
@@ -545,4 +568,16 @@ func mapperProfileWriteStatus(err error) int {
 	default:
 		return http.StatusInternalServerError
 	}
+}
+
+func writeMapperProfileError(w http.ResponseWriter, status int, locale appi18n.Locale, err error) {
+	key := appi18n.MapperProfileOperationFailed
+	args := map[string]any{"detail": err.Error()}
+	switch {
+	case errors.Is(err, storage.ErrMapperProfileNameRequired):
+		key, args = appi18n.MapperProfileNameRequired, nil
+	case errors.Is(err, storage.ErrMapperProfileNameTaken):
+		key, args = appi18n.MapperProfileNameTaken, nil
+	}
+	writeMapperTextError(w, status, locale, key, args)
 }

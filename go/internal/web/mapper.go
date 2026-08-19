@@ -14,6 +14,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"gorm.io/gorm"
 
+	appi18n "rubymud/go/internal/i18n"
 	"rubymud/go/internal/mapimport"
 	"rubymud/go/internal/mapper"
 	"rubymud/go/internal/session"
@@ -113,18 +114,19 @@ func bcolorToString(v any) *string {
 // in form field "archive". Each upload creates a NEW map set and invalidates
 // all live map-set selectors/panes after it commits.
 func (s *Server) importMapSet(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	if r.ContentLength > maxUploadRequestBytes {
-		writeMapSetJSONError(w, http.StatusRequestEntityTooLarge, "archive request too large")
+		writeMapperJSONError(w, http.StatusRequestEntityTooLarge, locale, appi18n.MapperImportRequestTooLarge, nil, nil)
 		return
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadRequestBytes)
 	if err := r.ParseMultipartForm(maxMultipartMemory); err != nil {
 		var tooLarge *http.MaxBytesError
 		if errors.As(err, &tooLarge) {
-			writeMapSetJSONError(w, http.StatusRequestEntityTooLarge, "archive request too large")
+			writeMapperJSONError(w, http.StatusRequestEntityTooLarge, locale, appi18n.MapperImportRequestTooLarge, nil, nil)
 			return
 		}
-		writeMapSetJSONError(w, http.StatusBadRequest, "invalid multipart form")
+		writeMapperJSONError(w, http.StatusBadRequest, locale, appi18n.MapperImportInvalidMultipart, nil, nil)
 		return
 	}
 	if r.MultipartForm != nil {
@@ -132,12 +134,12 @@ func (s *Server) importMapSet(w http.ResponseWriter, r *http.Request) {
 	}
 	file, header, err := r.FormFile("archive")
 	if err != nil {
-		writeMapSetJSONError(w, http.StatusBadRequest, "missing archive file")
+		writeMapperJSONError(w, http.StatusBadRequest, locale, appi18n.MapperImportMissingArchive, nil, nil)
 		return
 	}
 	defer file.Close()
 	if !strings.EqualFold(filepath.Ext(header.Filename), ".zip") {
-		writeMapSetJSONError(w, http.StatusBadRequest, "map archive must be a .zip file")
+		writeMapperJSONError(w, http.StatusBadRequest, locale, appi18n.MapperImportZipRequired, nil, nil)
 		return
 	}
 
@@ -148,7 +150,7 @@ func (s *Server) importMapSet(w http.ResponseWriter, r *http.Request) {
 		if n > 0 {
 			data = append(data, buf[:n]...)
 			if len(data) > maxUploadBytes {
-				writeMapSetJSONError(w, http.StatusRequestEntityTooLarge, "archive too large")
+				writeMapperJSONError(w, http.StatusRequestEntityTooLarge, locale, appi18n.MapperImportArchiveTooLarge, nil, nil)
 				return
 			}
 		}
@@ -156,7 +158,7 @@ func (s *Server) importMapSet(w http.ResponseWriter, r *http.Request) {
 			break
 		}
 		if rerr != nil {
-			writeMapSetJSONError(w, http.StatusBadRequest, "read archive failed")
+			writeMapperJSONError(w, http.StatusBadRequest, locale, appi18n.MapperImportReadFailed, nil, nil)
 			return
 		}
 	}
@@ -168,18 +170,33 @@ func (s *Server) importMapSet(w http.ResponseWriter, r *http.Request) {
 
 	parsed, err := mapimport.ParseZip(data, name)
 	if err != nil {
-		message := "failed to parse map archive"
+		message := appi18n.Message(locale, appi18n.MapperImportParseFailed, nil)
+		detail := err.Error()
+		var errorArgs map[string]any
 		conflicts := []mapimport.ImportConflict{}
 		truncated := false
 		var validation *mapimport.ValidationError
 		if errors.As(err, &validation) {
-			message = validation.Error()
+			errorArgs = map[string]any{"detail": detail}
+			if locale == appi18n.English {
+				message = renderMapperWireText(locale, string(appi18n.MapperImportParseFailed), errorArgs)
+			}
 			if validation.Summary.Conflicts != nil {
 				conflicts = validation.Summary.Conflicts
 			}
 			truncated = validation.Summary.ConflictsTruncated
 		}
-		writeMapSetJSONErrorWithConflicts(w, http.StatusBadRequest, message, conflicts, truncated)
+		extra := map[string]any{
+			"error": message, "error_code": string(appi18n.MapperImportParseFailed),
+			"error_detail": detail,
+			"conflicts":    conflicts, "conflicts_truncated": truncated,
+		}
+		if errorArgs != nil {
+			extra["error_args"] = errorArgs
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		writeJSON(w, extra)
 		return
 	}
 
@@ -194,7 +211,7 @@ func (s *Server) importMapSet(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := s.store.CreateMapSet(in)
 	if err != nil {
-		writeMapSetJSONError(w, http.StatusInternalServerError, "failed to store map set")
+		writeMapperJSONError(w, http.StatusInternalServerError, locale, appi18n.MapperImportStoreFailed, nil, nil)
 		return
 	}
 
@@ -237,6 +254,7 @@ func (s *Server) listMapSets(w http.ResponseWriter, r *http.Request) {
 // post-commit filesystem cleanup error is reported in the successful response
 // because retrying DELETE cannot resurrect a committed map set.
 func (s *Server) deleteMapSet(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	// Lock ordering is global admin mutex -> per-set topology lock. Session COW
 	// never acquires the global mutex, and only nests source -> newly-created fork
 	// locks, so no cycle can form. Holding this lock means a COW cannot fork a set
@@ -245,7 +263,7 @@ func (s *Server) deleteMapSet(w http.ResponseWriter, r *http.Request) {
 	defer s.mapSetDeleteMu.Unlock()
 	id, err := strconv.ParseInt(chi.URLParam(r, "id"), 10, 64)
 	if err != nil || id <= 0 {
-		writeMapSetJSONError(w, http.StatusBadRequest, "invalid map set id")
+		writeMapSetJSONError(w, http.StatusBadRequest, locale, appi18n.MapperAdminInvalidMapSetID, nil)
 		return
 	}
 	topologyLock := s.store.TopologyLock(id)
@@ -256,19 +274,19 @@ func (s *Server) deleteMapSet(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.store.PreflightMapSetDelete(id); err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			writeMapSetJSONError(w, http.StatusNotFound, "map set not found")
+			writeMapSetJSONError(w, http.StatusNotFound, locale, appi18n.MapperAdminMapSetNotFound, nil)
 			return
 		}
 		if errors.Is(err, storage.ErrMapSetHasForks) {
-			writeMapSetJSONError(w, http.StatusConflict, "delete editable forks first")
+			writeMapSetJSONError(w, http.StatusConflict, locale, appi18n.MapperAdminDeleteForksFirst, nil)
 			return
 		}
-		writeMapSetJSONError(w, http.StatusInternalServerError, "check map set deletion failed")
+		writeMapSetJSONError(w, http.StatusInternalServerError, locale, appi18n.MapperAdminOperationFailed, map[string]any{"operation": "check_delete"})
 		return
 	}
 	staged, err := s.stageMapSetImageDir(id)
 	if err != nil {
-		writeMapSetJSONError(w, http.StatusInternalServerError, "stage room image cleanup failed")
+		writeMapSetJSONError(w, http.StatusInternalServerError, locale, appi18n.MapperAdminOperationFailed, map[string]any{"operation": "stage_images"})
 		return
 	}
 	if s.mapSetDeleteBeforeStoreDelete != nil {
@@ -277,18 +295,18 @@ func (s *Server) deleteMapSet(w http.ResponseWriter, r *http.Request) {
 	affected, err := s.store.DeleteMapSetWithAffectedSessions(id)
 	if err != nil {
 		if rollbackErr := staged.rollback(); rollbackErr != nil {
-			writeMapSetJSONError(w, http.StatusInternalServerError, "restore room image cleanup failed")
+			writeMapSetJSONError(w, http.StatusInternalServerError, locale, appi18n.MapperAdminOperationFailed, map[string]any{"operation": "restore_images"})
 			return
 		}
 		if errors.Is(err, gorm.ErrRecordNotFound) {
-			writeMapSetJSONError(w, http.StatusNotFound, "map set not found")
+			writeMapSetJSONError(w, http.StatusNotFound, locale, appi18n.MapperAdminMapSetNotFound, nil)
 			return
 		}
 		if errors.Is(err, storage.ErrMapSetHasForks) {
-			writeMapSetJSONError(w, http.StatusConflict, "delete editable forks first")
+			writeMapSetJSONError(w, http.StatusConflict, locale, appi18n.MapperAdminDeleteForksFirst, nil)
 			return
 		}
-		writeMapSetJSONError(w, http.StatusInternalServerError, "delete map set failed")
+		writeMapSetJSONError(w, http.StatusInternalServerError, locale, appi18n.MapperAdminOperationFailed, map[string]any{"operation": "delete"})
 		return
 	}
 
@@ -296,23 +314,32 @@ func (s *Server) deleteMapSet(w http.ResponseWriter, r *http.Request) {
 	s.manager.BroadcastMapSetsChanged()
 	response := map[string]any{"deleted": true}
 	if err := staged.finalize(); err != nil {
-		response["image_cleanup_error"] = err.Error()
+		args := map[string]any{"detail": err.Error()}
+		response["image_cleanup_error"] = renderMapperWireText(locale, string(appi18n.MapperAdminImageCleanupFailed), args)
+		response["image_cleanup_error_code"] = string(appi18n.MapperAdminImageCleanupFailed)
+		response["image_cleanup_error_args"] = args
+		response["image_cleanup_error_detail"] = err.Error()
 	}
 	writeJSON(w, response)
 }
 
-func writeMapSetJSONError(w http.ResponseWriter, status int, message string) {
-	writeMapSetJSONErrorWithConflicts(w, status, message, []mapimport.ImportConflict{}, false)
+func writeMapSetJSONError(w http.ResponseWriter, status int, locale appi18n.Locale, key appi18n.Key, args map[string]any) {
+	writeMapSetJSONErrorWithConflicts(w, status, locale, key, args, []mapimport.ImportConflict{}, false)
 }
 
-func writeMapSetJSONErrorWithConflicts(w http.ResponseWriter, status int, message string, conflicts []mapimport.ImportConflict, truncated bool) {
+func writeMapSetJSONErrorWithConflicts(w http.ResponseWriter, status int, locale appi18n.Locale, key appi18n.Key, args map[string]any, conflicts []mapimport.ImportConflict, truncated bool) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	writeJSON(w, map[string]any{
-		"error":               message,
+	out := map[string]any{
+		"error":               renderMapperWireText(locale, string(key), args),
+		"error_code":          string(key),
 		"conflicts":           conflicts,
 		"conflicts_truncated": truncated,
-	})
+	}
+	if len(args) > 0 {
+		out["error_args"] = args
+	}
+	writeJSON(w, out)
 }
 
 // listMapSetZones handles GET /api/map-sets/{id}/zones.
@@ -386,9 +413,10 @@ func (s *Server) listRooms(w http.ResponseWriter, r *http.Request) {
 // knows which set to fetch. The column lives outside SessionRecord (managed via
 // SetActiveMapSetID) so it is surfaced through this dedicated endpoint.
 func (s *Server) getActiveMapSet(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	_, id, err := s.getSession(r)
 	if err != nil {
-		http.Error(w, "invalid session id", http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperInvalidSessionID, nil)
 		return
 	}
 	setID, ok, err := s.store.GetActiveMapSetID(id)
@@ -408,16 +436,17 @@ func (s *Server) getActiveMapSet(w http.ResponseWriter, r *http.Request) {
 // mud_set_active_map_set write: persist the column, then reload the live
 // session's tracker index via ReloadActiveMapSet (AGENTS #2).
 func (s *Server) setActiveMapSet(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	_, id, err := s.getSession(r)
 	if err != nil {
-		http.Error(w, "invalid session id", http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperInvalidSessionID, nil)
 		return
 	}
 	var body struct {
 		MapSetID *int64 `json:"map_set_id"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperInvalidBody, map[string]any{"detail": err.Error()})
 		return
 	}
 	var setID int64
@@ -432,11 +461,11 @@ func (s *Server) setActiveMapSet(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := setErr; err != nil {
 		if errors.Is(err, storage.ErrSessionNotFound) {
-			http.Error(w, fmt.Sprintf("session %d not found", id), http.StatusNotFound)
+			writeMapperTextError(w, http.StatusNotFound, locale, appi18n.MapperAdminSessionNotFound, map[string]any{"id": id})
 			return
 		}
 		if errors.Is(err, storage.ErrMapSetNotFound) {
-			http.Error(w, fmt.Sprintf("map set %d not found", setID), http.StatusBadRequest)
+			writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperAdminMapSetIDNotFound, map[string]any{"id": setID})
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -456,6 +485,7 @@ func (s *Server) setActiveMapSet(w http.ResponseWriter, r *http.Request) {
 // position to UI clients. No-op (200) semantics: if the session is not connected
 // or has no tracker, it reports that in the JSON without failing hard.
 func (s *Server) anchorMapPosition(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	_, id, err := s.getSession(r)
 	if err != nil {
 		http.Error(w, "invalid session id", http.StatusBadRequest)
@@ -479,7 +509,7 @@ func (s *Server) anchorMapPosition(w http.ResponseWriter, r *http.Request) {
 	body.Zone = zone
 	sess, ok := s.manager.GetSession(id)
 	if !ok {
-		writeJSON(w, map[string]any{"ok": false, "reason": "session not connected — no live tracker"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperSessionNotConnected, nil))
 		return
 	}
 	// Session.AnchorMapPosition is the shared anchor path (tracker anchor +
@@ -487,7 +517,7 @@ func (s *Server) anchorMapPosition(w http.ResponseWriter, r *http.Request) {
 	// two cannot drift.
 	anchored, exact := sess.AnchorMapPosition(mapper.Coord{Zone: body.Zone, X: body.X, Y: body.Y, L: body.L})
 	if !anchored {
-		writeJSON(w, map[string]any{"ok": false, "reason": "no active map set for this session"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperNoActiveMapSet, nil))
 		return
 	}
 	writeJSON(w, map[string]any{"ok": true, "exact": exact})
@@ -503,6 +533,7 @@ func (s *Server) anchorMapPosition(w http.ResponseWriter, r *http.Request) {
 // that step and is flagged. Soft-fails (200 with {reachable:false,reason}) when
 // there is no session/tracker/position or the target is a DT — never 500.
 func (s *Server) mapPath(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	_, id, err := s.getSession(r)
 	if err != nil {
 		http.Error(w, "invalid session id", http.StatusBadRequest)
@@ -528,7 +559,7 @@ func (s *Server) mapPath(w http.ResponseWriter, r *http.Request) {
 	body.To.Zone = zone
 	sess, ok := s.manager.GetSession(id)
 	if !ok {
-		writeJSON(w, map[string]any{"reachable": false, "reason": "session not connected — no live tracker"})
+		writeJSON(w, addMapperReason(map[string]any{"reachable": false}, locale, appi18n.MapperSessionNotConnected, nil))
 		return
 	}
 	to := mapper.Coord{Zone: body.To.Zone, X: body.To.X, Y: body.To.Y, L: body.To.L}
@@ -536,29 +567,30 @@ func (s *Server) mapPath(w http.ResponseWriter, r *http.Request) {
 	found := sess.WithMapTracker(func(t *mapper.Tracker) {
 		idx := t.Index()
 		if idx == nil {
-			resp = map[string]any{"reachable": false, "reason": "no active map set for this session"}
+			resp = addMapperReason(map[string]any{"reachable": false}, locale, appi18n.MapperNoActiveMapSet, nil)
 			return
 		}
 		pos := t.Position()
 		if pos.Confidence == mapper.Red || !pos.Valid {
-			resp = map[string]any{"reachable": false, "reason": "position lost — use \"I'm here\" to re-anchor"}
+			resp = addMapperReason(map[string]any{"reachable": false}, locale, appi18n.MapperPositionLost, nil)
 			return
 		}
 		// Clicking the current room: nothing to walk.
 		if pos.Coord == to {
 			resp = map[string]any{
-				"reachable": true, "directions": []string{}, "summary": "already here",
+				"reachable": true, "directions": []string{}, "summary": appi18n.Message(locale, appi18n.MapperAlreadyHere, nil),
 				"here": true, "total_weight": float64(0),
 			}
+			resp["summary_code"] = string(appi18n.MapperAlreadyHere)
 			return
 		}
 		res := idx.FindPath(pos.Coord, func(rm *mapper.IndexRoom) bool {
 			return rm.Zone == to.Zone && rm.X == to.X && rm.Y == to.Y && rm.L == to.L
 		})
-		resp = pathResultJSON(res)
+		resp = pathResultJSONLocale(res, locale)
 	})
 	if !found {
-		writeJSON(w, map[string]any{"reachable": false, "reason": "no active map set for this session"})
+		writeJSON(w, addMapperReason(map[string]any{"reachable": false}, locale, appi18n.MapperNoActiveMapSet, nil))
 		return
 	}
 	writeJSON(w, resp)
@@ -568,6 +600,7 @@ func (s *Server) mapPath(w http.ResponseWriter, r *http.Request) {
 // Unlike mapPath it never returns a semicolon script for the browser to blast at
 // the MUD; Session owns the structured PathResult and sends one confirmed hop.
 func (s *Server) mapWalk(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	_, id, err := s.getSession(r)
 	if err != nil {
 		http.Error(w, "invalid session id", http.StatusBadRequest)
@@ -593,13 +626,14 @@ func (s *Server) mapWalk(w http.ResponseWriter, r *http.Request) {
 	body.To.Zone = zone
 	sess, ok := s.manager.GetSession(id)
 	if !ok {
-		writeJSON(w, map[string]any{"active": false, "reason": "session not connected — no live tracker"})
+		writeJSON(w, localizeMapWalkState(locale, session.MapWalkState{Reason: "session not connected — no live tracker", State: "stopped"}))
 		return
 	}
-	writeJSON(w, sess.StartMapWalk(mapper.Coord{Zone: body.To.Zone, X: body.To.X, Y: body.To.Y, L: body.To.L}))
+	writeJSON(w, localizeMapWalkState(locale, sess.StartMapWalk(mapper.Coord{Zone: body.To.Zone, X: body.To.X, Y: body.To.Y, L: body.To.L})))
 }
 
 func (s *Server) cancelMapWalk(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	_, id, err := s.getSession(r)
 	if err != nil {
 		http.Error(w, "invalid session id", http.StatusBadRequest)
@@ -607,13 +641,14 @@ func (s *Server) cancelMapWalk(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, ok := s.manager.GetSession(id)
 	if !ok {
-		writeJSON(w, map[string]any{"active": false, "reason": "session not connected"})
+		writeJSON(w, localizeMapWalkState(locale, session.MapWalkState{Reason: "session not connected", State: "stopped"}))
 		return
 	}
-	writeJSON(w, sess.CancelMapWalk("cancelled by user"))
+	writeJSON(w, localizeMapWalkState(locale, sess.CancelMapWalk("cancelled by user")))
 }
 
 func (s *Server) resumeMapWalk(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	_, id, err := s.getSession(r)
 	if err != nil {
 		http.Error(w, "invalid session id", http.StatusBadRequest)
@@ -621,10 +656,10 @@ func (s *Server) resumeMapWalk(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, ok := s.manager.GetSession(id)
 	if !ok {
-		writeJSON(w, map[string]any{"active": false, "reason": "session not connected"})
+		writeJSON(w, localizeMapWalkState(locale, session.MapWalkState{Reason: "session not connected", State: "stopped"}))
 		return
 	}
-	writeJSON(w, sess.ResumeMapWalk())
+	writeJSON(w, localizeMapWalkState(locale, sess.ResumeMapWalk()))
 }
 
 // mapCellPatch handles POST /api/sessions/{sessionID}/map-cell-patch with body
@@ -638,6 +673,7 @@ func (s *Server) resumeMapWalk(w http.ResponseWriter, r *http.Request) {
 // 500. Directions are canonical upper-case letters ("N".."D"); unknown tokens are
 // ignored by the store.
 func (s *Server) mapCellPatch(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	_, id, err := s.getSession(r)
 	if err != nil {
 		http.Error(w, "invalid session id", http.StatusBadRequest)
@@ -668,7 +704,7 @@ func (s *Server) mapCellPatch(w http.ResponseWriter, r *http.Request) {
 	// fails here just as before.
 	sess, ok := s.manager.GetSession(id)
 	if !ok {
-		writeJSON(w, map[string]any{"ok": false, "reason": "session not connected — no live tracker"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperSessionNotConnected, nil))
 		return
 	}
 	op := storage.TopologyOp{
@@ -683,14 +719,14 @@ func (s *Server) mapCellPatch(w http.ResponseWriter, r *http.Request) {
 	res, err := sess.WriteTopology(op)
 	if err != nil {
 		if err == session.ErrNoActiveMapSet {
-			writeJSON(w, map[string]any{"ok": false, "reason": "no active map set for this session"})
+			writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperNoActiveMapSet, nil))
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if !res.Applied {
-		writeJSON(w, map[string]any{"ok": false, "reason": "room not found in the active map set"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperRoomNotFound, nil))
 		return
 	}
 	out := map[string]any{"ok": true}
@@ -790,6 +826,7 @@ func (s *Server) mapLiveRoom(w http.ResponseWriter, r *http.Request) {
 // automatic upgrade. That anchor also flushes the (already-verified-empty) pending
 // queue. Never 4xx/5xx except a malformed body or a real storage error.
 func (s *Server) mapRecordRoom(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	_, id, err := s.getSession(r)
 	if err != nil {
 		http.Error(w, "invalid session id", http.StatusBadRequest)
@@ -810,7 +847,7 @@ func (s *Server) mapRecordRoom(w http.ResponseWriter, r *http.Request) {
 
 	sess, ok := s.manager.GetSession(id)
 	if !ok {
-		writeJSON(w, recordRefusal("session not connected — no live tracker"))
+		writeJSON(w, recordRefusalLocale(locale, appi18n.MapperSessionNotConnected, nil))
 		return
 	}
 	// ONE coherent snapshot of (live room, position, occupancy, pending) under a
@@ -819,42 +856,33 @@ func (s *Server) mapRecordRoom(w http.ResponseWriter, r *http.Request) {
 	// the NEW position — exactly the write that corrupts a cell.
 	st := sess.LiveRecordState()
 	if !st.HaveTracker || !st.HaveIndex {
-		writeJSON(w, recordRefusal("no active map set for this session"))
+		writeJSON(w, recordRefusalLocale(locale, appi18n.MapperNoActiveMapSet, nil))
 		return
 	}
 	if !st.RoomSeen {
-		writeJSON(w, recordRefusal("no live room seen yet — walk into the room (or look) first"))
+		writeJSON(w, recordRefusalLocale(locale, appi18n.MapperRecordNoLiveRoom, nil))
 		return
 	}
 	ev := st.Room
 	pos := st.Position
 	if !pos.Valid {
-		writeJSON(w, recordRefusal("position unknown — use \"I'm here\" to re-anchor first"))
+		writeJSON(w, recordRefusalLocale(locale, appi18n.MapperRecordPositionUnknown, nil))
 		return
 	}
 	if pos.Confidence == mapper.Red {
-		writeJSON(w, recordRefusal("position lost (🔴) — the live room describes another cell; "+
-			"use \"I'm here\" first"))
+		writeJSON(w, recordRefusalLocale(locale, appi18n.MapperRecordPositionLost, nil))
 		return
 	}
 	if !pos.EventDescribesCell {
-		writeJSON(w, recordRefusal("the live room does not match this cell "+
-			"(position is held by dead reckoning) — use \"I'm here\" first"))
+		writeJSON(w, recordRefusalLocale(locale, appi18n.MapperRecordCellMismatch, nil))
 		return
 	}
 	if ev.Hint == "" {
-		writeJSON(w, recordRefusal("the latest room block has no name "+
-			"(corridor or exits only) — recording would erase the name and description"))
+		writeJSON(w, recordRefusalLocale(locale, appi18n.MapperRecordNamelessRoom, nil))
 		return
 	}
 	if st.Pending > 0 {
-		stepWord := "steps"
-		if st.Pending == 1 {
-			stepWord = "step"
-		}
-		writeJSON(w, recordRefusal(fmt.Sprintf(
-			"movement in progress (%d queued %s) — recording would clear the queue; wait until it finishes",
-			st.Pending, stepWord)))
+		writeJSON(w, recordRefusalLocale(locale, appi18n.MapperRecordMovementInProgress, map[string]any{"count": st.Pending}))
 		return
 	}
 	target := pos.Coord
@@ -883,8 +911,9 @@ func (s *Server) mapRecordRoom(w http.ResponseWriter, r *http.Request) {
 			want.L = *body.L
 		}
 		if want != target {
-			writeJSON(w, recordRefusal("can only record the cell you are standing in "+
-				fmt.Sprintf("(you are at {%s %d,%d,%d})", target.Zone, target.X, target.Y, target.L)))
+			writeJSON(w, recordRefusalLocale(locale, appi18n.MapperRecordWrongCell, map[string]any{
+				"coord": fmt.Sprintf("{%s %d,%d,%d}", target.Zone, target.X, target.Y, target.L),
+			}))
 			return
 		}
 	}
@@ -900,14 +929,14 @@ func (s *Server) mapRecordRoom(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if err == session.ErrNoActiveMapSet {
-			writeJSON(w, recordRefusal("no active map set for this session"))
+			writeJSON(w, recordRefusalLocale(locale, appi18n.MapperNoActiveMapSet, nil))
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if !res.Applied {
-		writeJSON(w, recordRefusal("the write did not apply to the active map set"))
+		writeJSON(w, recordRefusalLocale(locale, appi18n.MapperRecordWriteNotApplied, nil))
 		return
 	}
 
@@ -986,12 +1015,6 @@ func recordTouches(sess *session.Session, target mapper.Coord) []map[string]any 
 	return out
 }
 
-// recordRefusal is the shared soft-fail body for map-record-room: HTTP 200 with
-// applied:false plus a human reason the UI shows verbatim.
-func recordRefusal(reason string) map[string]any {
-	return map[string]any{"applied": false, "created": false, "updated": false, "reason": reason}
-}
-
 // mapMarkEdge handles POST /api/sessions/{sessionID}/map-mark-edge with body
 // {zone,x,y,l,dir,mark} — the write behind the map pane's EDGE EDITOR, the popup
 // that opens on the boundary between two cells and shows both directed halves of
@@ -1011,6 +1034,7 @@ func recordRefusal(reason string) map[string]any {
 // Same soft-fail contract as the other map writes: 200 with {ok:false,reason},
 // never 4xx/5xx for a domain refusal.
 func (s *Server) mapMarkEdge(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	_, id, err := s.getSession(r)
 	if err != nil {
 		http.Error(w, "invalid session id", http.StatusBadRequest)
@@ -1036,17 +1060,17 @@ func (s *Server) mapMarkEdge(w http.ResponseWriter, r *http.Request) {
 	body.Zone = zone
 	dir := strings.ToUpper(strings.TrimSpace(body.Dir))
 	if !isCanonicalDir(dir) {
-		writeJSON(w, map[string]any{"ok": false, "reason": "bad direction"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperBadDirection, nil))
 		return
 	}
 	kind, ok := manualMarkKind(body.Mark)
 	if !ok {
-		writeJSON(w, map[string]any{"ok": false, "reason": "bad mark"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperBadMark, nil))
 		return
 	}
 	sess, ok := s.manager.GetSession(id)
 	if !ok {
-		writeJSON(w, map[string]any{"ok": false, "reason": "session not connected — no live tracker"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperSessionNotConnected, nil))
 		return
 	}
 	res, err := sess.WriteTopology(storage.TopologyOp{
@@ -1054,15 +1078,14 @@ func (s *Server) mapMarkEdge(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if err == session.ErrNoActiveMapSet {
-			writeJSON(w, map[string]any{"ok": false, "reason": "no active map set for this session"})
+			writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperNoActiveMapSet, nil))
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if !res.Applied {
-		writeJSON(w, map[string]any{"ok": false,
-			"reason": "a hand-drawn edge needs a room on BOTH sides of the boundary"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperEdgeNeedsRooms, nil))
 		return
 	}
 	out := map[string]any{"ok": true}
@@ -1089,6 +1112,7 @@ func (s *Server) mapMarkEdge(w http.ResponseWriter, r *http.Request) {
 //
 // Same soft-fail contract as the other map writes: 200 with {ok:false,reason}.
 func (s *Server) mapEdgeAttrs(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	_, id, err := s.getSession(r)
 	if err != nil {
 		http.Error(w, "invalid session id", http.StatusBadRequest)
@@ -1134,7 +1158,7 @@ func (s *Server) mapEdgeAttrs(w http.ResponseWriter, r *http.Request) {
 		seam = &storage.SeamSelector{TargetZone: targetZone, TargetTag: body.Seam.TargetTag, Command: *body.Seam.Command, Order: body.Seam.Order}
 	}
 	if strings.TrimSpace(body.Zone) == "" || (dir == "" && seam == nil) || (dir != "" && body.Seam != nil) || (dir != "" && !isCanonicalDir(dir)) || (seam != nil && !seam.Valid()) || (body.Seam != nil && seam == nil) {
-		writeJSON(w, map[string]any{"ok": false, "reason": "provide exactly one valid direction or seam selector"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperEdgeSelectorRequired, nil))
 		return
 	}
 	patch := storage.EdgeAttrPatch{
@@ -1142,20 +1166,20 @@ func (s *Server) mapEdgeAttrs(w http.ResponseWriter, r *http.Request) {
 		OpenCmd: trimmedPtr(body.OpenCmd), NoRoute: body.NoRoute,
 	}
 	if patch.Empty() {
-		writeJSON(w, map[string]any{"ok": false, "reason": "nothing to set"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperEdgeNothingToSet, nil))
 		return
 	}
 	if err := patch.Validate(); err != nil {
-		writeJSON(w, map[string]any{"ok": false, "reason": err.Error()})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperEdgeWeightPositive, nil))
 		return
 	}
-	if reason := edgeCommandsRefusal(patch); reason != "" {
-		writeJSON(w, map[string]any{"ok": false, "reason": reason})
+	if args, refused := edgeCommandsRefusalArgs(patch); refused {
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperEdgeMovementCommand, args))
 		return
 	}
 	sess, ok := s.manager.GetSession(id)
 	if !ok {
-		writeJSON(w, map[string]any{"ok": false, "reason": "session not connected — no live tracker"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperSessionNotConnected, nil))
 		return
 	}
 	res, err := sess.WriteTopology(storage.TopologyOp{
@@ -1164,15 +1188,14 @@ func (s *Server) mapEdgeAttrs(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		if err == session.ErrNoActiveMapSet {
-			writeJSON(w, map[string]any{"ok": false, "reason": "no active map set for this session"})
+			writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperNoActiveMapSet, nil))
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if !res.Applied {
-		writeJSON(w, map[string]any{"ok": false,
-			"reason": "the directed passage is missing or the selected seam is ambiguous"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperEdgePassageMissing, nil))
 		return
 	}
 	out := map[string]any{"ok": true}
@@ -1186,6 +1209,7 @@ func (s *Server) mapEdgeAttrs(w http.ResponseWriter, r *http.Request) {
 // shares the session topology path with room and edge edits, so frozen-set COW,
 // undo, tracker reload, and the single rooms_changed broadcast stay uniform.
 func (s *Server) mapPortal(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	if !validateMCPAdminOrigin(r) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
@@ -1234,11 +1258,13 @@ func (s *Server) mapPortal(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			err = fmt.Errorf("multiple JSON values")
 		}
-		writeJSON(w, map[string]any{"ok": false, "reason": "invalid body: " + err.Error()})
+		out := mapperReasonBody(locale, false, appi18n.MapperInvalidBody, map[string]any{"detail": err.Error()})
+		out["reason_detail"] = err.Error()
+		writeJSON(w, out)
 		return
 	}
 	if b.Zone == nil || b.X == nil || b.Y == nil || b.L == nil {
-		writeJSON(w, map[string]any{"ok": false, "reason": "zone,x,y,l are required"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperPortalSourceRequired, nil))
 		return
 	}
 	fromZone, zerr := storage.NormalizeZoneName(*b.Zone)
@@ -1249,22 +1275,22 @@ func (s *Server) mapPortal(w http.ResponseWriter, r *http.Request) {
 	from := storage.EdgeCell{Zone: fromZone, X: *b.X, Y: *b.Y, L: *b.L}
 	attrs := storage.EdgeAttrPatch{Weight: b.Weight, Phrase: trimmedPtr(b.Phrase), Door: b.Door, Locked: b.Locked, OpenCmd: trimmedPtr(b.OpenCmd), NoRoute: b.NoRoute}
 	if err := attrs.Validate(); err != nil {
-		writeJSON(w, map[string]any{"ok": false, "reason": err.Error()})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperEdgeWeightPositive, nil))
 		return
 	}
-	if reason := edgeCommandsRefusal(attrs); reason != "" {
-		writeJSON(w, map[string]any{"ok": false, "reason": reason})
+	if args, refused := edgeCommandsRefusalArgs(attrs); refused {
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperEdgeMovementCommand, args))
 		return
 	}
 	var op storage.TopologyOp
 	switch r.Method {
 	case http.MethodPost:
 		if b.Order != nil {
-			writeJSON(w, map[string]any{"ok": false, "reason": "order is not allowed when creating a portal"})
+			writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperPortalOrderCreateForbidden, nil))
 			return
 		}
 		if b.Target == nil || b.Target.Zone == nil || b.Target.X == nil || b.Target.Y == nil || b.Target.L == nil || b.Command == nil {
-			writeJSON(w, map[string]any{"ok": false, "reason": "target zone,x,y,l and command are required"})
+			writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperPortalTargetCommandRequired, nil))
 			return
 		}
 		targetZone, zerr := storage.NormalizeZoneName(*b.Target.Zone)
@@ -1276,13 +1302,13 @@ func (s *Server) mapPortal(w http.ResponseWriter, r *http.Request) {
 			Portal: &storage.PortalTarget{Zone: targetZone, X: *b.Target.X, Y: *b.Target.Y, L: *b.Target.L}, PortalCommand: *b.Command, PortalAttrs: attrs}
 	case http.MethodPatch:
 		if b.Order == nil || *b.Order < 0 {
-			writeJSON(w, map[string]any{"ok": false, "reason": "non-negative portal order is required"})
+			writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperPortalOrderRequired, nil))
 			return
 		}
 		patch := storage.PortalPatch{Command: b.Command, Attrs: attrs}
 		if b.Target != nil {
 			if b.Target.Zone == nil || b.Target.X == nil || b.Target.Y == nil || b.Target.L == nil {
-				writeJSON(w, map[string]any{"ok": false, "reason": "target requires zone,x,y,l"})
+				writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperPortalTargetRequired, nil))
 				return
 			}
 			targetZone, zerr := storage.NormalizeZoneName(*b.Target.Zone)
@@ -1295,11 +1321,11 @@ func (s *Server) mapPortal(w http.ResponseWriter, r *http.Request) {
 		op = storage.TopologyOp{Kind: storage.TopoUpdatePortal, Zone: from.Zone, X: from.X, Y: from.Y, L: from.L, PortalSelector: &storage.PortalSelector{Order: *b.Order}, PortalPatch: patch}
 	case http.MethodDelete:
 		if b.Order == nil || *b.Order < 0 {
-			writeJSON(w, map[string]any{"ok": false, "reason": "non-negative portal order is required"})
+			writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperPortalOrderRequired, nil))
 			return
 		}
 		if b.Target != nil || b.Command != nil || !attrs.Empty() {
-			writeJSON(w, map[string]any{"ok": false, "reason": "delete accepts only source coordinates and order"})
+			writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperPortalDeleteFieldsForbidden, nil))
 			return
 		}
 		op = storage.TopologyOp{Kind: storage.TopoDeletePortal, Zone: from.Zone, X: from.X, Y: from.Y, L: from.L, PortalSelector: &storage.PortalSelector{Order: *b.Order}}
@@ -1309,20 +1335,22 @@ func (s *Server) mapPortal(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, ok := s.manager.GetSession(id)
 	if !ok {
-		writeJSON(w, map[string]any{"ok": false, "reason": "session not connected — no live tracker"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperSessionNotConnected, nil))
 		return
 	}
 	res, err := sess.WriteTopology(op)
 	if err != nil {
 		if err == session.ErrNoActiveMapSet {
-			writeJSON(w, map[string]any{"ok": false, "reason": "no active map set for this session"})
+			writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperNoActiveMapSet, nil))
 			return
 		}
-		writeJSON(w, map[string]any{"ok": false, "reason": err.Error()})
+		out := mapperReasonBody(locale, false, appi18n.MapperTopologyWriteFailed, map[string]any{"detail": err.Error()})
+		out["reason_detail"] = err.Error()
+		writeJSON(w, out)
 		return
 	}
 	if !res.Applied {
-		writeJSON(w, map[string]any{"ok": false, "reason": "source, target, or selected portal occurrence was not found"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperPortalNotFound, nil))
 		return
 	}
 	out := map[string]any{"ok": true, "active_map_set": res.SetID}
@@ -1342,6 +1370,7 @@ func (s *Server) mapPortal(w http.ResponseWriter, r *http.Request) {
 // apply compares the preview's revision in the same transaction that changes the
 // rooms, edges and annotations. Rename is simply all source rooms moved at once.
 func (s *Server) mapZoneMove(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	if !validateMCPAdminOrigin(r) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
@@ -1375,31 +1404,33 @@ func (s *Server) mapZoneMove(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			err = fmt.Errorf("multiple JSON values")
 		}
-		writeJSON(w, map[string]any{"ok": false, "reason": "invalid body: " + err.Error()})
+		out := mapperReasonBody(locale, false, appi18n.MapperInvalidBody, map[string]any{"detail": err.Error()})
+		out["reason_detail"] = err.Error()
+		writeJSON(w, out)
 		return
 	}
 	if b.SourceZone == nil || b.TargetZone == nil {
-		writeJSON(w, map[string]any{"ok": false, "reason": "source_zone and target_zone are required"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperZoneSourceTargetRequired, nil))
 		return
 	}
 	in := storage.ZoneMoveInput{SourceZone: *b.SourceZone, TargetZone: *b.TargetZone}
 	action := strings.TrimPrefix(r.URL.Path, fmt.Sprintf("/api/sessions/%d/", sid))
 	if strings.HasPrefix(action, "map-zones/rename") {
 		if b.Rooms != nil {
-			writeJSON(w, map[string]any{"ok": false, "reason": "rename selects the complete source zone server-side"})
+			writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperZoneRenameAllRooms, nil))
 			return
 		}
 		in.AllSource = true
 	} else {
 		if b.Rooms == nil {
-			writeJSON(w, map[string]any{"ok": false, "reason": "rooms is required for a partial move"})
+			writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperZoneRoomsRequired, nil))
 			return
 		}
 		in.Rooms = *b.Rooms
 	}
 	in, err = storage.NormalizeZoneMove(in)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperZoneMoveFailed, map[string]any{"detail": err.Error()})
 		return
 	}
 	setID, ok, err := s.store.GetActiveMapSetID(sid)
@@ -1408,39 +1439,43 @@ func (s *Server) mapZoneMove(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !ok {
-		writeJSON(w, map[string]any{"ok": false, "reason": "no active map set for this session"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperNoActiveMapSet, nil))
 		return
 	}
 	if action == "map-zones/preview" || strings.HasSuffix(action, "/preview") {
 		report, err := s.store.PreviewZoneMove(setID, in)
 		if err != nil {
-			writeJSON(w, map[string]any{"ok": false, "reason": err.Error()})
+			out := mapperReasonBody(locale, false, appi18n.MapperZoneMoveFailed, map[string]any{"detail": err.Error()})
+			out["reason_detail"] = err.Error()
+			writeJSON(w, out)
 			return
 		}
 		writeJSON(w, map[string]any{"ok": true, "active_map_set": setID, "preview": report})
 		return
 	}
 	if b.ExpectedRevision == nil {
-		writeJSON(w, map[string]any{"ok": false, "reason": "expected_revision is required for apply"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperZoneExpectedRevision, nil))
 		return
 	}
 	in.ExpectedRevision = *b.ExpectedRevision
 	sess, ok := s.manager.GetSession(sid)
 	if !ok {
-		writeJSON(w, map[string]any{"ok": false, "reason": "session not connected — no live tracker"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperSessionNotConnected, nil))
 		return
 	}
 	res, err := sess.WriteTopology(storage.TopologyOp{Kind: storage.TopoMoveRooms, ZoneMove: &in})
 	if err != nil {
 		if err == session.ErrNoActiveMapSet {
-			writeJSON(w, map[string]any{"ok": false, "reason": "no active map set for this session"})
+			writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperNoActiveMapSet, nil))
 			return
 		}
-		writeJSON(w, map[string]any{"ok": false, "reason": err.Error()})
+		out := mapperReasonBody(locale, false, appi18n.MapperZoneMoveFailed, map[string]any{"detail": err.Error()})
+		out["reason_detail"] = err.Error()
+		writeJSON(w, out)
 		return
 	}
 	if !res.Applied {
-		writeJSON(w, map[string]any{"ok": false, "reason": "zone move did not apply"})
+		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperZoneMoveNotApplied, nil))
 		return
 	}
 	if !res.Forked {
@@ -1510,6 +1545,32 @@ func edgeCommandsRefusal(patch storage.EdgeAttrPatch) string {
 	return ""
 }
 
+// edgeCommandsRefusalArgs is the stable REST counterpart of the historical
+// English helper above. MCP retains the old string contract; REST renders the
+// same refusal from field/value/direction without translating the MUD command.
+func edgeCommandsRefusalArgs(patch storage.EdgeAttrPatch) (map[string]any, bool) {
+	checks := []struct {
+		field string
+		value *string
+	}{
+		{"traversal_phrase", patch.Phrase},
+		{"opening_command", patch.OpenCmd},
+	}
+	for _, check := range checks {
+		if check.value == nil {
+			continue
+		}
+		value := strings.TrimSpace(*check.value)
+		if value == "" {
+			continue
+		}
+		if direction, movement := mapper.MoveDir(value); movement {
+			return map[string]any{"field": check.field, "value": value, "direction": direction}, true
+		}
+	}
+	return nil, false
+}
+
 // mapUndo handles POST /api/sessions/{sessionID}/map-undo — a thin REST wrapper
 // over Session.UndoTopology so a map edit made from the browser is reversible from
 // the browser (undo was MCP-only until now, and the autorecord endpoint is explicitly
@@ -1523,6 +1584,7 @@ func edgeCommandsRefusal(patch storage.EdgeAttrPatch) string {
 // re-anchor to the same coord: it lands 🟡 "anchored to unmapped cell", which is
 // exactly the state the player was in before the record.
 func (s *Server) mapUndo(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
 	_, id, err := s.getSession(r)
 	if err != nil {
 		http.Error(w, "invalid session id", http.StatusBadRequest)
@@ -1530,7 +1592,7 @@ func (s *Server) mapUndo(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, ok := s.manager.GetSession(id)
 	if !ok {
-		writeJSON(w, map[string]any{"applied": false, "reason": "session not connected — no live tracker"})
+		writeJSON(w, addMapperReason(map[string]any{"applied": false}, locale, appi18n.MapperSessionNotConnected, nil))
 		return
 	}
 	// Capture the position BEFORE the undo: the undo may delete the cell we are
@@ -1541,15 +1603,15 @@ func (s *Server) mapUndo(w http.ResponseWriter, r *http.Request) {
 	res, entry, err := sess.UndoTopology()
 	if err != nil {
 		if err == session.ErrNoActiveMapSet {
-			writeJSON(w, map[string]any{"applied": false, "reason": "no active map set for this session"})
+			writeJSON(w, addMapperReason(map[string]any{"applied": false}, locale, appi18n.MapperNoActiveMapSet, nil))
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	if res.NothingToUndo {
-		writeJSON(w, map[string]any{"applied": false, "nothing_to_undo": true, "set_id": res.SetID,
-			"reason": "nothing to undo on this map set"})
+		writeJSON(w, addMapperReason(map[string]any{"applied": false, "nothing_to_undo": true, "set_id": res.SetID},
+			locale, appi18n.MapperNothingToUndo, nil))
 		return
 	}
 	out := map[string]any{"applied": res.Applied, "nothing_to_undo": false,
@@ -1557,10 +1619,12 @@ func (s *Server) mapUndo(w http.ResponseWriter, r *http.Request) {
 	if zone, x, y, l, ok := entry.PrimaryCell(); ok {
 		out["zone"], out["x"], out["y"], out["l"] = zone, x, y, l
 		if !res.Applied {
-			out["reason"] = fmt.Sprintf("target cell {%s %d,%d,%d} no longer exists", zone, x, y, l)
+			addMapperReason(out, locale, appi18n.MapperUndoTargetMissing, map[string]any{
+				"coord": fmt.Sprintf("{%s %d,%d,%d}", zone, x, y, l),
+			})
 		}
 	} else if !res.Applied {
-		out["reason"] = "the recorded before-state could not be restored"
+		addMapperReason(out, locale, appi18n.MapperUndoRestoreFailed, nil)
 	}
 	if res.Applied && undoDeletedCellAt(entry, posBefore) {
 		// The cell under our feet was removed by the undo (an undone CREATE). Put
@@ -1624,15 +1688,29 @@ func normalizeDirs(in []string) []string {
 // route like any other. `door_at` is still reported, because the UI shows WHERE the
 // doors are, but it is no longer a place to stop.
 func pathResultJSON(res mapper.PathResult) map[string]any {
+	return pathResultJSONLocale(res, appi18n.English)
+}
+
+func pathResultJSONLocale(res mapper.PathResult, locale appi18n.Locale) map[string]any {
 	if res.DTTarget {
-		return map[string]any{"reachable": false, "dt": true, "reason": "target is a death trap"}
+		return addMapperReason(map[string]any{"reachable": false, "dt": true}, locale, appi18n.MapperTargetDeathTrap, nil)
 	}
 	if !res.Reachable {
-		reason := res.Reason
-		if reason == "" {
-			reason = "no route to target in the active set"
+		key := appi18n.MapperRouteNotFound
+		if res.VetoedOnly {
+			key = appi18n.MapperRouteVetoedOnly
 		}
-		out := map[string]any{"reachable": false, "reason": reason}
+		var args map[string]any
+		if res.Reason != "" && !res.VetoedOnly {
+			args = map[string]any{"detail": res.Reason}
+		}
+		out := addMapperReason(map[string]any{"reachable": false}, locale, key, args)
+		// Preserve the established English reason byte-for-byte. Non-English
+		// callers get authored catalog copy and the raw diagnostic separately;
+		// system details are never machine-translated.
+		if locale != appi18n.English && res.Reason != "" && !res.VetoedOnly {
+			out["reason_detail"] = res.Reason
+		}
 		if res.VetoedOnly {
 			// The map is NOT disconnected: the only ways through carry the player's own
 			// "do not route me here" marks. Saying so is the difference between the
@@ -1674,31 +1752,15 @@ func pathResultJSON(res mapper.PathResult) map[string]any {
 			locked++
 		}
 	}
-	// The pane prints this summary verbatim, so keep it in the mapper UI language.
-	stepWord := "steps"
-	if len(res.Steps) == 1 {
-		stepWord = "step"
-	}
-	summary := fmt.Sprintf("%d %s", len(res.Steps), stepWord)
-	if seams > 0 {
-		summary += fmt.Sprintf(", seams: %d", seams)
-	}
-	if doors > 0 {
-		summary += fmt.Sprintf(", doors: %d (opening included in route)", doors)
-	}
-	if locked > 0 {
-		summary += fmt.Sprintf(", ⚠ locked by default: %d", locked)
-	}
-	if phrases > 0 {
-		summary += fmt.Sprintf(", phrase passages: %d", phrases)
-	}
-	if dt > 0 {
-		summary += fmt.Sprintf(", ⚠ death traps on route: %d", dt)
-	}
+	// The pane prints this summary verbatim. The stable code and counts also let
+	// newer clients render it locally without parsing prose.
+	summary, summaryArgs := localizedRouteSummary(locale, res, seams, doors, locked, phrases, dt)
 	out := map[string]any{
 		"reachable":    true,
 		"directions":   dirs,
 		"summary":      summary,
+		"summary_code": string(appi18n.MapperRouteSummary),
+		"summary_args": summaryArgs,
 		"total_weight": res.TotalWeight,
 	}
 	if seams > 0 {

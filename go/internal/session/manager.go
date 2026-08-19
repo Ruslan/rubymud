@@ -87,6 +87,23 @@ func (m *Manager) BroadcastMapSetsChanged() {
 	}
 }
 
+// BroadcastAppLanguageChanged emits one lightweight notification per active
+// session. Session fanout then delivers that single state change to each tab;
+// no VM, parser, tracker, or transport state is rebuilt.
+func (m *Manager) BroadcastAppLanguageChanged(locale string) {
+	m.mu.Lock()
+	sessions := make([]*Session, 0, len(m.sessions))
+	for _, sess := range m.sessions {
+		if !sess.IsClosed() {
+			sessions = append(sessions, sess)
+		}
+	}
+	m.mu.Unlock()
+	for _, sess := range sessions {
+		sess.BroadcastServerMsg(ServerMsg{Type: "app_language_changed", AppLanguage: locale})
+	}
+}
+
 // BroadcastRoomKnowledgeChanged invalidates only the lazy knowledge view for
 // one logical room. It deliberately does not reload mapper indexes or rooms:
 // inhabitants are a non-topological overlay, and a full zone/tracker refresh

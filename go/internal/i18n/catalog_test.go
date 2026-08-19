@@ -43,6 +43,9 @@ func TestCatalogsAreCompleteAndInterpolate(t *testing.T) {
 	if got := Message(Russian, MapperRecordFailed, map[string]string{"reason": "нет позиции"}); got != "Не удалось записать комнату: нет позиции" {
 		t.Fatalf("interpolated Russian message = %q", got)
 	}
+	if got := Message(English, MapperRecordFailed, map[string]string{"reason": "{reason} is game data"}); got != "Failed to record room: {reason} is game data" {
+		t.Fatalf("interpolation processed inserted game data again = %q", got)
+	}
 	if got := Message(Locale("de"), MapperNoPosition, nil); got != "no position" {
 		t.Fatalf("unsupported locale fallback = %q, want English", got)
 	}
@@ -69,6 +72,25 @@ func TestParseLocaleOnlyAcceptsSupportedStoredValues(t *testing.T) {
 		if _, ok := ParseLocale(input); ok {
 			t.Errorf("ParseLocale(%q) unexpectedly accepted", input)
 		}
+	}
+}
+
+func TestRussianPluralForms(t *testing.T) {
+	tests := []struct {
+		count int
+		want  PluralForm
+	}{
+		{0, PluralMany}, {1, PluralOne}, {2, PluralFew}, {4, PluralFew},
+		{5, PluralMany}, {11, PluralMany}, {12, PluralMany}, {14, PluralMany},
+		{21, PluralOne}, {22, PluralFew}, {25, PluralMany},
+	}
+	for _, test := range tests {
+		if got := Plural(Russian, test.count); got != test.want {
+			t.Errorf("Plural(ru, %d) = %v, want %v", test.count, got, test.want)
+		}
+	}
+	if Plural(English, 1) != PluralOne || Plural(English, 2) != PluralMany {
+		t.Fatal("English plural selection is not singular-only")
 	}
 }
 

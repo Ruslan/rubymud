@@ -47,15 +47,18 @@ type mapWalkJob struct {
 
 // MapWalkState is the REST-facing progress snapshot for the single active walk.
 type MapWalkState struct {
-	Active    bool   `json:"active"`
-	Epoch     int64  `json:"epoch"`
-	JobID     uint64 `json:"job_id,omitempty"`
-	Current   int    `json:"current"`
-	Total     int    `json:"total"`
-	Reason    string `json:"reason,omitempty"`
-	State     string `json:"state"`
-	CanResume bool   `json:"can_resume"`
-	Revision  uint64 `json:"revision"`
+	Active       bool           `json:"active"`
+	Epoch        int64          `json:"epoch"`
+	JobID        uint64         `json:"job_id,omitempty"`
+	Current      int            `json:"current"`
+	Total        int            `json:"total"`
+	Reason       string         `json:"reason,omitempty"`
+	ReasonCode   string         `json:"reason_code,omitempty"`
+	ReasonArgs   map[string]any `json:"reason_args,omitempty"`
+	ReasonDetail string         `json:"reason_detail,omitempty"`
+	State        string         `json:"state"`
+	CanResume    bool           `json:"can_resume"`
+	Revision     uint64         `json:"revision"`
 }
 
 func (s *Session) mapWalkStateLocked(reason string) MapWalkState {

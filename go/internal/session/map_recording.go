@@ -77,14 +77,20 @@ type MapRecordingConflictSnapshot struct {
 	Observed     mapper.RoomEvent `json:"observed"`
 	PendingTail  []PendingMapMove `json:"pending_tail,omitempty"`
 	Reason       string           `json:"reason"`
+	ReasonCode   string           `json:"reason_code,omitempty"`
+	ReasonArgs   map[string]any   `json:"reason_args,omitempty"`
+	ReasonDetail string           `json:"reason_detail,omitempty"`
 }
 
 type MapRecordingState struct {
-	Mode     MapRecordingMode              `json:"mode"`
-	Reason   string                        `json:"reason,omitempty"`
-	Pending  int                           `json:"pending"`
-	Conflict *MapRecordingConflictSnapshot `json:"conflict,omitempty"`
-	Revision uint64                        `json:"revision"`
+	Mode         MapRecordingMode              `json:"mode"`
+	Reason       string                        `json:"reason,omitempty"`
+	ReasonCode   string                        `json:"reason_code,omitempty"`
+	ReasonArgs   map[string]any                `json:"reason_args,omitempty"`
+	ReasonDetail string                        `json:"reason_detail,omitempty"`
+	Pending      int                           `json:"pending"`
+	Conflict     *MapRecordingConflictSnapshot `json:"conflict,omitempty"`
+	Revision     uint64                        `json:"revision"`
 }
 
 func (s *Session) MapRecordingState() MapRecordingState {

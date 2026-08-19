@@ -27,6 +27,8 @@ describe('i18n catalog', () => {
     }
     expect(createTranslator('ru')('mapper.record_failed', { reason: 'Врата: north' }))
       .toBe('Не удалось записать комнату: Врата: north');
+    expect(createTranslator('en')('mapper.record_failed', { reason: '{reason} is game data' }))
+      .toBe('Failed to record room: {reason} is game data');
     expect(createTranslator('de')('mapper.no_position')).toBe('no position');
   });
 
