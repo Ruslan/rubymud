@@ -33,6 +33,8 @@ var ErrNoActiveMapSet = errors.New("no active map set for this session")
 func (s *Session) LoadActiveMapSet() {
 	s.mapReconcileMu.Lock()
 	defer s.mapReconcileMu.Unlock()
+	s.mapAutorecordCommitMu.Lock()
+	defer s.mapAutorecordCommitMu.Unlock()
 	idx := s.buildActiveIndex()
 	// A route's PathSteps belong to the previous graph. Invalidate before the
 	// index swap, preventing a confirmation callback from dispatching its tail
@@ -69,6 +71,8 @@ func (s *Session) SetActiveMapSet(id int64) error {
 }
 
 func (s *Session) LoadActiveMapSetUnlocked() {
+	s.mapAutorecordCommitMu.Lock()
+	defer s.mapAutorecordCommitMu.Unlock()
 	idx := s.buildActiveIndex()
 	s.invalidateMapWalk("active map changed")
 	s.mapMu.Lock()
@@ -117,6 +121,11 @@ func (s *Session) buildActiveIndex() *mapper.Index {
 	if !ok || setID <= 0 {
 		return nil
 	}
+	set, err := s.store.GetMapSet(setID)
+	if err != nil {
+		log.Printf("mapper: GetMapSet(%d) failed: %v", setID, err)
+		return nil
+	}
 	rooms, err := s.store.ListRooms(setID)
 	if err != nil {
 		log.Printf("mapper: ListRooms(%d) failed: %v", setID, err)
@@ -131,6 +140,7 @@ func (s *Session) buildActiveIndex() *mapper.Index {
 		return nil
 	}
 	idx := mapper.BuildIndexWithEdges(setID, rooms, edges)
+	idx.TopologyRevision = set.TopologyRevision
 	// Overlay DT annotations onto the effective is_dt so mud_path's DT-refusal and
 	// mud_look_map's DT display treat an annotated cell as a death trap.
 	// Annotations are a separate overlay path — they never fork the set; the index
@@ -194,8 +204,10 @@ func (s *Session) buildActiveIndex() *mapper.Index {
 // Covered by TestSwapMidBlockDoesNotEmitATruncatedEvent.
 //
 // Performs DB reads, so it MUST run off the incoming-line hot path. Resolution
-// runs OUTSIDE mapMu; only the swap is under the lock, and the client broadcast
-// happens after the lock is released.
+// runs OUTSIDE mapMu; the lifecycle reservation is acquired before resolving so
+// an in-flight autorecord cannot commit after the profile change returns. Only
+// the swap is under mapMu, and the client broadcast happens after the locks are
+// released.
 func (s *Session) LoadMapperProfile() {
 	// Serialize the whole resolve+swap against other loads. Without this, a
 	// profile edit and an assignment change can interleave resolve/resolve/
@@ -205,10 +217,15 @@ func (s *Session) LoadMapperProfile() {
 	// always sees the newer state.
 	//
 	// This is deliberately NOT mapMu: resolution does DB reads, and mapMu is the
-	// lock a concurrent MCP mud_where / hot-path broadcast contends on. Lock order
-	// is always mapProfileMu -> mapMu, never the reverse.
+	// lock a concurrent MCP mud_where / hot-path broadcast contends on. The
+	// global order is lifecycle -> profile -> mapMu; autorecord uses lifecycle ->
+	// topology -> mapMu only for the final epoch check, and never the reverse.
+	s.mapReconcileMu.Lock()
+	defer s.mapReconcileMu.Unlock()
 	s.mapProfileMu.Lock()
 	defer s.mapProfileMu.Unlock()
+	s.mapAutorecordCommitMu.Lock()
+	defer s.mapAutorecordCommitMu.Unlock()
 
 	res := s.resolveDetector()
 
@@ -547,14 +564,13 @@ func (s *Session) observeIncomingLine(plainText, raw string) {
 		RoomExits: ev.Exits,
 	})
 
+	var autorecordJob *mapAutorecordJob
 	if s.mapTracker != nil {
 		beforeRecordingRevision := s.mapRecordingRevision
-		conflicted := s.observeMapRecordingRoomLocked(ev)
+		var conflicted bool
+		conflicted, autorecordJob = s.observeMapRecordingRoomLockedForAutorecord(ev)
 		recordingConflict = conflicted
 		pos, changed := s.mapTracker.Reconcile(ev)
-		if !conflicted {
-			s.rebasePendingMapMovesLocked()
-		}
 		walkPosition = &pos
 		if changed {
 			toBroadcast = append(toBroadcast, s.roomPositionMsgLocked())
@@ -567,6 +583,11 @@ func (s *Session) observeIncomingLine(plainText, raw string) {
 		}
 	}
 	s.mapMu.Unlock()
+	// The room parser has finished its mapMu section. The single detached write
+	// keeps SQLite off the incoming-line path; OBS admits no second step meanwhile.
+	if autorecordJob != nil {
+		s.startMapAutorecord(*autorecordJob)
+	}
 
 	s.broadcastAll(toBroadcast)
 	if walkPosition != nil {
@@ -942,6 +963,18 @@ func (s *Session) RefreshSharedTopology(mapSetID int64) {
 // deleted). Broadcasts the (possibly unchanged) position afterward. DB reads run
 // off mapMu; only the index swap is under the lock.
 func (s *Session) reloadPreservingPosition() {
+	s.reloadPreservingPositionWithBroadcast(true)
+}
+
+// reloadPreservingPositionWithoutBroadcast is the commit half of a compound
+// autorecord publication. The caller anchors/publishes the final target after
+// this index swap, so clients never observe a committed room with a stale
+// yellow position in between.
+func (s *Session) reloadPreservingPositionWithoutBroadcast() {
+	s.reloadPreservingPositionWithBroadcast(false)
+}
+
+func (s *Session) reloadPreservingPositionWithBroadcast(broadcast bool) {
 	idx := s.buildActiveIndex()
 	// Topology edits may remove or redirect any remaining edge in a route.
 	s.invalidateMapWalk("map topology changed")
@@ -953,7 +986,9 @@ func (s *Session) reloadPreservingPosition() {
 	}
 	s.syncDoorOpenLocked()
 	s.mapMu.Unlock()
-	s.BroadcastMapPosition()
+	if broadcast {
+		s.BroadcastMapPosition()
+	}
 }
 
 // TopologyWriteResult reports the outcome of a WriteTopology / UndoTopology call.
@@ -984,8 +1019,7 @@ type TopologyWriteResult struct {
 //     broadcasts map_sets_changed (a fork is a new set);
 //  2. applies the op to the (now editable) set via the single ApplyTopologyOp;
 //  3. pushes the write's BEFORE-STATE snapshot onto the in-memory per-map-set undo
-//     journal (a literal prior-state record, not a symmetric inverse op — so undo
-//     is correct even for idempotent no-op patches);
+//     journal (a literal prior-state record, not a symmetric inverse op);
 //  4. broadcasts rooms_changed and refreshes the tracker index PRESERVING position.
 //
 // The WHOLE read-active-set → fork → setActive → apply → journal sequence runs
@@ -999,6 +1033,17 @@ type TopologyWriteResult struct {
 // Returns Applied=false (no error) when the target
 // room is absent so the caller soft-fails.
 func (s *Session) WriteTopology(op storage.TopologyOp) (TopologyWriteResult, error) {
+	s.mapReconcileMu.Lock()
+	defer s.mapReconcileMu.Unlock()
+	return s.writeTopologyLocked(op)
+}
+
+// writeTopologyLocked is the unified topology write-path with the session
+// lifecycle reservation already held. Keeping the reservation across the
+// transaction, tracker refresh, and autorecord publication prevents an undo,
+// active-set switch, or reconciliation apply from observing the short window
+// between a committed room and the worker's final green anchor.
+func (s *Session) writeTopologyLocked(op storage.TopologyOp) (TopologyWriteResult, error) {
 	var err error
 	op, err = storage.NormalizeTopologyOp(op)
 	if err != nil {
@@ -1116,16 +1161,27 @@ func (s *Session) applyTopologyToSet(setID int64, op storage.TopologyOp, res Top
 	}
 	if before.NoOp {
 		res.Applied = true
-		if journal {
-			s.store.WriteJournal().Push(setID, storage.UndoEntry{
-				Label:            op.UndoLabel(),
-				Before:           before,
-				ExpectedRevision: before.Revision,
-			})
-		}
+		// A storage no-op changed neither topology nor revision. It must not
+		// consume an undo slot: the next Undo must reverse the last real write.
 		return res, nil
 	}
 	res.Applied = true
+	var recordingStopped MapRecordingState
+	recordingWasStopped := false
+	if journal && op.Kind != storage.TopoAutorecordRoom {
+		// A manual/admin topology edit invalidates predicted cells waiting in
+		// the autorecord queue. The lifecycle lock held by WriteTopology makes
+		// this epoch change atomic with the write, so no stale job can publish
+		// against the edited graph afterward.
+		s.mapMu.Lock()
+		beforeRecordingRevision := s.mapRecordingRevision
+		s.stopMapRecordingLocked("map topology changed")
+		if s.mapRecordingRevision != beforeRecordingRevision {
+			recordingStopped = s.mapRecordingStateLocked()
+			recordingWasStopped = true
+		}
+		s.mapMu.Unlock()
+	}
 	if op.PortalResult != nil {
 		res.Portal = &portal
 	}
@@ -1146,12 +1202,22 @@ func (s *Session) applyTopologyToSet(setID int64, op storage.TopologyOp, res Top
 
 	// Refresh the tracker index (the graph changed) preserving position, and tell
 	// open map panes to reload the zone (carry the set id so a pane can filter).
-	if op.Kind == storage.TopoMoveRooms && op.ZoneMove != nil {
+	if op.Kind == storage.TopoAutorecordRoom {
+		// The worker publishes one coherent position/state/rooms_changed batch
+		// after it anchors the newly-created target. Do not expose the transient
+		// pre-anchor yellow position between the DB commit and that publication.
+		s.reloadPreservingPositionWithoutBroadcast()
+	} else if op.Kind == storage.TopoMoveRooms && op.ZoneMove != nil {
 		s.reloadPreservingPositionAfterZoneMove(*op.ZoneMove)
 	} else {
 		s.reloadPreservingPosition()
 	}
-	s.broadcastRoomsChanged(setID)
+	if op.Kind != storage.TopoAutorecordRoom {
+		s.broadcastRoomsChanged(setID)
+	}
+	if recordingWasStopped {
+		s.broadcastMsg(mapRecordingMsg(recordingStopped))
+	}
 	return res, nil
 }
 
@@ -1196,6 +1262,12 @@ func (s *Session) reloadPreservingPositionAfterZoneMove(move storage.ZoneMoveInp
 // write order. Returns NothingToUndo=true when the set's journal is empty, and the
 // UndoEntry that was applied for reporting.
 func (s *Session) UndoTopology() (TopologyWriteResult, storage.UndoEntry, error) {
+	s.mapReconcileMu.Lock()
+	defer s.mapReconcileMu.Unlock()
+	return s.undoTopologyLocked()
+}
+
+func (s *Session) undoTopologyLocked() (TopologyWriteResult, storage.UndoEntry, error) {
 	var res TopologyWriteResult
 
 	setID, ok, err := s.store.GetActiveMapSetID(s.sessionID)

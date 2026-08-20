@@ -72,8 +72,8 @@ describe.each([
     expect(document.activeElement).toBe(opener);
     expect((pane as unknown as { statusText: HTMLElement }).statusText.textContent).toBe('');
     const recordingLabel = locale === 'en'
-      ? 'Диагностическое наблюдение за движением; комнаты не записываются'
-      : 'Diagnostic movement observation; no rooms are written';
+      ? 'НАБЛ записывает по одной исследованной комнате; перед следующим шагом дождитесь зелёной клетки'
+      : 'OBS records one explored room at a time; wait for the new cell to turn green before moving again';
     expect(pane.root.querySelector('.map-pane__recording-toggle')?.getAttribute('aria-label')).toBe(recordingLabel);
   });
 

@@ -107,6 +107,8 @@ func mapperRecordingReasonKey(reason string) (appi18n.Key, bool) {
 		return appi18n.MapperRecordingLiveRoomRequired, true
 	case "reconciliation apply is in progress":
 		return appi18n.MapperRecordingReconcileInProgress, true
+	case "room autorecord requires an editable map set":
+		return appi18n.MapperRecordingMapSetNotEditable, true
 	default:
 		return "", false
 	}
@@ -333,7 +335,7 @@ func mapperRecordingRuntimeReason(reason string) (appi18n.Key, map[string]any, s
 		return appi18n.MapperRecordingStoppedByUser, nil, ""
 	case "position lost":
 		return appi18n.MapperRecordingPositionLost, nil, ""
-	case "pending movement limit exceeded":
+	case "previous autorecord step is still pending; wait for the new cell to turn green":
 		return appi18n.MapperRecordingPendingLimit, nil, ""
 	case "occupied expected room content mismatch":
 		return appi18n.MapperRecordingOccupiedMismatch, nil, ""
@@ -351,6 +353,18 @@ func mapperRecordingRuntimeReason(reason string) (appi18n.Key, map[string]any, s
 		return appi18n.MapperRecordingWalkTimeout, nil, ""
 	case "session disconnected":
 		return appi18n.MapperRecordingDisconnected, nil, ""
+	case "room autorecord requires an editable map set":
+		return appi18n.MapperRecordingMapSetNotEditable, nil, ""
+	case "incomplete room event":
+		return appi18n.MapperRecordingIncompleteRoom, nil, ""
+	case "room event too large":
+		return appi18n.MapperRecordingRoomEventTooLarge, nil, ""
+	case "map topology changed while autorecord was pending":
+		return appi18n.MapperRecordingTopologyChanged, nil, ""
+	case "autorecord lifecycle changed":
+		return appi18n.MapperRecordingLifecycleChanged, nil, ""
+	case "movement confirmation timed out":
+		return appi18n.MapperRecordingPendingTimeout, nil, ""
 	default:
 		return appi18n.MapperRecordingStopped, map[string]any{"detail": reason}, reason
 	}

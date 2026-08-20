@@ -14,6 +14,10 @@ type SeedResult = {
   rooms: Record<string, { zone: string; x: number; y: number; l: number }>;
 };
 
+export type LiveStackOptions = {
+  autorecord?: boolean;
+};
+
 export class LiveStack {
   readonly runDir: string;
   readonly artifactsDir: string;
@@ -37,7 +41,7 @@ export class LiveStack {
     this.baseURL = `http://127.0.0.1:${webPort}`;
   }
 
-  static async start(): Promise<LiveStack> {
+  static async start(options: LiveStackOptions = {}): Promise<LiveStack> {
     const runDir = mkdtempSync(join(tmpdir(), "rubymud-mapper-e2e-"));
     const artifactsDir = join(runDir, "artifacts");
     mkdirSync(artifactsDir, { recursive: true });
@@ -55,10 +59,12 @@ export class LiveStack {
     const dbPath = join(runDir, "mudhost.db");
     let seed: SeedResult;
     try {
-      const output = execFileSync(join(repoRoot, "bin", "e2e-mapper-fixture"), [
+      const seedArgs = [
         "--run-dir", runDir, "--db", dbPath,
         "--mud-host", ready.host, "--mud-port", String(ready.port),
-      ], { cwd: repoRoot, encoding: "utf8", timeout: 15_000 });
+      ];
+      if (options.autorecord) seedArgs.push("--autorecord");
+      const output = execFileSync(join(repoRoot, "bin", "e2e-mapper-fixture"), seedArgs, { cwd: repoRoot, encoding: "utf8", timeout: 15_000 });
       seed = JSON.parse(output) as SeedResult;
     } catch (error) {
       await stopChild(emulator);

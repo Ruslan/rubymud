@@ -82,10 +82,14 @@ func TestConcurrentLanguagePUTSerializesCommitCacheAndBroadcast(t *testing.T) {
 
 func TestMapRecordingRuntimeReasonsLocalizeStateAndConflict(t *testing.T) {
 	reasons := []string{
-		"position lost", "pending movement limit exceeded", "occupied expected room content mismatch",
+		"position lost", "previous autorecord step is still pending; wait for the new cell to turn green", "occupied expected room content mismatch",
 		"active map changed", "room format changed", "room format detector crashed",
 		"manual movement command outcome unknown", "map walk command outcome unknown",
 		"walk confirmation timeout", "session disconnected", "stopped by user",
+		"room autorecord requires an editable map set", "incomplete room event",
+		"room event too large",
+		"map topology changed while autorecord was pending", "autorecord lifecycle changed",
+		"movement confirmation timed out",
 	}
 	for _, reason := range reasons {
 		state := session.MapRecordingState{Mode: session.MapRecordingOff, Reason: reason, Conflict: &session.MapRecordingConflictSnapshot{Reason: reason}}

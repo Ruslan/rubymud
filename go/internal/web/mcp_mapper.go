@@ -865,9 +865,6 @@ func (s *Server) mcpZoneMove(sid int64, in storage.ZoneMoveInput, dryRun bool) (
 	if !res.Applied || res.ZoneMove == nil {
 		return "zone move did not apply.", true
 	}
-	if !res.Forked {
-		s.manager.RefreshSharedZoneMove(res.SetID, sid, in)
-	}
 	var sb strings.Builder
 	sb.WriteString("Applied: " + formatZoneMoveReport(*res.ZoneMove) + ".\n")
 	writeTopologyResultText(&sb, res)

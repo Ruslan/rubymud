@@ -257,7 +257,6 @@ func (m *Manager) Connect(id int64) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
-
 	// Build the mapper tracker index from the session's active map set (off the
 	// hot path; degrades to an empty tracker if no/dangling set).
 	sess.LoadActiveMapSet()

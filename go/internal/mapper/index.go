@@ -105,10 +105,14 @@ type TopologyEdge struct {
 // set, keeping it in sync with storage (AGENTS #2). It is read-only after build.
 type Index struct {
 	MapSetID int64
-	byCoord  map[Coord]*IndexRoom
-	byFP     map[string][]*IndexRoom         // fingerprint -> rooms (may collide)
-	byTag    map[string]map[int][]*IndexRoom // zone -> tag -> rooms
-	rooms    []*IndexRoom
+	// TopologyRevision is the storage revision at which this immutable index was
+	// built.  Writers use it as a shared-set fence: a queued prediction made
+	// against an older graph must not be committed after a peer edits the set.
+	TopologyRevision int64
+	byCoord          map[Coord]*IndexRoom
+	byFP             map[string][]*IndexRoom         // fingerprint -> rooms (may collide)
+	byTag            map[string]map[int][]*IndexRoom // zone -> tag -> rooms
+	rooms            []*IndexRoom
 	// doorOpen is the SESSION's room-format profile template for opening a door the
 	// map has no per-edge command for (ProfileSpec.DoorOpen). It sits on the index
 	// because that is what the route reads, and it is set by the session — the same

@@ -1318,8 +1318,8 @@ func TestMapWalkRunsUnparsedSeamThroughTheCommandPipeline(t *testing.T) {
 
 func TestMapWalkAllowsUnparsedSeamWithExplicitPhrase(t *testing.T) {
 	rooms := []storage.Room{
-		mkTrackRoom("A", 0, 0, 0, 1, "A", "a", ""),
-		mkTrackRoom("B", 0, 0, 0, 2, "B", "b", ""),
+		mkTrackRoom("A", 0, 0, 0, 1, "A", "a", "N"),
+		mkTrackRoom("B", 0, 0, 0, 2, "B", "b", "N"),
 	}
 	edges := storage.DeriveImportedEdges(1, rooms, []storage.LegacySeamDraft{{From: storage.EdgeCell{Zone: "A"}, Entries: []string{"B|teleport|2"}}})
 	for i := range edges {
@@ -1334,7 +1334,7 @@ func TestMapWalkAllowsUnparsedSeamWithExplicitPhrase(t *testing.T) {
 	from := mapper.Coord{Zone: "A", X: 0, Y: 0, L: 0}
 	to := mapper.Coord{Zone: "B", X: 0, Y: 0, L: 0}
 	s.mapTracker.Anchor(from)
-	s.lastRoom = mapper.RoomEvent{Hint: "A", Desc: "a"}
+	s.lastRoom = mapper.RoomEvent{Hint: "A", Desc: "a", Exits: "N"}
 	s.lastRoomOK = true
 	if _, err := s.StartMapRecording(); err != nil {
 		t.Fatal(err)
@@ -1358,7 +1358,7 @@ func TestMapWalkAllowsUnparsedSeamWithExplicitPhrase(t *testing.T) {
 	if recorded.Command != "enter portal" || recorded.Source != "map_walk" || recorded.From != from || recorded.Expected != to || !recorded.ExpectedExact || recorded.Epoch != 1 {
 		t.Fatalf("seam evidence=%+v", recorded)
 	}
-	if s.observeMapRecordingRoomLocked(mapper.RoomEvent{Hint: "B", Desc: "b"}) {
+	if s.observeMapRecordingRoomLocked(mapper.RoomEvent{Hint: "B", Desc: "b", Exits: "N"}) {
 		t.Fatal("matching seam confirmation conflicted")
 	}
 	s.mapMu.Unlock()
@@ -1370,10 +1370,10 @@ func TestMapWalkAllowsUnparsedSeamWithExplicitPhrase(t *testing.T) {
 
 func TestMapRecordingUnparsedSeamMismatchAndRefusal(t *testing.T) {
 	makeSession := func() (*Session, mapper.Coord) {
-		rooms := []storage.Room{mkTrackRoom("A", 0, 0, 0, 1, "A", "a", ""), mkTrackRoom("B", 0, 0, 0, 2, "B", "b", "")}
+		rooms := []storage.Room{mkTrackRoom("A", 0, 0, 0, 1, "A", "a", "N"), mkTrackRoom("B", 0, 0, 0, 2, "B", "b", "N")}
 		store := newTestStore(t)
 		conn := &recordingConn{}
-		s := &Session{sessionID: 1, store: store, conn: conn, vm: vm.New(store, 1), clients: map[int]clientSink{}, mapTracker: mapper.NewTracker(buildTestMapIndexWithSeams(1, rooms, "B|teleport|2")), lastRoom: mapper.RoomEvent{Hint: "A", Desc: "a"}, lastRoomOK: true, mapRecordingMode: MapRecordingOff}
+		s := &Session{sessionID: 1, store: store, conn: conn, vm: vm.New(store, 1), clients: map[int]clientSink{}, mapTracker: mapper.NewTracker(buildTestMapIndexWithSeams(1, rooms, "B|teleport|2")), lastRoom: mapper.RoomEvent{Hint: "A", Desc: "a", Exits: "N"}, lastRoomOK: true, mapRecordingMode: MapRecordingOff}
 		s.mapTracker.Anchor(mapper.Coord{Zone: "A"})
 		if _, err := s.StartMapRecording(); err != nil {
 			t.Fatal(err)
@@ -1384,7 +1384,7 @@ func TestMapRecordingUnparsedSeamMismatchAndRefusal(t *testing.T) {
 	}
 	mismatch, _ := makeSession()
 	mismatch.mapMu.Lock()
-	if !mismatch.observeMapRecordingRoomLocked(mapper.RoomEvent{Hint: "Wrong", Desc: "wrong"}) {
+	if !mismatch.observeMapRecordingRoomLocked(mapper.RoomEvent{Hint: "Wrong", Desc: "wrong", Exits: "N"}) {
 		t.Fatal("seam mismatch did not conflict")
 	}
 	mismatch.mapMu.Unlock()

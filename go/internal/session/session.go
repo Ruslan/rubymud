@@ -113,29 +113,52 @@ type Session struct {
 	// rather than one per incoming line. Both are cleared by an explicit
 	// LoadMapperProfile. mapDetectorDisabled is also set when no detector could be
 	// built at all, so a nil detector never reaches the hot path.
-	mapProfileMu            sync.Mutex
-	mapMu                   sync.Mutex
-	mapDetector             mapper.RoomDetector
-	mapDetectorFellBack     bool
-	mapDetectorDisabled     bool
-	mapTracker              *mapper.Tracker
-	lastRoom                mapper.RoomEvent
-	lastRoomOK              bool
-	mapFormatRef            string
-	mapProfileID            int64
-	mapProfileName          string
-	mapProfileErr           string
-	mapRecordingMode        MapRecordingMode
-	mapRecordingReason      string
-	mapRecordingPending     []PendingMapMove
-	mapRecordingConflict    *MapRecordingConflictSnapshot
-	mapRecordingSequence    uint64
-	mapRecordingEpoch       int64
-	mapRecordingRevision    uint64
+	mapProfileMu         sync.Mutex
+	mapMu                sync.Mutex
+	mapDetector          mapper.RoomDetector
+	mapDetectorFellBack  bool
+	mapDetectorDisabled  bool
+	mapTracker           *mapper.Tracker
+	lastRoom             mapper.RoomEvent
+	lastRoomOK           bool
+	mapFormatRef         string
+	mapProfileID         int64
+	mapProfileName       string
+	mapProfileErr        string
+	mapRecordingMode     MapRecordingMode
+	mapRecordingReason   string
+	mapRecordingPending  []PendingMapMove
+	mapRecordingConflict *MapRecordingConflictSnapshot
+	mapRecordingSequence uint64
+	mapRecordingEpoch    int64
+	mapRecordingRevision uint64
+	mapRecordingTimer    *time.Timer
+	// mapRecordingClock and mapRecordingTimerDisabled are test seams. Production
+	// uses time.Now and one bounded timer for the pending step; tests can advance a clock
+	// and invoke expiry deterministically without sleeping or leaking timers.
+	mapRecordingClock         func() time.Time
+	mapRecordingTimerDisabled bool
+	// A reserved single-step write is counted until its detached transaction has
+	// either committed or been refused. The parser never waits for SQLite.
+	// mapAutorecordCommitMu is the short lifecycle reservation immediately
+	// around the final current-job check and SQLite commit. It gives immediate
+	// stop/timeout paths an atomic winner without holding mapMu during storage.
+	mapAutorecordCommitMu   sync.Mutex
+	mapRecordingWrites      int
 	mapReconcileMu          sync.Mutex
 	mapReconcilePreview     *MapReconciliationPreview
 	mapReconcileApplying    bool
 	mapReconcileAfterCommit func() // test barrier after DB commit, before publication
+	// Test-only barrier immediately before an autorecord transaction reserves the
+	// lifecycle/topology locks. The goroutine has already performed its current-job
+	// check when this hook runs, so cancellation in the hook must still fence the
+	// transaction before it can commit.
+	mapAutorecordBeforeCommit func()
+	// Test-only commit-boundary seams. Internal parser stops deliberately do not
+	// wait on SQLite; if they arrive after the final current-job check, the worker
+	// must publish the transaction that already won rather than hide its result.
+	mapAutorecordAfterCurrentCheck func()
+	mapAutorecordAfterCommit       func()
 
 	// mapWalk is a server-owned, confirmation-paced route. It deliberately has a
 	// separate lock from mapMu: path/tracker reads stay short and no network write
@@ -1051,7 +1074,10 @@ func (s *Session) Close() error {
 	// A closed transport can never confirm its outstanding hop. Stop the timer
 	// before notifying clients so reconnect/restore cannot replay a stale route.
 	s.invalidateMapWalk("session disconnected")
-	state := s.StopMapRecording("session disconnected")
+	// Close is a hard lifecycle fence: once it returns no autorecord worker may
+	// still commit a reserved room/edge. The wait happens outside mapMu, so parser
+	// and transport state are never held behind SQLite.
+	state := s.StopMapRecordingAndWait("session disconnected")
 	s.broadcastMsg(mapRecordingMsg(state))
 	s.mu.Lock()
 	if s.closed {

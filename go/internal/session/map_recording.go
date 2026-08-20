@@ -4,7 +4,9 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"rubymud/go/internal/mapimport"
 	"rubymud/go/internal/mapper"
@@ -79,7 +81,25 @@ func normalizeReconciliationPreviewZones(preview *MapReconciliationPreview) erro
 	return err
 }
 
-const mapRecordingPendingCap = 64
+const (
+	// OBS is intentionally single-step. This host serves one careful explorer,
+	// so a second move while the previous room is still being identified or
+	// saved stops recording instead of maintaining a speculative movement FIFO.
+	mapRecordingPendingCap = 1
+	// Keep the parser and storage contracts aligned. Byte caps are deliberately
+	// explicit as well as rune caps: a raw event must be bounded before any
+	// fingerprint, pipe classification, or DB lookup happens.
+	mapRecordingMaxHint       = 512
+	mapRecordingMaxDesc       = 4096
+	mapRecordingMaxExits      = 1024
+	mapRecordingMaxHintBytes  = mapRecordingMaxHint * 4
+	mapRecordingMaxDescBytes  = mapRecordingMaxDesc * 4
+	mapRecordingMaxExitsBytes = mapRecordingMaxExits * 4
+	// A movement accepted by OBS is evidence with a finite lifetime.  Without a
+	// deadline, an unrelated look hours later could consume the old FIFO head and
+	// create a room at a coordinate that no longer describes the player's move.
+	mapRecordingMoveTimeout = 12 * time.Second
+)
 
 type MapRecordingMode string
 
@@ -102,6 +122,22 @@ type PendingMapMove struct {
 	Expected      mapper.Coord `json:"expected"`
 	HasExpected   bool         `json:"has_expected"`
 	ExpectedExact bool         `json:"expected_exact"`
+	acceptedAt    time.Time
+	expiresAt     time.Time
+}
+
+// mapAutorecordJob is a bounded, immutable handoff from the room-event path to
+// the topology writer. It contains no live pointers into the tracker/index, so
+// the worker can wait for the per-session lifecycle lock without holding the
+// parser's mapMu.
+type mapAutorecordJob struct {
+	Epoch            int64
+	MapSetID         int64
+	TopologyRevision int64
+	Move             PendingMapMove
+	Target           mapper.Coord
+	Event            mapper.RoomEvent
+	BatchID          string
 }
 
 type MapRecordingConflictSnapshot struct {
@@ -112,7 +148,6 @@ type MapRecordingConflictSnapshot struct {
 	ExpectedHint string           `json:"expected_hint"`
 	ExpectedRoom mapper.RoomEvent `json:"expected_room"`
 	Observed     mapper.RoomEvent `json:"observed"`
-	PendingTail  []PendingMapMove `json:"pending_tail,omitempty"`
 	Reason       string           `json:"reason"`
 	ReasonCode   string           `json:"reason_code,omitempty"`
 	ReasonArgs   map[string]any   `json:"reason_args,omitempty"`
@@ -141,10 +176,9 @@ func (s *Session) mapRecordingStateLocked() MapRecordingState {
 	if mode == "" {
 		mode = MapRecordingOff
 	}
-	out := MapRecordingState{Mode: mode, Reason: s.mapRecordingReason, Pending: len(s.mapRecordingPending), Revision: s.mapRecordingRevision}
+	out := MapRecordingState{Mode: mode, Reason: s.mapRecordingReason, Pending: len(s.mapRecordingPending) + s.mapRecordingWrites, Revision: s.mapRecordingRevision}
 	if s.mapRecordingConflict != nil {
 		cp := *s.mapRecordingConflict
-		cp.PendingTail = append([]PendingMapMove(nil), s.mapRecordingConflict.PendingTail...)
 		out.Conflict = &cp
 	}
 	return out
@@ -159,6 +193,32 @@ func (s *Session) BroadcastMapRecordingState() {
 }
 
 func (s *Session) StartMapRecording() (MapRecordingState, error) {
+	var activeSetID int64
+	if s.store != nil {
+		id, ok, err := s.store.GetActiveMapSetID(s.sessionID)
+		// A few mapper-only unit harnesses intentionally provide a minimal
+		// settings schema and inject an in-memory tracker. Production databases
+		// always carry this column; preserve those pure tracker tests while still
+		// enforcing editability whenever the active-set table is present.
+		if err != nil && !strings.Contains(err.Error(), "no such column: active_map_set_id") {
+			return s.MapRecordingState(), err
+		}
+		if err != nil {
+			id, ok = 0, false
+		}
+		if ok && id > 0 {
+			set, err := s.store.GetMapSet(id)
+			if err != nil {
+				return s.MapRecordingState(), err
+			}
+			if !set.Editable {
+				return s.MapRecordingState(), fmt.Errorf("room autorecord requires an editable map set")
+			}
+			activeSetID = id
+		}
+	}
+	s.mapAutorecordCommitMu.Lock()
+	defer s.mapAutorecordCommitMu.Unlock()
 	s.mapMu.Lock()
 	defer s.mapMu.Unlock()
 	if s.mapRecordingMode != "" && s.mapRecordingMode != MapRecordingOff {
@@ -167,16 +227,20 @@ func (s *Session) StartMapRecording() (MapRecordingState, error) {
 	if s.mapTracker == nil || s.mapTracker.Index() == nil {
 		return s.mapRecordingStateLocked(), fmt.Errorf("no active map set")
 	}
+	if activeSetID > 0 && s.mapTracker.Index().MapSetID != activeSetID {
+		return s.mapRecordingStateLocked(), fmt.Errorf("active map set changed")
+	}
 	pos := s.mapTracker.Position()
 	if !pos.Valid || pos.Confidence != mapper.Green || !pos.EventDescribesCell {
 		return s.mapRecordingStateLocked(), fmt.Errorf("green confirmed anchor required")
 	}
-	if !s.lastRoomOK || s.lastRoom.Hint == "" {
+	if !s.lastRoomOK || !mapRecordingRoomComplete(s.lastRoom) {
 		return s.mapRecordingStateLocked(), fmt.Errorf("complete live room required")
 	}
 	s.mapRecordingMode = MapRecordingArmed
 	s.mapRecordingReason = ""
 	s.mapRecordingConflict = nil
+	s.disarmMapRecordingTimerLocked()
 	s.mapRecordingPending = s.mapRecordingPending[:0]
 	s.mapRecordingEpoch++
 	s.mapRecordingRevision++
@@ -184,21 +248,57 @@ func (s *Session) StartMapRecording() (MapRecordingState, error) {
 }
 
 func (s *Session) StopMapRecording(reason string) MapRecordingState {
+	s.mapAutorecordCommitMu.Lock()
+	defer s.mapAutorecordCommitMu.Unlock()
 	s.mapMu.Lock()
 	defer s.mapMu.Unlock()
 	s.stopMapRecordingLocked(reason)
 	return s.mapRecordingStateLocked()
 }
 
-// TryStopMapRecording is the user-facing stop gate. A reconciliation holding
-// the lifecycle reservation cannot be reported as stopped before its committed
-// DB mutation has been published into session state.
+// StopMapRecordingAndWait is the shutdown/user-stop gate for callers that need
+// a hard guarantee that no detached autorecord can commit after the return. It
+// waits on mapReconcileMu and the short commit reservation OUTSIDE mapMu;
+// parser state is never held behind SQLite.
+func (s *Session) StopMapRecordingAndWait(reason string) MapRecordingState {
+	s.mapReconcileMu.Lock()
+	defer s.mapReconcileMu.Unlock()
+	s.mapAutorecordCommitMu.Lock()
+	defer s.mapAutorecordCommitMu.Unlock()
+	s.mapMu.Lock()
+	defer s.mapMu.Unlock()
+	s.stopMapRecordingLocked(reason)
+	return s.mapRecordingStateLocked()
+}
+
+// TryStopMapRecording is the user-facing stop gate. The autorecord write may
+// hold the lifecycle reservation while it validates/commits, so a user stop
+// waits for that short off-mapMu section. Reconciliation apply is different: it
+// deliberately keeps its conflict reservation through post-commit publication,
+// and the existing REST contract reports a conflict instead of blocking on it.
 func (s *Session) TryStopMapRecording(reason string) (MapRecordingState, bool) {
 	if !s.mapReconcileMu.TryLock() {
-		return s.MapRecordingState(), false
+		// Do not wait behind the one operation whose state must remain a conflict
+		// until its post-commit publication has completed. A worker/profile/map
+		// switch does not set this flag and is safe to await below.
+		s.mapMu.Lock()
+		applying := s.mapReconcileApplying
+		state := s.mapRecordingStateLocked()
+		s.mapMu.Unlock()
+		if applying {
+			return state, false
+		}
+		s.mapReconcileMu.Lock()
 	}
 	defer s.mapReconcileMu.Unlock()
+	s.mapAutorecordCommitMu.Lock()
+	defer s.mapAutorecordCommitMu.Unlock()
 	s.mapMu.Lock()
+	if s.mapReconcileApplying {
+		state := s.mapRecordingStateLocked()
+		s.mapMu.Unlock()
+		return state, false
+	}
 	defer s.mapMu.Unlock()
 	s.stopMapRecordingLocked(reason)
 	return s.mapRecordingStateLocked(), true
@@ -208,14 +308,89 @@ func (s *Session) stopMapRecordingLocked(reason string) {
 	if s.mapReconcileApplying {
 		return
 	}
-	changed := s.mapRecordingMode != MapRecordingOff || len(s.mapRecordingPending) > 0 || s.mapRecordingConflict != nil || s.mapRecordingReason != reason
+	s.disarmMapRecordingTimerLocked()
+	changed := s.mapRecordingMode != MapRecordingOff || len(s.mapRecordingPending) > 0 || s.mapRecordingWrites > 0 || s.mapRecordingConflict != nil || s.mapRecordingReason != reason
 	s.mapRecordingMode = MapRecordingOff
 	s.mapRecordingReason = reason
 	s.mapRecordingConflict = nil
 	s.mapRecordingPending = s.mapRecordingPending[:0]
+	s.mapRecordingWrites = 0
 	s.mapReconcilePreview = nil
 	if changed {
+		// Invalidate the write already handed to its goroutine. It may finish a
+		// transaction that won the race before this stop, but it must never publish
+		// stale work after a user stop/map switch.
+		s.mapRecordingEpoch++
 		s.mapRecordingRevision++
+	}
+}
+
+func (s *Session) mapRecordingNow() time.Time {
+	if s.mapRecordingClock != nil {
+		return s.mapRecordingClock()
+	}
+	return time.Now()
+}
+
+// disarmMapRecordingTimerLocked is idempotent and must be called with mapMu.
+func (s *Session) disarmMapRecordingTimerLocked() {
+	if s.mapRecordingTimer != nil {
+		s.mapRecordingTimer.Stop()
+		s.mapRecordingTimer = nil
+	}
+}
+
+// armMapRecordingTimerLocked keeps exactly one timer for the oldest accepted
+// move.  The timer is not part of the parser critical path beyond a cheap
+// AfterFunc registration; its callback only takes mapMu briefly and broadcasts
+// after releasing it.
+func (s *Session) armMapRecordingTimerLocked() {
+	s.disarmMapRecordingTimerLocked()
+	if s.mapRecordingTimerDisabled || len(s.mapRecordingPending) == 0 {
+		return
+	}
+	expiresAt := s.mapRecordingPending[0].expiresAt
+	if expiresAt.IsZero() {
+		return
+	}
+	delay := time.Until(expiresAt)
+	if delay < 0 {
+		delay = 0
+	}
+	epoch := s.mapRecordingEpoch
+	sequence := s.mapRecordingPending[0].Sequence
+	s.mapRecordingTimer = time.AfterFunc(delay, func() {
+		s.expireMapRecordingMove(epoch, sequence)
+	})
+}
+
+func (s *Session) expireMapRecordingMove(epoch int64, sequence uint64) {
+	s.mapAutorecordCommitMu.Lock()
+	defer s.mapAutorecordCommitMu.Unlock()
+	s.mapMu.Lock()
+	if len(s.mapRecordingPending) == 0 || s.mapRecordingEpoch != epoch || s.mapRecordingPending[0].Sequence != sequence {
+		s.mapMu.Unlock()
+		return
+	}
+	if s.mapRecordingNow().Before(s.mapRecordingPending[0].expiresAt) {
+		s.armMapRecordingTimerLocked()
+		s.mapMu.Unlock()
+		return
+	}
+	if s.mapTracker != nil {
+		s.mapTracker.Invalidate("movement confirmation timed out")
+	}
+	before := s.mapRecordingRevision
+	s.stopMapRecordingLocked("movement confirmation timed out")
+	changed := s.mapRecordingRevision != before
+	position := s.roomPositionMsgLocked()
+	state := s.mapRecordingStateLocked()
+	s.mapMu.Unlock()
+	if position.Type != "" {
+		s.broadcastMsg(position)
+	}
+	if changed {
+		s.broadcastMsg(mapRecordingMsg(state))
 	}
 }
 
@@ -290,6 +465,10 @@ func (s *Session) PreviewMapReconciliation(choice MapReconciliationChoice) (MapR
 func (s *Session) ApplyMapReconciliation(conflictID uint64, token string) (MapRecordingState, int64, error) {
 	s.mapReconcileMu.Lock()
 	defer s.mapReconcileMu.Unlock()
+	return s.applyMapReconciliationLocked(conflictID, token)
+}
+
+func (s *Session) applyMapReconciliationLocked(conflictID uint64, token string) (MapRecordingState, int64, error) {
 	s.mapMu.Lock()
 	p := s.mapReconcilePreview
 	if p == nil || p.Token != token || p.ConflictID != conflictID || s.mapRecordingMode != MapRecordingConflict || s.mapRecordingConflict == nil || s.mapRecordingConflict.ID != conflictID || s.mapRecordingEpoch != p.Epoch {
@@ -372,14 +551,11 @@ func (s *Session) recordAcceptedMapMoveLocked(command, dir, source string, autho
 		s.stopMapRecordingLocked("position lost")
 		return
 	}
-	if len(s.mapRecordingPending) >= mapRecordingPendingCap {
-		s.stopMapRecordingLocked("pending movement limit exceeded")
+	if len(s.mapRecordingPending) >= mapRecordingPendingCap || s.mapRecordingWrites > 0 {
+		s.stopMapRecordingLocked("previous autorecord step is still pending; wait for the new cell to turn green")
 		return
 	}
 	from := pos.Coord
-	if n := len(s.mapRecordingPending); n > 0 {
-		from = predictedMapMoveLanding(s.mapTracker, s.mapRecordingPending[n-1])
-	}
 	s.mapRecordingSequence++
 	if s.mapRecordingMode == MapRecordingArmed {
 		s.mapRecordingMode = MapRecordingRecording
@@ -388,7 +564,9 @@ func (s *Session) recordAcceptedMapMoveLocked(command, dir, source string, autho
 	if authoritativeExpected != nil {
 		expected = *authoritativeExpected
 	}
-	s.mapRecordingPending = append(s.mapRecordingPending, PendingMapMove{Sequence: s.mapRecordingSequence, Epoch: s.mapRecordingEpoch, Command: command, Direction: dir, Source: source, From: from, Expected: expected, HasExpected: true, ExpectedExact: authoritativeExpected != nil})
+	acceptedAt := s.mapRecordingNow()
+	s.mapRecordingPending = append(s.mapRecordingPending, PendingMapMove{Sequence: s.mapRecordingSequence, Epoch: s.mapRecordingEpoch, Command: command, Direction: dir, Source: source, From: from, Expected: expected, HasExpected: true, ExpectedExact: authoritativeExpected != nil, acceptedAt: acceptedAt, expiresAt: acceptedAt.Add(mapRecordingMoveTimeout)})
+	s.armMapRecordingTimerLocked()
 	s.mapRecordingRevision++
 }
 
@@ -421,61 +599,290 @@ func predictedMapMoveLanding(tr *mapper.Tracker, move PendingMapMove) mapper.Coo
 func (s *Session) cancelAcceptedMapMoveLocked() {
 	if len(s.mapRecordingPending) > 0 {
 		s.mapRecordingPending = s.mapRecordingPending[1:]
-		s.rebasePendingMapMovesLocked()
+		s.armMapRecordingTimerLocked()
 		s.mapRecordingRevision++
 	}
 }
 
-func (s *Session) rebasePendingMapMovesLocked() {
-	if s.mapTracker == nil || !s.mapTracker.Position().Valid {
-		return
-	}
-	from := s.mapTracker.Position().Coord
-	for i := range s.mapRecordingPending {
-		s.mapRecordingPending[i].From = from
-		if !s.mapRecordingPending[i].ExpectedExact {
-			from = predictedMapMoveLanding(s.mapTracker, s.mapRecordingPending[i])
-			s.mapRecordingPending[i].Expected = from
-			s.mapRecordingPending[i].HasExpected = true
+// observeMapRecordingRoomLocked consumes one accepted movement and freezes the
+// first unsafe occupied-target mismatch. The legacy test/helper entry point also
+// hands an eligible empty-target event to its detached writer; production
+// parsing uses the split helper below so the goroutine starts after mapMu is
+// released.
+func (s *Session) observeMapRecordingRoomLocked(ev mapper.RoomEvent) bool {
+	conflict, job := s.observeMapRecordingRoomLockedForAutorecord(ev)
+	if job != nil {
+		if s.store == nil {
+			s.failMapAutorecordLocked(job, "autorecord storage unavailable")
 		} else {
-			from = s.mapRecordingPending[i].Expected
+			s.startMapAutorecord(*job)
 		}
 	}
+	return conflict
 }
 
-// observeMapRecordingRoomLocked consumes one accepted movement and freezes the
-// first unsafe occupied-target mismatch. It performs no storage access or write.
-func (s *Session) observeMapRecordingRoomLocked(ev mapper.RoomEvent) bool {
+// observeMapRecordingRoomLockedForAutorecord is the parser-side decision arm.
+// It only consumes in-memory evidence and reserves a bounded async write; it
+// never touches SQLite or the active map-set lock.
+func (s *Session) observeMapRecordingRoomLockedForAutorecord(ev mapper.RoomEvent) (bool, *mapAutorecordJob) {
 	if len(s.mapRecordingPending) == 0 || s.mapRecordingMode == MapRecordingConflict {
-		return false
+		return false, nil
+	}
+	// Validate the raw parser payload while mapMu is held and before the
+	// predicted-target lookup, fingerprint, or pipe branch. In particular, a
+	// huge hintless event must stop safely rather than become a conflict snapshot
+	// or a storage job.
+	if !mapRecordingRoomWithinBounds(ev) {
+		s.stopMapRecordingLocked("room event too large")
+		return false, nil
+	}
+	complete := mapRecordingRoomComplete(ev)
+	pipe := strings.TrimSpace(ev.Hint) == "" && strings.TrimSpace(ev.Exits) != ""
+	if !complete && !pipe {
+		s.stopMapRecordingLocked("incomplete room event")
+		return false, nil
 	}
 	move := s.mapRecordingPending[0]
 	s.mapRecordingPending = s.mapRecordingPending[1:]
+	s.armMapRecordingTimerLocked()
 	s.mapRecordingRevision++
 	if s.mapRecordingMode != MapRecordingRecording || s.mapTracker == nil || s.mapTracker.Index() == nil {
-		return false
+		return false, nil
 	}
 	if !move.HasExpected {
-		return false
+		return false, nil
 	}
 	if !move.ExpectedExact && ev.Hint != "" {
 		if reported, ok := s.mapTracker.PredictReportedLanding(move.From, move.Direction); ok {
 			move.Expected = reported
 		}
 	}
-	expected := s.mapTracker.Index().Room(move.Expected)
-	observedFingerprint := mapimport.Fingerprint(ev.Hint, ev.Desc, ev.Exits)
-	if expected == nil || expected.Fingerprint == observedFingerprint {
-		return false
+	if pipe {
+		// A hint-less event with exits is corridor/pipe output. It has already
+		// passed the raw bounds fence and must be consumed without resolving a
+		// known target or comparing a fingerprint.
+		return false, nil
 	}
-	s.mapRecordingSequence++
-	s.mapRecordingMode = MapRecordingConflict
-	s.mapRecordingReason = "occupied expected room content mismatch"
-	tail := append([]PendingMapMove(nil), s.mapRecordingPending...)
-	s.mapRecordingConflict = &MapRecordingConflictSnapshot{ID: s.mapRecordingSequence, CreatedAt: time.Now().UTC(), Move: move, Expected: expected.Coord, ExpectedHint: boundedMapText(expected.Hint, 512), ExpectedRoom: mapper.RoomEvent{Hint: boundedMapText(expected.Hint, 512), Desc: boundedMapText(expected.Desc, 4096), Exits: boundedMapText(expected.Exits, 1024)}, Observed: mapper.RoomEvent{Hint: boundedMapText(ev.Hint, 512), Desc: boundedMapText(ev.Desc, 4096), Exits: boundedMapText(ev.Exits, 1024)}, PendingTail: tail, Reason: s.mapRecordingReason}
-	s.mapRecordingPending = s.mapRecordingPending[:0]
+	expected := s.mapTracker.Index().Room(move.Expected)
+	if expected != nil {
+		observedFingerprint := mapimport.Fingerprint(ev.Hint, ev.Desc, ev.Exits)
+		if expected.Fingerprint == observedFingerprint {
+			return false, nil
+		}
+		// Any reserved write for the previous recording step is now stale. Drop its
+		// reservation and advance the epoch so a goroutine that has not started
+		// its transaction cannot publish a room after reconciliation takes over.
+		if s.mapRecordingWrites > 0 {
+			s.mapRecordingWrites = 0
+			s.mapRecordingEpoch++
+		}
+		s.disarmMapRecordingTimerLocked()
+		s.mapRecordingSequence++
+		s.mapRecordingMode = MapRecordingConflict
+		s.mapRecordingReason = "occupied expected room content mismatch"
+		s.mapRecordingConflict = &MapRecordingConflictSnapshot{ID: s.mapRecordingSequence, CreatedAt: time.Now().UTC(), Move: move, Expected: expected.Coord, ExpectedHint: boundedMapText(expected.Hint, 512), ExpectedRoom: mapper.RoomEvent{Hint: boundedMapText(expected.Hint, 512), Desc: boundedMapText(expected.Desc, 4096), Exits: boundedMapText(expected.Exits, 1024)}, Observed: mapper.RoomEvent{Hint: boundedMapText(ev.Hint, 512), Desc: boundedMapText(ev.Desc, 4096), Exits: boundedMapText(ev.Exits, 1024)}, Reason: s.mapRecordingReason}
+		s.mapRecordingPending = s.mapRecordingPending[:0]
+		s.mapRecordingRevision++
+		return true, nil
+	}
+
+	// An unknown target is safe to create only from a complete room block. A
+	// hint-less pipe is consumed as tracker evidence but is never a topology
+	// write; a truly empty partial block stops recording rather than guessing a
+	// teleport.
+	event := mapper.RoomEvent{Hint: boundedMapText(ev.Hint, mapRecordingMaxHint), Desc: boundedMapText(ev.Desc, mapRecordingMaxDesc), Exits: boundedMapText(ev.Exits, mapRecordingMaxExits)}
+	job := &mapAutorecordJob{
+		Epoch:            s.mapRecordingEpoch,
+		MapSetID:         s.mapTracker.Index().MapSetID,
+		TopologyRevision: s.mapTracker.Index().TopologyRevision,
+		Move:             move,
+		Target:           move.Expected,
+		Event:            event,
+		BatchID:          fmt.Sprintf("session-%d-epoch-%d-move-%d", s.sessionID, s.mapRecordingEpoch, move.Sequence),
+	}
+	s.mapRecordingWrites++
 	s.mapRecordingRevision++
-	return true
+	return false, job
+}
+
+// mapRecordingRoomWithinBounds validates raw input without allocating a rune
+// slice. Both byte and rune limits matter: byte length bounds malformed or
+// multi-byte input, while rune length matches the storage/UI contract.
+func mapRecordingRoomWithinBounds(ev mapper.RoomEvent) bool {
+	return mapRecordingTextWithinBounds(ev.Hint, mapRecordingMaxHint, mapRecordingMaxHintBytes) &&
+		mapRecordingTextWithinBounds(ev.Desc, mapRecordingMaxDesc, mapRecordingMaxDescBytes) &&
+		mapRecordingTextWithinBounds(ev.Exits, mapRecordingMaxExits, mapRecordingMaxExitsBytes)
+}
+
+func mapRecordingRoomComplete(ev mapper.RoomEvent) bool {
+	return mapRecordingRoomWithinBounds(ev) && strings.TrimSpace(ev.Hint) != "" && strings.TrimSpace(ev.Desc) != "" && strings.TrimSpace(ev.Exits) != ""
+}
+
+func mapRecordingTextWithinBounds(v string, maxRunes, maxBytes int) bool {
+	return len(v) <= maxBytes && utf8.RuneCountInString(v) <= maxRunes
+}
+
+// startMapAutorecord detaches the only outstanding OBS write from the parser.
+// The single-step reservation prevents a second goroutine from being launched
+// until this one finishes or recording is stopped.
+func (s *Session) startMapAutorecord(job mapAutorecordJob) {
+	go func() {
+		defer s.recoverGoroutine("autorecord writer")
+		s.applyMapAutorecord(job)
+	}()
+}
+
+func (s *Session) mapAutorecordJobCurrent(job mapAutorecordJob) bool {
+	s.mapMu.Lock()
+	defer s.mapMu.Unlock()
+	return s.mapRecordingMode == MapRecordingRecording && s.mapRecordingEpoch == job.Epoch && s.mapRecordingWrites > 0 && s.mapTracker != nil && s.mapTracker.Index() != nil && s.mapTracker.Index().MapSetID == job.MapSetID
+}
+
+func (s *Session) applyMapAutorecord(job mapAutorecordJob) {
+	// Establish the current-job fence first, then expose the deterministic
+	// interleaving point. Stop/Close/profile/map-set changes invoked from the hook
+	// can therefore win before the lifecycle reservation and before SQLite.
+	if !s.mapAutorecordJobCurrent(job) {
+		return
+	}
+	if s.mapAutorecordBeforeCommit != nil {
+		s.mapAutorecordBeforeCommit()
+	}
+	// This is the same lifecycle reservation used by reconciliation and active
+	// map switching. It keeps the target map set and recording epoch stable while
+	// the storage transaction is in flight, without ever entering the parser
+	// path's mapMu/SQLite critical section.
+	s.mapReconcileMu.Lock()
+	s.mapAutorecordCommitMu.Lock()
+	commitHeld := true
+	reconcileHeld := true
+	defer func() {
+		if commitHeld {
+			s.mapAutorecordCommitMu.Unlock()
+		}
+		if reconcileHeld {
+			s.mapReconcileMu.Unlock()
+		}
+	}()
+	if !s.mapAutorecordJobCurrent(job) {
+		return
+	}
+	hint, desc, exits := job.Event.Hint, job.Event.Desc, job.Event.Exits
+	op := storage.TopologyOp{Kind: storage.TopoAutorecordRoom, Autorecord: &storage.AutorecordInput{
+		Source: storage.EdgeCell{Zone: job.Move.From.Zone, X: job.Move.From.X, Y: job.Move.From.Y, L: job.Move.From.L},
+		Target: storage.EdgeCell{Zone: job.Target.Zone, X: job.Target.X, Y: job.Target.Y, L: job.Target.L},
+		Dir:    job.Move.Direction, Command: boundedMapText(job.Move.Command, 512),
+		Fields:        storage.RoomFields{Hint: &hint, Desc: &desc, Exits: &exits},
+		RecordBatchID: job.BatchID, RecordOrigin: fmt.Sprintf("session:%d", s.sessionID),
+		VerificationState: "provisional", RecordSource: storage.EdgeSourceAutorecord,
+	}}
+	// Validate the active set and captured revision while holding TopologyLock,
+	// immediately before ApplyTopologyOp. An admin edit after the room event must
+	// make this prediction stale rather than allowing a room/edge write.
+	res, err := s.applyAutorecordTopologyLocked(job, op)
+	if err != nil {
+		s.mapAutorecordCommitMu.Unlock()
+		commitHeld = false
+		s.mapReconcileMu.Unlock()
+		reconcileHeld = false
+		s.failMapAutorecord(job, err.Error())
+		return
+	}
+	if !res.Applied {
+		s.mapAutorecordCommitMu.Unlock()
+		commitHeld = false
+		s.mapReconcileMu.Unlock()
+		reconcileHeld = false
+		s.failMapAutorecord(job, "autorecord write was not applied")
+		return
+	}
+	if s.mapAutorecordAfterCommit != nil {
+		s.mapAutorecordAfterCommit()
+	}
+	s.completeMapAutorecord(job, res.SetID)
+	s.mapAutorecordCommitMu.Unlock()
+	commitHeld = false
+	s.mapReconcileMu.Unlock()
+	reconcileHeld = false
+}
+
+func (s *Session) applyAutorecordTopologyLocked(job mapAutorecordJob, op storage.TopologyOp) (TopologyWriteResult, error) {
+	lock := s.store.TopologyLock(job.MapSetID)
+	lock.Lock()
+	defer lock.Unlock()
+	active, ok, err := s.store.GetActiveMapSetID(s.sessionID)
+	if err != nil {
+		return TopologyWriteResult{}, err
+	}
+	if !ok || active != job.MapSetID {
+		return TopologyWriteResult{}, fmt.Errorf("active map set changed")
+	}
+	set, err := s.store.GetMapSet(active)
+	if err != nil {
+		return TopologyWriteResult{}, err
+	}
+	if !set.Editable {
+		return TopologyWriteResult{}, fmt.Errorf("room autorecord requires an editable map set")
+	}
+	if set.TopologyRevision != job.TopologyRevision {
+		return TopologyWriteResult{}, fmt.Errorf("map topology changed while autorecord was pending")
+	}
+	// Stop/map/profile paths that do not wait on the lifecycle mutex still bump
+	// the recording epoch under mapMu. Recheck after taking the topology lock so a
+	// deterministic internal stop cannot leave a write reservation alive.
+	if !s.mapAutorecordJobCurrent(job) {
+		return TopologyWriteResult{}, fmt.Errorf("autorecord lifecycle changed")
+	}
+	if s.mapAutorecordAfterCurrentCheck != nil {
+		s.mapAutorecordAfterCurrentCheck()
+	}
+	return s.applyTopologyToSet(job.MapSetID, op, TopologyWriteResult{SetID: job.MapSetID}, true)
+}
+
+func (s *Session) failMapAutorecordLocked(job *mapAutorecordJob, reason string) {
+	if job == nil || s.mapRecordingEpoch != job.Epoch || s.mapRecordingWrites == 0 {
+		return
+	}
+	s.mapRecordingWrites--
+	s.stopMapRecordingLocked(reason)
+}
+
+func (s *Session) failMapAutorecord(job mapAutorecordJob, reason string) {
+	s.mapMu.Lock()
+	before := s.mapRecordingRevision
+	s.failMapAutorecordLocked(&job, reason)
+	state := s.mapRecordingStateLocked()
+	changed := s.mapRecordingRevision != before
+	s.mapMu.Unlock()
+	if changed {
+		s.broadcastMsg(mapRecordingMsg(state))
+	}
+}
+
+func (s *Session) completeMapAutorecord(job mapAutorecordJob, setID int64) {
+	s.mapMu.Lock()
+	current := s.mapRecordingEpoch == job.Epoch && s.mapRecordingWrites > 0
+	if current {
+		s.mapRecordingWrites--
+		if s.mapTracker != nil {
+			s.mapTracker.Anchor(job.Target)
+			s.syncDoorOpenLocked()
+		}
+		s.mapRecordingRevision++
+	}
+	// A parser/internal stop is intentionally allowed to avoid waiting on SQLite.
+	// Once the final current-job check has passed, however, the transaction owns
+	// the commit boundary. Even when that stop advances the epoch, publish the
+	// already-committed graph and current (possibly red/off/conflict) position so
+	// the browser and writer index cannot remain behind the database.
+	position := s.roomPositionMsgLocked()
+	state := s.mapRecordingStateLocked()
+	s.mapMu.Unlock()
+	if position.Type != "" {
+		s.broadcastMsg(position)
+	}
+	s.broadcastRoomsChanged(setID)
+	s.broadcastMsg(mapRecordingMsg(state))
 }
 
 func boundedMapText(v string, max int) string {

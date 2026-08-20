@@ -73,6 +73,14 @@ type Room struct {
 	Pipe        bool    `json:"pipe"`
 	BColor      *string `gorm:"column:bcolor" json:"bcolor"`
 	Fingerprint string  `json:"fingerprint"`
+	// Autorecord provenance is structured map data, not a user note. Imported
+	// rooms are verified/imported; continuous recording writes provisional rows
+	// with a bounded batch id and session origin.
+	VerificationState string      `gorm:"column:verification_state" json:"verification_state"`
+	RecordSource      string      `gorm:"column:record_source" json:"record_source"`
+	RecordBatchID     string      `gorm:"column:record_batch_id" json:"record_batch_id"`
+	RecordedAt        *SQLiteTime `gorm:"column:recorded_at" json:"recorded_at"`
+	RecordOrigin      string      `gorm:"column:record_origin" json:"record_origin"`
 }
 
 func (Room) TableName() string { return "rooms" }
@@ -142,6 +150,12 @@ func (s *Store) CreateMapSet(in MapSetInput) (int64, error) {
 		for i := range in.Rooms {
 			in.Rooms[i].MapSetID = set.ID
 			in.Rooms[i].ID = 0
+			if in.Rooms[i].VerificationState == "" {
+				in.Rooms[i].VerificationState = "verified"
+			}
+			if in.Rooms[i].RecordSource == "" {
+				in.Rooms[i].RecordSource = "import"
+			}
 		}
 		// Batch insert keeps a large corpus (thousands of rooms) off many
 		// round-trips without blocking anything on the hot path.

@@ -1376,7 +1376,7 @@ export class MapPaneController {
     this.recordingToggle.title = state.mode === "conflict"
       ? this.i18n.t('recordingConflictTitle', { reason: useSnapshotReason ? state.reason ?? this.i18n.t('conflict') : this.i18n.t('conflict') })
       : active
-        ? this.i18n.t('recordingActiveTitle', { count: state.pending })
+        ? this.i18n.t('recordingActiveTitle')
         : this.i18n.t('recordingStartTitle');
   }
 

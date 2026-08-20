@@ -88,12 +88,11 @@ func (s *Server) mapReconciliationApply(w http.ResponseWriter, r *http.Request) 
 		writeMapperTextError(w, http.StatusConflict, locale, appi18n.MapperReconciliationDisconnected, nil)
 		return
 	}
-	state, setID, err := sess.ApplyMapReconciliation(in.ConflictID, in.Token)
+	state, _, err := sess.ApplyMapReconciliation(in.ConflictID, in.Token)
 	if err != nil {
 		writeMapperTextError(w, http.StatusConflict, locale, appi18n.MapperReconciliationFailed, map[string]any{"detail": err.Error()})
 		return
 	}
-	s.manager.RefreshSharedTopology(setID, id)
 	writeJSON(w, map[string]any{"applied": true, "state": state})
 }
 

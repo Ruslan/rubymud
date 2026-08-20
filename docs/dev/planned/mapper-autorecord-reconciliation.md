@@ -2,8 +2,8 @@
 
 ## Статус
 
-Карточка открыта; continuous autorecord, solver/drag и server identity ещё не
-реализованы. **Исторический Slice A (presentation foundation, 2026-08-19)**
+Карточка открыта; полный loop-reconciliation, solver/drag и server identity ещё
+не реализованы. **Исторический Slice A (presentation foundation, 2026-08-19)**
 добавил sparse `room_layouts`, effective collision validation,
 fork/delete/zone-move/undo lifecycle, compact slim overrides и перевод canvas
 rendering/hit-testing/follow/marker/selection на presentation coordinates при
@@ -17,8 +17,9 @@ run epoch, exact expected target where the route supplies it), runtime-сост�
 `off/armed/recording/conflict`, immutable snapshot
 первого occupied-target fingerprint mismatch и рассылает состояние через strict
 REST/WebSocket всем клиентам сессии; monotonic state revision не позволяет
-позднему restore откатить UI. Refusal безопасно rebases FIFO tail, overflow,
-неоднозначный/частичный transport write, timeout, потеря позиции (`red`), disconnect, смена map set
+позднему restore откатить UI. OBS хранит не более одного ожидаемого шага:
+refusal очищает его, а второй шаг до завершения первого безопасно выключает
+режим. Неоднозначный/частичный transport write, timeout, потеря позиции (`red`), disconnect, смена map set
 и room format останавливают режим. Минимальный mapper toggle называется `OBS`,
 создаёт conflict без спорных writes. C2 ниже теперь разрешает такой conflict
 ручным relink/relayout; provisional writes, durable recovery и полный continuous
@@ -40,13 +41,27 @@ sets**: immutable OBS conflict выдаёт server-owned bounded preview/token; 
 тогда как from/direction/exact transport command/provenance/revision берутся из
 session snapshot. Apply одноразовый, revision-fenced и сериализован с topology,
 Stop и active-set switch не могут разорвать промежуток DB commit → session
-publication. После успеха writer re-anchor'ится green, peer sessions того же
-editable set перестраивают index с сохранением валидной позиции/pending, и всем
+publication. После успеха текущая игровая сессия re-anchor'ится green и её
 клиентам приходят state/rooms changes. Доступный keyboard dialog требует server
 preview перед Apply и сохраняется при stale error. Frozen-set reconciliation
 пока явно возвращает conflict: COW отложен до отдельного тестируемого контракта
 без orphan fork/active-set rollback. Selector текущего среза ограничен уже
 загруженной зоной; cross-zone search и solver/drag не входят в C2.
+
+**E1 пошаговый provisional autorecord реализован 2026-08-20** для сервера одного
+игрока и одного персонажа: на активном
+редактируемом наборе green anchor + полный live room + один принятый transport
+move + один полный room event в пустой predicted cell создают ровно одну
+provisional room и один directed `corridor` (`source=autorecord`). Запись идёт
+через однослотовый async handoff и существующий topology transaction,
+journal/revision/undo; parser/VM не ждут SQLite. До зелёного подтверждения новой
+клетки следующий шаг выключает OBS и не ставится в очередь. Replay становится no-op,
+occupied mismatch остаётся conflict, reverse edge без фактического обратного
+шага не создаётся, а stop/map-switch/reconnect и второй преждевременный шаг инвалидируют
+отложенные jobs. `verification_state`, batch и origin сохраняются на комнате;
+UI OBS прямо просит дождаться зелёной клетки. Межсессионного fanout и pipeline
+записей намеренно нет. Полный loop closure,
+server-ID identity, relayout и durable recovery остаются следующими срезами.
 
 Проверка C2 на полном live stack вынесена в
 [`mapper-reconciliation-live-e2e.md`](mapper-reconciliation-live-e2e.md):
@@ -61,9 +76,10 @@ movement FIFO, `WriteTopology`, undo journal и runtime index нельзя бе�
 расширить одним UI-диалогом. Сначала нужны data/runtime foundations, затем
 session conflict state и только после них continuous recording.
 
-Безопасная ручная команда записи текущей комнаты уже существует. Непрерывного
-autorecord и полного relayout/reconciliation workflow пока нет. Базовый sparse
-presentation layer уже существует, но ещё не имеет пользовательского preview/apply.
+Безопасная ручная команда записи текущей комнаты уже существует. Первый
+testable slice непрерывного autorecord теперь есть; полного
+relayout/reconciliation workflow пока нет. Базовый sparse presentation layer
+уже существует, но ещё не имеет пользовательского preview/apply для solver/drag.
 Эта карточка объединяет их в одну пользовательскую функцию: отдельно
 реализовать autorecord без reconciliation опасно, а relayout без фактического
 замыкания графа не решает исходную задачу.
@@ -425,17 +441,12 @@ Apply передаёт caller-owned expected revision в storage; storage не �
 раз и позиция re-anchor-ится на выбранную target room. При ошибке всё остаётся в
 состоянии conflict.
 
-Shared per-map-set undo journal восстанавливает edge, layout и verification
-state одной DB-операцией, но **не владеет session anchor**. В journal нельзя
-сохранять session pointer или позицию персонажа: Undo может вызвать другая
-сессия того же editable set. После reconciliation origin session явно
-re-anchor-ится на выбранную room; после Undo каждая затронутая session сохраняет
-свою позицию только если она всё ещё валидна в новом index, иначе переходит в
-yellow/red и требует человеческого anchor.
-
-Для shared editable map set commit обновляет index всех live sessions, которые
-остались на этом set, не очищая их position/pending без причины. Copy-on-write
-fork переключает только writer session; peers остаются на исходном frozen set.
+Per-map-set undo journal восстанавливает edge, layout и verification state одной
+DB-операцией, но **не владеет session anchor**. После reconciliation единственная
+игровая сессия явно re-anchor-ится на выбранную room; после Undo она сохраняет
+позицию, только если та остаётся валидной в новом index, иначе требует ручного
+anchor. Межсессионный fanout намеренно не поддерживается: продукт рассчитан на
+одного игрока и одного активного персонажа.
 
 ## Ручной relayout вне конфликта
 
@@ -541,14 +552,14 @@ Continuous toggle нельзя показывать до завершения с
 
 ### Срез B. Session observation foundation
 
-1. Заменить direction-only FIFO на bounded `PendingMove` с exact command,
+1. Заменить direction-only evidence на один bounded `PendingMove` с exact command,
    from-room, sequence/epoch и source.
 2. Сначала тест: expected occupied cell имеет другой fingerprint — DB, revision
    и journal не меняются, immutable conflict не заменяется следующим event.
 3. Реализовать state machine, coherent snapshot и двухфазный reserve/off-lock
    apply/epoch-checked accept.
 4. Добавить strict bounded REST/WS state/start/stop без topology writes.
-5. Проверить failed transport write, aliases/custom phrase, два pending moves,
+5. Проверить failed transport write, aliases/custom phrase, остановку на втором шаге,
    pipe-run, disconnect, profile/map-set switch и два browser client.
 
 ### Срез C. Ручная reconciliation
@@ -559,7 +570,7 @@ Continuous toggle нельзя показывать до завершения с
    обязателен.
 3. Проверить два Apply одного token, concurrent topology write, frozen fork,
    one compound revision/journal entry и отсутствие reverse edge.
-4. После commit обновить writer и peer indexes по правилам shared set; anchor
+4. После commit обновить index текущей сессии; anchor
    остаётся session-owned по контракту выше.
 
 ### Срез D. Bounded solver и ручной relayout
@@ -572,12 +583,12 @@ Continuous toggle нельзя показывать до завершения с
 4. Проверить search centering, follow viewport, floors, edge clipping, restore
    view и zone slim cache: каждый выбирает display, но возвращает logical key.
 
-### Срез E. Provisional continuous autorecord
+### Срез E. Пошаговый provisional autorecord
 
 1. Добавить structured provenance/batch вместо заметок.
 2. Записывать ровно одну новую room после одного завершённого observation.
-3. Включить continuous toggle только теперь; подтверждать лишь доказанный участок
-   после loop closure и ограничить размер run/batch/undo snapshot.
+3. Включить OBS только теперь; разрешать один незавершённый шаг и просить игрока
+   дождаться зелёной клетки перед следующим движением.
 4. Добавить Settings/runtime sync и browser smoke полного workflow.
 
 ### Срез F. Автоматическое замыкание по server room ID
@@ -591,7 +602,7 @@ Continuous toggle нельзя показывать до завершения с
 
 ### Срез G. Укрепление
 
-1. Нагрузочный тест длинного autorecord run и большой зоны.
+1. Нагрузочный тест длинного последовательного autorecord run и большой зоны.
 2. MCP read/preview parity без обхода человеческого подтверждения.
 3. Документация состояний provisional и восстановления после ошибки.
 
@@ -605,7 +616,7 @@ Continuous toggle нельзя показывать до завершения с
 - mismatch не изменяет expected room;
 - teleport/follow не создаёт corridor;
 - закрытая дверь и неуспешная transport write не создают room event;
-- pipe-run и несколько pending moves останавливаются на первом конфликте;
+- pipe-run не создаёт комнату; второй шаг до зелёного подтверждения выключает OBS;
 - reconnect/restart требуют нового green anchor.
 
 ### Topology

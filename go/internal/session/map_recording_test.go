@@ -19,7 +19,9 @@ func TestMapRecordingConflictWireShapeIsStableLowercaseAndBounded(t *testing.T) 
 		t.Fatal(err)
 	}
 	s.observeOutgoingMove("south", "input")
-	long := strings.Repeat("Ж", 5000)
+	// Exactly at the rune limit still exercises bounded wire copies; an
+	// over-limit event is covered separately and must stop without a conflict.
+	long := strings.Repeat("Ж", 4096)
 	s.mapMu.Lock()
 	if !s.observeMapRecordingRoomLocked(mapper.RoomEvent{Hint: "Observed", Desc: long, Exits: "N"}) {
 		t.Fatal("no conflict")
@@ -368,6 +370,176 @@ func TestMapRecordingStartRequiresGreenAndFullRoom(t *testing.T) {
 	}
 }
 
+// Regression reproduction for the user-visible OBS failure: the observation
+// foundation consumed the movement and left the dead-reckoned cell empty. A
+// completed room event in that cell must now enqueue the first autorecord write.
+func TestMapRecordingCreatesOneProvisionalRoomAfterCompletedMove(t *testing.T) {
+	store := newProfileTestStore(t)
+	frozen, err := store.CreateMapSet(storage.MapSetInput{
+		Name:  "autorecord repro",
+		Rooms: []storage.Room{{Zone: "Z", X: 0, Y: 0, L: 0, Hint: "Start", Desc: "start", EDirs: `["S"]`, Doors: `[]`}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setID, err := store.ForkMapSet(frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := store.CreateSession("autorecord-repro", "localhost", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetActiveMapSetID(rec.ID, setID); err != nil {
+		t.Fatal(err)
+	}
+	rooms, err := store.ListRooms(setID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edges, err := store.ListMapEdges(setID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tracker := mapper.NewTracker(mapper.BuildIndexWithEdges(setID, rooms, edges))
+	tracker.Anchor(mapper.Coord{Zone: "Z", X: 0, Y: 0, L: 0})
+	s := &Session{
+		sessionID:        rec.ID,
+		store:            store,
+		mapTracker:       tracker,
+		lastRoom:         mapper.RoomEvent{Hint: "Start", Desc: "start", Exits: "S"},
+		lastRoomOK:       true,
+		mapRecordingMode: MapRecordingOff,
+		mapWalkEpoch:     42,
+		clients:          map[int]clientSink{},
+		done:             make(chan struct{}),
+	}
+	if _, err := s.StartMapRecording(); err != nil {
+		t.Fatal(err)
+	}
+	s.observeOutgoingMove("s", "input")
+	s.mapMu.Lock()
+	if s.observeMapRecordingRoomLocked(mapper.RoomEvent{Hint: "New room", Desc: "fresh", Exits: "N"}) {
+		s.mapMu.Unlock()
+		t.Fatal("empty predicted target was misclassified as a conflict")
+	}
+	s.mapMu.Unlock()
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		var n int64
+		if err := store.DB().Model(&storage.Room{}).Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=?", setID, "Z", 1, 0, 0).Count(&n).Error; err != nil {
+			t.Fatal(err)
+		}
+		if n == 1 && s.MapRecordingState().Pending == 0 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	var room storage.Room
+	if err := store.DB().Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=?", setID, "Z", 1, 0, 0).First(&room).Error; err != nil {
+		t.Fatalf("provisional room was not created: %v", err)
+	}
+	if room.Hint != "New room" {
+		t.Fatalf("room hint=%q", room.Hint)
+	}
+	var edgeCount int64
+	if err := store.DB().Model(&storage.MapEdge{}).Where("map_set_id=? AND kind=? AND source=? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=? AND to_zone=? AND to_x=? AND to_y=? AND to_l=? AND passable=1", setID, storage.EdgeKindCorridor, "autorecord", "Z", 0, 0, 0, "S", "Z", 1, 0, 0).Count(&edgeCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if edgeCount != 1 {
+		t.Fatalf("autorecord corridor count=%d, want 1", edgeCount)
+	}
+	var reverseCount int64
+	if err := store.DB().Model(&storage.MapEdge{}).Where("map_set_id=? AND kind IN ? AND source NOT IN ? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=? AND passable=1", setID, []string{storage.EdgeKindGrid, storage.EdgeKindCorridor}, []string{storage.EdgeSourceReconciled}, "Z", 1, 0, 0, "N").Count(&reverseCount).Error; err != nil {
+		t.Fatal(err)
+	}
+	if reverseCount != 0 {
+		t.Fatalf("autorecord invented reverse edge count=%d", reverseCount)
+	}
+	if state := s.MapRecordingState(); state.Mode != MapRecordingRecording || state.Pending != 0 {
+		t.Fatalf("recording state after commit=%+v", state)
+	}
+	pos := tracker.Position()
+	if !pos.Valid || pos.Confidence != mapper.Green || pos.Coord != (mapper.Coord{Zone: "Z", X: 1, Y: 0, L: 0}) {
+		t.Fatalf("tracker position after commit=%+v", pos)
+	}
+}
+
+func TestMapRecordingTopologyEditInvalidatesPredictedWrites(t *testing.T) {
+	store := newProfileTestStore(t)
+	frozen, err := store.CreateMapSet(storage.MapSetInput{
+		Name:  "autorecord edit invalidation",
+		Rooms: []storage.Room{{Zone: "Z", X: 0, Y: 0, L: 0, Hint: "Start", Desc: "start", EDirs: `[]`, Doors: `[]`}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setID, err := store.ForkMapSet(frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := store.CreateSession("autorecord-edit-invalidation", "localhost", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetActiveMapSetID(rec.ID, setID); err != nil {
+		t.Fatal(err)
+	}
+	rooms, err := store.ListRooms(setID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edges, err := store.ListMapEdges(setID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &Session{
+		sessionID:        rec.ID,
+		store:            store,
+		mapTracker:       mapper.NewTracker(mapper.BuildIndexWithEdges(setID, rooms, edges)),
+		lastRoom:         mapper.RoomEvent{Hint: "Start", Desc: "start", Exits: "S"},
+		lastRoomOK:       true,
+		mapRecordingMode: MapRecordingOff,
+		clients:          map[int]clientSink{},
+		done:             make(chan struct{}),
+	}
+	s.mapTracker.Anchor(mapper.Coord{Zone: "Z", X: 0, Y: 0, L: 0})
+	if _, err := s.StartMapRecording(); err != nil {
+		t.Fatal(err)
+	}
+	s.observeOutgoingMove("s", "input")
+	if _, err := s.WriteTopology(storage.TopologyOp{Kind: storage.TopoPatchExits, Zone: "Z", X: 0, Y: 0, L: 0, AddExits: []string{"N"}}); err != nil {
+		t.Fatal(err)
+	}
+	state := s.MapRecordingState()
+	if state.Mode != MapRecordingOff || state.Pending != 0 || state.Reason != "map topology changed" {
+		t.Fatalf("topology edit left autorecord active: %+v", state)
+	}
+}
+
+func TestMapRecordingPartialRoomStopsWithoutInventingTopology(t *testing.T) {
+	s := recordingHarness()
+	s.mapTracker = mapper.NewTracker(buildTestMapIndex(7, []storage.Room{
+		mkTrackRoom("Z", 0, 0, 0, 1, "Start", "start", "S"),
+	}))
+	s.mapTracker.Anchor(mapper.Coord{Zone: "Z", X: 0, Y: 0, L: 0})
+	if _, err := s.StartMapRecording(); err != nil {
+		t.Fatal(err)
+	}
+	s.observeOutgoingMove("S", "input")
+	s.mapMu.Lock()
+	if s.observeMapRecordingRoomLocked(mapper.RoomEvent{Desc: "partial"}) {
+		s.mapMu.Unlock()
+		t.Fatal("partial room became a conflict")
+	}
+	state := s.mapRecordingStateLocked()
+	s.mapMu.Unlock()
+	if state.Mode != MapRecordingOff || state.Pending != 0 || state.Reason != "incomplete room event" {
+		t.Fatalf("partial room state=%+v", state)
+	}
+}
+
 func TestAcceptedMoveCarriesExactCommandSourceSequenceEpochAndFailedWriteDoesNot(t *testing.T) {
 	s := recordingHarness()
 	if _, err := s.StartMapRecording(); err != nil {
@@ -423,51 +595,43 @@ func TestFirstOccupiedMismatchFreezesConflictAndSecondRoomCannotReplaceIt(t *tes
 	}
 }
 
-func TestConflictSnapshotDeepCopiesPendingTail(t *testing.T) {
+func TestOccupiedConflictInvalidatesQueuedAutorecordReservations(t *testing.T) {
 	s := recordingHarness()
 	if _, err := s.StartMapRecording(); err != nil {
 		t.Fatal(err)
 	}
 	s.observeOutgoingMove("s", "input")
-	s.observeOutgoingMove("e", "trigger")
 	s.mapMu.Lock()
-	if !s.observeMapRecordingRoomLocked(mapper.RoomEvent{Hint: "Wrong", Desc: "wrong", Exits: "W"}) {
+	s.mapRecordingWrites = 1
+	oldEpoch := s.mapRecordingEpoch
+	if !s.observeMapRecordingRoomLocked(mapper.RoomEvent{Hint: "Different", Desc: "different", Exits: "N"}) {
+		s.mapMu.Unlock()
 		t.Fatal("mismatch did not conflict")
 	}
-	if len(s.mapRecordingConflict.PendingTail) != 1 || len(s.mapRecordingPending) != 0 {
-		t.Fatalf("snapshot/live tail=%+v/%+v", s.mapRecordingConflict.PendingTail, s.mapRecordingPending)
-	}
-	frozen := s.mapRecordingConflict.PendingTail[0]
-	s.cancelAcceptedMapMoveLocked()
-	s.observeMapRecordingRoomLocked(mapper.RoomEvent{Hint: "Later", Desc: "later", Exits: "N"})
-	got := s.mapRecordingConflict.PendingTail[0]
+	state := s.mapRecordingStateLocked()
+	newEpoch := s.mapRecordingEpoch
+	remaining := s.mapRecordingWrites
 	s.mapMu.Unlock()
-	if got != frozen || got.Command != "e" || got.Source != "trigger" {
-		t.Fatalf("immutable tail mutated: before=%+v after=%+v", frozen, got)
-	}
-	exported := s.MapRecordingState()
-	exported.Conflict.PendingTail[0].Command = "mutated by consumer"
-	if fresh := s.MapRecordingState(); fresh.Conflict.PendingTail[0].Command != "e" {
-		t.Fatalf("exported state aliased internal snapshot: %+v", fresh.Conflict.PendingTail)
+	if state.Mode != MapRecordingConflict || state.Pending != 0 || remaining != 0 || newEpoch <= oldEpoch {
+		t.Fatalf("stale autorecord reservation survived conflict: state=%+v writes=%d epoch=%d->%d", state, remaining, oldEpoch, newEpoch)
 	}
 }
 
-func TestPendingMapMovesAreBounded(t *testing.T) {
+func TestSecondMoveStopsSingleStepRecording(t *testing.T) {
 	s := recordingHarness()
 	if _, err := s.StartMapRecording(); err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < mapRecordingPendingCap+10; i++ {
-		s.observeOutgoingMove("s", "trigger")
-	}
+	s.observeOutgoingMove("s", "trigger")
+	s.observeOutgoingMove("e", "trigger")
 	s.mapMu.Lock()
 	defer s.mapMu.Unlock()
-	if s.mapRecordingMode != MapRecordingOff || len(s.mapRecordingPending) != 0 || s.mapRecordingReason != "pending movement limit exceeded" {
-		t.Fatalf("overflow did not stop safely: mode=%s pending=%d reason=%q", s.mapRecordingMode, len(s.mapRecordingPending), s.mapRecordingReason)
+	if s.mapRecordingMode != MapRecordingOff || len(s.mapRecordingPending) != 0 || s.mapRecordingReason != "previous autorecord step is still pending; wait for the new cell to turn green" {
+		t.Fatalf("second step did not stop safely: mode=%s pending=%d reason=%q", s.mapRecordingMode, len(s.mapRecordingPending), s.mapRecordingReason)
 	}
 }
 
-func TestRecordingRunDropsPreStartEvidenceAndChainsPredictedFrom(t *testing.T) {
+func TestRecordingRunDropsPreStartEvidenceAndKeepsOnePendingStep(t *testing.T) {
 	s := recordingHarness()
 	s.observeOutgoingMove("s", "input")
 	if state := s.MapRecordingState(); state.Pending != 0 {
@@ -477,14 +641,28 @@ func TestRecordingRunDropsPreStartEvidenceAndChainsPredictedFrom(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.observeOutgoingMove("s", "input")
-	s.observeOutgoingMove("s", "input")
 	s.mapMu.Lock()
 	defer s.mapMu.Unlock()
-	if len(s.mapRecordingPending) != 2 {
+	if len(s.mapRecordingPending) != 1 {
 		t.Fatalf("pending=%d", len(s.mapRecordingPending))
 	}
-	if s.mapRecordingPending[0].From != (mapper.Coord{Zone: "Z"}) || s.mapRecordingPending[1].From != (mapper.Coord{Zone: "Z", X: 1}) {
-		t.Fatalf("chain=%+v", s.mapRecordingPending)
+	if s.mapRecordingPending[0].From != (mapper.Coord{Zone: "Z"}) {
+		t.Fatalf("step=%+v", s.mapRecordingPending[0])
+	}
+}
+
+func TestMoveWhileAutorecordWritePendingStopsRecording(t *testing.T) {
+	s := recordingHarness()
+	if _, err := s.StartMapRecording(); err != nil {
+		t.Fatal(err)
+	}
+	s.mapMu.Lock()
+	s.mapRecordingWrites = 1
+	s.recordAcceptedMapMoveLocked("s", "S", "input", nil)
+	mode, pending, writes, reason := s.mapRecordingMode, len(s.mapRecordingPending), s.mapRecordingWrites, s.mapRecordingReason
+	s.mapMu.Unlock()
+	if mode != MapRecordingOff || pending != 0 || writes != 0 || reason != "previous autorecord step is still pending; wait for the new cell to turn green" {
+		t.Fatalf("move during write did not stop safely: mode=%s pending=%d writes=%d reason=%q", mode, pending, writes, reason)
 	}
 }
 
@@ -502,22 +680,15 @@ func TestShortWriteDoesNotCreateRecordingEvidence(t *testing.T) {
 	}
 }
 
-func TestRefusalRecomputesRemainingEvidenceFromActualPosition(t *testing.T) {
+func TestRefusalClearsTheSinglePendingStep(t *testing.T) {
 	s := recordingHarness()
 	if _, err := s.StartMapRecording(); err != nil {
 		t.Fatal(err)
 	}
 	s.observeOutgoingMove("s", "input")
-	s.observeOutgoingMove("e", "input")
 	s.observeIncomingLine("Вы не можете идти в этом направлении.", "Вы не можете идти в этом направлении.")
-	s.mapMu.Lock()
-	defer s.mapMu.Unlock()
-	if len(s.mapRecordingPending) != 1 {
-		t.Fatalf("pending=%d", len(s.mapRecordingPending))
-	}
-	got := s.mapRecordingPending[0]
-	if got.Command != "e" || got.From != (mapper.Coord{Zone: "Z"}) || got.Expected != (mapper.Coord{Zone: "Z", Y: 1}) {
-		t.Fatalf("tail not rebased after refusal: %+v", got)
+	if state := s.MapRecordingState(); state.Mode != MapRecordingRecording || state.Pending != 0 {
+		t.Fatalf("refusal did not clear the pending step: %+v", state)
 	}
 }
 
@@ -577,7 +748,7 @@ func TestManualPredictionUsesReportedRoomBeyondPipeRun(t *testing.T) {
 	}
 }
 
-func TestPipeLandingRebasesSecondPendingMoveFromConfirmedRoom(t *testing.T) {
+func TestNextStepCanStartAfterPipeLandingIsConfirmed(t *testing.T) {
 	rooms := []storage.Room{
 		mkTrackRoom("Z", 0, 0, 0, 1, "Start", "start", "S"),
 		mkTrackRoom("Z", 1, 0, 0, 2, "", "", "N S"),
@@ -592,18 +763,17 @@ func TestPipeLandingRebasesSecondPendingMoveFromConfirmedRoom(t *testing.T) {
 		t.Fatal(err)
 	}
 	s.observeOutgoingMove("s", "input")
-	s.observeOutgoingMove("e", "input")
 	s.mapMu.Lock()
 	ev := mapper.RoomEvent{Hint: "End", Desc: "end", Exits: "N E"}
 	if s.observeMapRecordingRoomLocked(ev) {
 		t.Fatal("pipe landing conflicted")
 	}
 	s.mapTracker.Reconcile(ev)
-	s.rebasePendingMapMovesLocked()
-	defer s.mapMu.Unlock()
+	s.recordAcceptedMapMoveLocked("e", "E", "input", nil)
 	if len(s.mapRecordingPending) != 1 || s.mapRecordingPending[0].From != (mapper.Coord{Zone: "Z", X: 2}) {
-		t.Fatalf("tail not rebased from confirmed pipe landing: %+v", s.mapRecordingPending)
+		t.Fatalf("next step did not start from confirmed pipe landing: %+v", s.mapRecordingPending)
 	}
+	s.mapMu.Unlock()
 }
 
 func TestRefusalCancelsRecordingEvidenceWithoutTrackerFIFO(t *testing.T) {

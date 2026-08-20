@@ -50,6 +50,7 @@ const (
 	// never creates or destroys either, which preserves exact cross-zone endpoints.
 	EdgeSourceManual     = "manual"
 	EdgeSourceReconciled = "reconciled"
+	EdgeSourceAutorecord = "autorecord"
 )
 
 // MapEdge is one materialized DIRECTED edge of a map set: one traversal, one way.

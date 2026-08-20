@@ -3,6 +3,7 @@ package storage
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -63,148 +64,163 @@ func (s *Store) ApplyReconciliation(mapSetID int64, in ReconciliationInput) (bef
 		return before, fmt.Errorf("too many layout changes")
 	}
 
-	err = s.db.Transaction(func(tx *gorm.DB) error {
-		rev, e := topologyRevisionTx(tx, mapSetID)
-		if e != nil {
-			return e
-		}
-		if rev != in.ExpectedRevision {
-			return fmt.Errorf("stale topology revision: expected %d, current %d", in.ExpectedRevision, rev)
-		}
-		for _, c := range []EdgeCell{in.Source, in.Target} {
-			var n int64
-			if e := tx.Model(&Room{}).Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=?", mapSetID, c.Zone, c.X, c.Y, c.L).Count(&n).Error; e != nil {
-				return e
-			}
-			if n != 1 {
-				return fmt.Errorf("corridor endpoint room not found")
-			}
-		}
-		before.Revision = rev
-		var old MapEdge
-		e = tx.Where("map_set_id=? AND kind IN ? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=?", mapSetID, []string{EdgeKindGrid, EdgeKindCorridor}, in.Source.Zone, in.Source.X, in.Source.Y, in.Source.L, in.Dir).First(&old).Error
-		if e != nil && e != gorm.ErrRecordNotFound {
-			return e
-		}
-		before.Faces = []DirectionalFaceSnapshot{{Cell: in.Source, Dir: in.Dir, Existed: e == nil, Edge: old}}
-		// Reconciliation replaces evidence for one formerly assumed physical pair.
-		// Remove the old reverse half only when it was derived solely from the other
-		// room's side: a permissive/non-advertising source has not independently
-		// confirmed that directed traversal. Manual/corridor rows and a reverse room
-		// that explicitly advertises its own direction remain authoritative.
-		var staleReverse *MapEdge
-		oldDerived := e == nil && old.Kind == EdgeKindGrid && old.Passable &&
-			(old.Source == EdgeSourceParsed || old.Source == EdgeSourceGrid)
-		if oldDerived {
-			if oldTarget, ok := old.To(); ok && oldTarget == in.Source.step(in.Dir) {
-				// A derived grid face must point at its literal adjacent cell. Do not
-				// infer a pair from a mismatched/imported exact target.
-				reverseDir := oppositeDir[in.Dir]
-				var reverse MapEdge
-				rerr := tx.Where("map_set_id=? AND kind=? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=?", mapSetID, EdgeKindGrid, oldTarget.Zone, oldTarget.X, oldTarget.Y, oldTarget.L, reverseDir).First(&reverse).Error
-				if rerr != nil && rerr != gorm.ErrRecordNotFound {
-					return rerr
-				}
-				reverseTarget, reverseHasTarget := reverse.To()
-				reverseDerivedPair := rerr == nil && reverse.Passable &&
-					(reverse.Source == EdgeSourceParsed || reverse.Source == EdgeSourceGrid) &&
-					reverseHasTarget && reverseTarget == in.Source
-				if reverseDerivedPair {
-					var reverseRoom Room
-					if rerr = tx.Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=?", mapSetID, oldTarget.Zone, oldTarget.X, oldTarget.Y, oldTarget.L).First(&reverseRoom).Error; rerr != nil {
-						return rerr
-					}
-					if !RoomHasExplicitExits(reverseRoom.Ch, decodeStrArray(reverseRoom.EDirs)) || !RoomExitsInDir(reverseRoom.Ch, decodeStrArray(reverseRoom.EDirs), reverseDir) {
-						copy := reverse
-						staleReverse = &copy
-						before.Faces = append(before.Faces, DirectionalFaceSnapshot{Cell: oldTarget, Dir: reverseDir, Existed: true, Edge: reverse})
-					}
-				}
-			}
-		}
-
-		seen := map[EdgeCell]bool{}
-		for i := range in.Layouts {
-			m := &in.Layouts[i]
-			m.Cell.Zone, e = NormalizeZoneName(m.Cell.Zone)
+	apply := func() error {
+		before = TopologyBefore{}
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			rev, e := topologyRevisionTx(tx, mapSetID)
 			if e != nil {
 				return e
 			}
-			if seen[m.Cell] {
-				return fmt.Errorf("duplicate layout mutation")
+			if s.topologyApplyAttemptHook != nil {
+				if hookErr := s.topologyApplyAttemptHook(); hookErr != nil {
+					return hookErr
+				}
 			}
-			seen[m.Cell] = true
-			var room Room
-			if e = tx.Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=?", mapSetID, m.Cell.Zone, m.Cell.X, m.Cell.Y, m.Cell.L).First(&room).Error; e != nil {
-				return fmt.Errorf("layout logical room not found: %w", e)
+			if rev != in.ExpectedRevision {
+				return fmt.Errorf("stale topology revision: expected %d, current %d", in.ExpectedRevision, rev)
 			}
-			var prior RoomLayout
-			e = tx.Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=?", mapSetID, m.Cell.Zone, m.Cell.X, m.Cell.Y, m.Cell.L).First(&prior).Error
+			for _, c := range []EdgeCell{in.Source, in.Target} {
+				var n int64
+				if e := tx.Model(&Room{}).Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=?", mapSetID, c.Zone, c.X, c.Y, c.L).Count(&n).Error; e != nil {
+					return e
+				}
+				if n != 1 {
+					return fmt.Errorf("corridor endpoint room not found")
+				}
+			}
+			before.Revision = rev
+			var old MapEdge
+			e = tx.Where("map_set_id=? AND kind IN ? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=?", mapSetID, []string{EdgeKindGrid, EdgeKindCorridor}, in.Source.Zone, in.Source.X, in.Source.Y, in.Source.L, in.Dir).First(&old).Error
 			if e != nil && e != gorm.ErrRecordNotFound {
 				return e
 			}
-			before.Layouts = append(before.Layouts, RoomLayoutSnapshot{Cell: m.Cell, Existed: e == nil, Layout: prior})
-			if e == nil && prior.Pinned {
-				moves := m.Layout == nil && (prior.DisplayX != m.Cell.X || prior.DisplayY != m.Cell.Y || prior.DisplayL != m.Cell.L)
-				moves = moves || (m.Layout != nil && (prior.DisplayX != m.Layout.DisplayX || prior.DisplayY != m.Layout.DisplayY || prior.DisplayL != m.Layout.DisplayL))
-				if moves {
-					return fmt.Errorf("pinned room cannot be moved")
+			before.Faces = []DirectionalFaceSnapshot{{Cell: in.Source, Dir: in.Dir, Existed: e == nil, Edge: old}}
+			// Reconciliation replaces evidence for one formerly assumed physical pair.
+			// Remove the old reverse half only when it was derived solely from the other
+			// room's side: a permissive/non-advertising source has not independently
+			// confirmed that directed traversal. Manual/corridor rows and a reverse room
+			// that explicitly advertises its own direction remain authoritative.
+			var staleReverse *MapEdge
+			oldDerived := e == nil && old.Kind == EdgeKindGrid && old.Passable &&
+				(old.Source == EdgeSourceParsed || old.Source == EdgeSourceGrid)
+			if oldDerived {
+				if oldTarget, ok := old.To(); ok && oldTarget == in.Source.step(in.Dir) {
+					// A derived grid face must point at its literal adjacent cell. Do not
+					// infer a pair from a mismatched/imported exact target.
+					reverseDir := oppositeDir[in.Dir]
+					var reverse MapEdge
+					rerr := tx.Where("map_set_id=? AND kind=? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=?", mapSetID, EdgeKindGrid, oldTarget.Zone, oldTarget.X, oldTarget.Y, oldTarget.L, reverseDir).First(&reverse).Error
+					if rerr != nil && rerr != gorm.ErrRecordNotFound {
+						return rerr
+					}
+					reverseTarget, reverseHasTarget := reverse.To()
+					reverseDerivedPair := rerr == nil && reverse.Passable &&
+						(reverse.Source == EdgeSourceParsed || reverse.Source == EdgeSourceGrid) &&
+						reverseHasTarget && reverseTarget == in.Source
+					if reverseDerivedPair {
+						var reverseRoom Room
+						if rerr = tx.Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=?", mapSetID, oldTarget.Zone, oldTarget.X, oldTarget.Y, oldTarget.L).First(&reverseRoom).Error; rerr != nil {
+							return rerr
+						}
+						if !RoomHasExplicitExits(reverseRoom.Ch, decodeStrArray(reverseRoom.EDirs)) || !RoomExitsInDir(reverseRoom.Ch, decodeStrArray(reverseRoom.EDirs), reverseDir) {
+							copy := reverse
+							staleReverse = &copy
+							before.Faces = append(before.Faces, DirectionalFaceSnapshot{Cell: oldTarget, Dir: reverseDir, Existed: true, Edge: reverse})
+						}
+					}
 				}
 			}
-		}
-		if e = tx.Where("map_set_id=? AND kind IN ? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=?", mapSetID, []string{EdgeKindGrid, EdgeKindCorridor}, in.Source.Zone, in.Source.X, in.Source.Y, in.Source.L, in.Dir).Delete(&MapEdge{}).Error; e != nil {
-			return e
-		}
-		if staleReverse != nil {
-			if e = tx.Delete(&MapEdge{}, staleReverse.ID).Error; e != nil {
+
+			seen := map[EdgeCell]bool{}
+			for i := range in.Layouts {
+				m := &in.Layouts[i]
+				m.Cell.Zone, e = NormalizeZoneName(m.Cell.Zone)
+				if e != nil {
+					return e
+				}
+				if seen[m.Cell] {
+					return fmt.Errorf("duplicate layout mutation")
+				}
+				seen[m.Cell] = true
+				var room Room
+				if e = tx.Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=?", mapSetID, m.Cell.Zone, m.Cell.X, m.Cell.Y, m.Cell.L).First(&room).Error; e != nil {
+					return fmt.Errorf("layout logical room not found: %w", e)
+				}
+				var prior RoomLayout
+				e = tx.Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=?", mapSetID, m.Cell.Zone, m.Cell.X, m.Cell.Y, m.Cell.L).First(&prior).Error
+				if e != nil && e != gorm.ErrRecordNotFound {
+					return e
+				}
+				before.Layouts = append(before.Layouts, RoomLayoutSnapshot{Cell: m.Cell, Existed: e == nil, Layout: prior})
+				if e == nil && prior.Pinned {
+					moves := m.Layout == nil && (prior.DisplayX != m.Cell.X || prior.DisplayY != m.Cell.Y || prior.DisplayL != m.Cell.L)
+					moves = moves || (m.Layout != nil && (prior.DisplayX != m.Layout.DisplayX || prior.DisplayY != m.Layout.DisplayY || prior.DisplayL != m.Layout.DisplayL))
+					if moves {
+						return fmt.Errorf("pinned room cannot be moved")
+					}
+				}
+			}
+			if e = tx.Where("map_set_id=? AND kind IN ? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=?", mapSetID, []string{EdgeKindGrid, EdgeKindCorridor}, in.Source.Zone, in.Source.X, in.Source.Y, in.Source.L, in.Dir).Delete(&MapEdge{}).Error; e != nil {
 				return e
 			}
-			// Keep an authoritative, non-rendered/non-routable face tombstone. A
-			// plain delete is insufficient: room derivation is symmetric and would
-			// recreate this disproven reverse on the next upsert/rematerialization.
-			// Reconciled distinguishes it from a user-authored red/manual wall.
-			blocked := *staleReverse
-			blocked.ID = 0
-			blocked.Source = EdgeSourceReconciled
-			blocked.Passable = false
-			blocked.Command = ""
-			blocked.EdgeAttrs = EdgeAttrs{Weight: 1}
-			if e = tx.Create(&blocked).Error; e != nil {
-				return e
-			}
-		}
-		attrs := in.Attrs
-		if attrs.Weight == 0 {
-			attrs.Weight = 1
-		}
-		attrs.Phrase = in.Phrase
-		z, x, y, l := in.Target.Zone, in.Target.X, in.Target.Y, in.Target.L
-		edge := MapEdge{MapSetID: mapSetID, Kind: EdgeKindCorridor, Source: in.SourceProvenance, Passable: true, FromZone: in.Source.Zone, FromX: in.Source.X, FromY: in.Source.Y, FromL: in.Source.L, Dir: in.Dir, ToZone: &z, ToX: &x, ToY: &y, ToL: &l, Command: in.Command, EdgeAttrs: attrs}
-		if e = tx.Create(&edge).Error; e != nil {
-			return e
-		}
-		for _, m := range in.Layouts {
-			if e = tx.Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=?", mapSetID, m.Cell.Zone, m.Cell.X, m.Cell.Y, m.Cell.L).Delete(&RoomLayout{}).Error; e != nil {
-				return e
-			}
-			if m.Layout != nil {
-				v := *m.Layout
-				v.MapSetID = mapSetID
-				v.Zone = m.Cell.Zone
-				v.X = m.Cell.X
-				v.Y = m.Cell.Y
-				v.L = m.Cell.L
-				v.UpdatedAt = *nowSQLiteTimePtr()
-				if e = tx.Create(&v).Error; e != nil {
+			if staleReverse != nil {
+				if e = tx.Delete(&MapEdge{}, staleReverse.ID).Error; e != nil {
+					return e
+				}
+				// Keep an authoritative, non-rendered/non-routable face tombstone. A
+				// plain delete is insufficient: room derivation is symmetric and would
+				// recreate this disproven reverse on the next upsert/rematerialization.
+				// Reconciled distinguishes it from a user-authored red/manual wall.
+				blocked := *staleReverse
+				blocked.ID = 0
+				blocked.Source = EdgeSourceReconciled
+				blocked.Passable = false
+				blocked.Command = ""
+				blocked.EdgeAttrs = EdgeAttrs{Weight: 1}
+				if e = tx.Create(&blocked).Error; e != nil {
 					return e
 				}
 			}
+			attrs := in.Attrs
+			if attrs.Weight == 0 {
+				attrs.Weight = 1
+			}
+			attrs.Phrase = in.Phrase
+			z, x, y, l := in.Target.Zone, in.Target.X, in.Target.Y, in.Target.L
+			edge := MapEdge{MapSetID: mapSetID, Kind: EdgeKindCorridor, Source: in.SourceProvenance, Passable: true, FromZone: in.Source.Zone, FromX: in.Source.X, FromY: in.Source.Y, FromL: in.Source.L, Dir: in.Dir, ToZone: &z, ToX: &x, ToY: &y, ToL: &l, Command: in.Command, EdgeAttrs: attrs}
+			if e = tx.Create(&edge).Error; e != nil {
+				return e
+			}
+			for _, m := range in.Layouts {
+				if e = tx.Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=?", mapSetID, m.Cell.Zone, m.Cell.X, m.Cell.Y, m.Cell.L).Delete(&RoomLayout{}).Error; e != nil {
+					return e
+				}
+				if m.Layout != nil {
+					v := *m.Layout
+					v.MapSetID = mapSetID
+					v.Zone = m.Cell.Zone
+					v.X = m.Cell.X
+					v.Y = m.Cell.Y
+					v.L = m.Cell.L
+					v.UpdatedAt = *nowSQLiteTimePtr()
+					if e = tx.Create(&v).Error; e != nil {
+						return e
+					}
+				}
+			}
+			if e = validateEffectiveLayoutTx(tx, mapSetID); e != nil {
+				return e
+			}
+			return advanceTopologyRevisionTx(tx, mapSetID, rev)
+		})
+	}
+	for attempt := 0; ; attempt++ {
+		err = apply()
+		if err == nil || !isSQLiteBusy(err) || attempt >= autorecordBusyRetries-1 {
+			break
 		}
-		if e = validateEffectiveLayoutTx(tx, mapSetID); e != nil {
-			return e
-		}
-		return advanceTopologyRevisionTx(tx, mapSetID, rev)
-	})
+		time.Sleep(time.Duration(5*(1<<attempt)) * time.Millisecond)
+	}
 	if err != nil {
 		return TopologyBefore{}, err
 	}

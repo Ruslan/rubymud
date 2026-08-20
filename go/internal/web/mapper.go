@@ -1478,9 +1478,6 @@ func (s *Server) mapZoneMove(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperZoneMoveNotApplied, nil))
 		return
 	}
-	if !res.Forked {
-		s.manager.RefreshSharedZoneMove(res.SetID, sid, in)
-	}
 	out := map[string]any{"ok": true, "active_map_set": res.SetID, "preview": res.ZoneMove}
 	if res.Forked {
 		out["forked_to"] = res.ForkedTo

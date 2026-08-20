@@ -240,6 +240,13 @@ func TestRecordingContextKeysPreserveExactEnglishCompatibility(t *testing.T) {
 	if got := renderMapperWireText(appi18n.English, string(key), nil); got != "no active map set" {
 		t.Fatalf("StartMapRecording no-set reason = %q", got)
 	}
+	key, ok = mapperRecordingReasonKey("room autorecord requires an editable map set")
+	if !ok || key != appi18n.MapperRecordingMapSetNotEditable {
+		t.Fatalf("StartMapRecording frozen-set key = %q, ok=%v", key, ok)
+	}
+	if got := renderMapperWireText(appi18n.English, string(key), nil); got != "room autorecord requires an editable map set" {
+		t.Fatalf("StartMapRecording frozen-set reason = %q", got)
+	}
 	if got := renderMapperWireText(appi18n.English, string(appi18n.MapperProfileMissingSpec), nil); got != "missing spec" {
 		t.Fatalf("profile missing spec = %q", got)
 	}

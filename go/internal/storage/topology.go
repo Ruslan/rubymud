@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"time"
 
 	"gorm.io/gorm"
 )
@@ -91,6 +92,10 @@ const (
 	// TopoMoveRooms moves a selected aggregate namespace slice (or a whole source
 	// zone for rename) without changing coordinates.
 	TopoMoveRooms TopologyOpKind = "move_rooms"
+	// TopoAutorecordRoom atomically creates one provisional room and the one
+	// directed exact corridor that led into it. It never mirrors the reverse
+	// traversal; that requires a later observed move.
+	TopoAutorecordRoom TopologyOpKind = "autorecord_room"
 )
 
 // EdgeAttrPatch is a partial write of a face's EdgeAttrs: every member is a
@@ -140,6 +145,21 @@ type PortalPatch struct {
 	Target  *PortalTarget `json:"target,omitempty"`
 	Command *string       `json:"command,omitempty"`
 	Attrs   EdgeAttrPatch `json:"attrs"`
+}
+
+// AutorecordInput is the immutable, bounded operation reserved by the session
+// observation path. Source and target are logical coordinates; Fields contains
+// the completed room block and provenance identifies the recording batch.
+type AutorecordInput struct {
+	Source            EdgeCell
+	Target            EdgeCell
+	Dir               string
+	Command           string
+	Fields            RoomFields
+	RecordBatchID     string
+	RecordOrigin      string
+	VerificationState string
+	RecordSource      string
 }
 
 // PortalWriteResult is the authoritative occurrence selected by a portal
@@ -239,6 +259,8 @@ type TopologyOp struct {
 	// (migration 016), and the derivation cannot produce one — RoomsConnect is
 	// symmetric — so the hand-drawn layer is the only place one can come from.
 	OneWay bool
+	// Autorecord is the payload for TopoAutorecordRoom.
+	Autorecord *AutorecordInput
 }
 
 // NormalizeTopologyOp canonicalizes every zone-bearing member of a topology
@@ -265,6 +287,19 @@ func NormalizeTopologyOp(op TopologyOp) (TopologyOp, error) {
 		if op.Zone, err = NormalizeZoneName(op.Zone); err != nil {
 			return op, err
 		}
+	case TopoAutorecordRoom:
+		if op.Autorecord == nil {
+			return op, fmt.Errorf("autorecord payload is required")
+		}
+		in := *op.Autorecord
+		var err error
+		if in.Source.Zone, err = NormalizeZoneName(in.Source.Zone); err != nil {
+			return op, err
+		}
+		if in.Target.Zone, err = NormalizeZoneName(in.Target.Zone); err != nil {
+			return op, err
+		}
+		op.Autorecord = &in
 	default:
 		return op, nil
 	}
@@ -392,9 +427,9 @@ type TopologyBefore struct {
 
 // UndoEntry is one journal record: the human label of the write plus the
 // before-state that reverses it. Undo applies it through RestoreTopologyBefore —
-// restoring the literal prior state (not a symmetric inverse), so undo is correct
-// even for idempotent no-op writes (adding an exit the room already has, marking a
-// face that is already marked).
+// restoring the literal prior state (not a symmetric inverse). Storage still
+// reports NoOp to callers for diagnostics, but the session write journal does not
+// record it because there is no mutation to undo.
 type UndoEntry struct {
 	Label            string
 	Before           TopologyBefore
@@ -422,50 +457,71 @@ func (s *Store) ApplyTopologyOp(mapSetID int64, op TopologyOp) (before TopologyB
 	if err != nil {
 		return TopologyBefore{}, false, err
 	}
-	err = s.db.Transaction(func(tx *gorm.DB) error {
-		revision, rerr := topologyRevisionTx(tx, mapSetID)
-		if rerr != nil {
-			return rerr
-		}
-		inner := &Store{db: tx}
-		if op.Kind == TopoMoveRooms {
-			if op.ZoneMove == nil {
-				return fmt.Errorf("zone move is required")
-			}
-			var report ZoneMovePreview
-			before, report, found, rerr = applyZoneMoveTx(tx, mapSetID, *op.ZoneMove)
-			if op.ZoneMoveResult != nil {
-				*op.ZoneMoveResult = report
-			}
-			return rerr
-		}
-		if rerr := tx.Exec("SAVEPOINT topology_apply_arm").Error; rerr != nil {
-			return rerr
-		}
-		before, found, rerr = inner.applyTopologyOpUnfenced(mapSetID, op)
-		if rerr != nil || !found {
-			return rerr
-		}
-		before.Revision = revision
-		unchanged, rerr := topologyMatchesBeforeTx(tx, mapSetID, before)
-		if rerr != nil {
-			return rerr
-		}
-		if unchanged {
-			if rerr := tx.Exec("ROLLBACK TO topology_apply_arm").Error; rerr != nil {
+	// SQLITE_BUSY/SNAPSHOT can be returned while the deferred read transaction
+	// upgrades to a writer. Retry the COMPLETE outer transaction, including the
+	// topology revision read and bump. Retrying an autorecord arm alone would
+	// reuse a stale revision snapshot and could commit a room/edge without its
+	// matching fence.
+	apply := func() error {
+		before = TopologyBefore{}
+		found = false
+		return s.db.Transaction(func(tx *gorm.DB) error {
+			revision, rerr := topologyRevisionTx(tx, mapSetID)
+			if rerr != nil {
 				return rerr
+			}
+			if s.topologyApplyAttemptHook != nil {
+				if hookErr := s.topologyApplyAttemptHook(); hookErr != nil {
+					return hookErr
+				}
+			}
+			inner := &Store{db: tx}
+			if op.Kind == TopoMoveRooms {
+				if op.ZoneMove == nil {
+					return fmt.Errorf("zone move is required")
+				}
+				var report ZoneMovePreview
+				before, report, found, rerr = applyZoneMoveTx(tx, mapSetID, *op.ZoneMove)
+				if op.ZoneMoveResult != nil {
+					*op.ZoneMoveResult = report
+				}
+				return rerr
+			}
+			if rerr := tx.Exec("SAVEPOINT topology_apply_arm").Error; rerr != nil {
+				return rerr
+			}
+			before, found, rerr = inner.applyTopologyOpUnfenced(mapSetID, op)
+			if rerr != nil || !found {
+				return rerr
+			}
+			before.Revision = revision
+			unchanged, rerr := topologyMatchesBeforeTx(tx, mapSetID, before)
+			if rerr != nil {
+				return rerr
+			}
+			if unchanged {
+				if rerr := tx.Exec("ROLLBACK TO topology_apply_arm").Error; rerr != nil {
+					return rerr
+				}
+				if rerr := tx.Exec("RELEASE topology_apply_arm").Error; rerr != nil {
+					return rerr
+				}
+				before.NoOp = true
+				return nil
 			}
 			if rerr := tx.Exec("RELEASE topology_apply_arm").Error; rerr != nil {
 				return rerr
 			}
-			before.NoOp = true
-			return nil
+			return advanceTopologyRevisionTx(tx, mapSetID, revision)
+		})
+	}
+	for attempt := 0; ; attempt++ {
+		err = apply()
+		if err == nil || !isSQLiteBusy(err) || attempt >= autorecordBusyRetries-1 {
+			break
 		}
-		if rerr := tx.Exec("RELEASE topology_apply_arm").Error; rerr != nil {
-			return rerr
-		}
-		return advanceTopologyRevisionTx(tx, mapSetID, revision)
-	})
+		time.Sleep(time.Duration(5*(1<<attempt)) * time.Millisecond)
+	}
 	if err != nil {
 		return TopologyBefore{}, false, err
 	}
@@ -593,6 +649,11 @@ func (s *Store) applyTopologyOpUnfenced(mapSetID int64, op TopologyOp) (before T
 			return TopologyBefore{}, false, fmt.Errorf("portal order is required")
 		}
 		return s.deletePortalWithSnapshot(mapSetID, EdgeCell{op.Zone, op.X, op.Y, op.L}, *op.PortalSelector, op.PortalResult)
+	case TopoAutorecordRoom:
+		if op.Autorecord == nil {
+			return TopologyBefore{}, false, fmt.Errorf("autorecord payload is required")
+		}
+		return s.autorecordRoomWithSnapshotTx(s.db, mapSetID, *op.Autorecord)
 	default:
 		return TopologyBefore{}, false, nil
 	}
@@ -641,6 +702,8 @@ func (op TopologyOp) UndoLabel() string {
 		return "delete portal"
 	case TopoMoveRooms:
 		return "move rooms between zones"
+	case TopoAutorecordRoom:
+		return "autorecord provisional room"
 	default:
 		return string(op.Kind)
 	}

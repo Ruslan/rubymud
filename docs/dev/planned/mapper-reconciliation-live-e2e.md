@@ -66,8 +66,11 @@ N                      S
 presentation passage `4–5`. Logical coordinates не меняются; длинный passage
 по-прежнему означает одну transport-команду.
 
-Текущий slice не создаёт provisional rooms, поэтому пять logical rooms заранее
-seed'ятся. Создание комнат continuous autorecord потребует отдельного E2E.
+Основной reconciliation run seed'ит пять logical rooms заранее. В отдельном
+изолированном autorecord run seed'ится только anchor room `1`, тогда как
+физический emulator по-прежнему содержит полный мир. Один настоящий `E` после
+OBS должен создать room `2` как provisional и записать только направленный
+autorecord corridor; reverse остаётся непроходимым до отдельного наблюдения.
 
 ## Компоненты
 
@@ -95,8 +98,10 @@ Test-only Go seed command с build tag `e2e` использует настоящ
 
 1. создаёт `${RUN_DIR}/mudhost.db` и применяет migrations;
 2. создаёт session `default` с loopback address emulator;
-3. создаёт five-room import и форкает его в editable map set;
-4. сохраняет exits так, чтобы derived face `5 --N--> 2` существовал;
+3. создаёт five-room import (или, для autorecord run, только anchor-room import)
+   и форкает его в editable map set;
+4. в обычном reconciliation fixture сохраняет exits так, чтобы derived face
+   `5 --N--> 2` существовал (autorecord fixture intentionally seeds only room 1);
 5. назначает editable set активным;
 6. выводит bounded JSON с `session_id`, `map_set_id` и координатами.
 
@@ -129,6 +134,12 @@ cache. Для запуска нужны Go toolchain, Node/npm, `sqlite3` CLI и
 `/?session_id=<id>`. REST используется только для fixture setup/readback:
 connect, ожидание live room и начальный anchor в room `1`. OBS, movement input,
 target selection, Preview и Apply выполняются через настоящие DOM controls.
+
+Autorecord E2E использует тот же connect/anchor/OBS путь и только читает REST
+state для ожидания завершения записи; создание room/edge происходит через
+реальный `#input` movement и live room event. Продуктовый режим одношаговый:
+перед следующим исследовательским движением UI должен снова показать зелёную
+позицию и ноль незавершённых записей.
 
 ## Основной сценарий
 
@@ -180,7 +191,7 @@ target selection, Preview и Apply выполняются через насто�
 1. Из физической room `1` снова отправить `E E S W N`.
 2. Проверить второй emulator trace.
 3. Последний `N` использует exact corridor и приходит в room `1` green без
-   нового conflict; OBS остаётся recording, pending queue возвращается к нулю.
+   нового conflict; OBS остаётся recording, ожидающий шаг возвращается к нулю.
 
 ### F. Persistence/restart
 
@@ -225,6 +236,16 @@ target selection, Preview и Apply выполняются через насто�
 Обязательный первый smoke — A–G. Stale/double-apply уже детерминированно покрыты
 session/web tests и не блокируют первый live harness.
 
+## Continuous autorecord smoke
+
+Второй isolated stack запускается с флагом `--autorecord`: в active editable
+set остаётся только подтверждённая room `1`, но emulator всё ещё возвращает
+полный block room `2`. Browser повторяет A (connect, anchor, OBS), отправляет
+один `E`, а затем Playwright проверяет в SQLite ровно одну новую provisional
+room, `source='autorecord'` directed corridor `1 --E--> 2`, отсутствие
+проходимого reverse `2 --W--> 1`, green position и `recording:0`. Этот сценарий
+не вызывает REST topology write.
+
 ## Артефакты
 
 При ошибке `${RUN_DIR}/artifacts` содержит:
@@ -257,7 +278,8 @@ credentials и не предназначена для загрузки или п
 ## Repro-first порядок реализации
 
 1. Unit-test state table emulator и путь `E E S W N`.
-2. Test seed command: пять rooms, editable active set, false `5 --N--> 2`.
+2. Test seed command: пять rooms/editable active set для reconciliation и
+   anchor-only editable active set для autorecord.
 3. Написать Playwright spec A–E и зафиксировать первый failure.
 4. Добавить минимальный orchestration и довести основной spec до green.
 5. Добавить restart F, failure artifacts и cleanup regression.
@@ -270,6 +292,8 @@ credentials и не предназначена для загрузки или п
 
 - одна команда запускает весь сценарий из clean checkout;
 - A–G три раза подряд проходят без retry;
+- autorecord smoke три раза подряд создаёт ровно одну provisional room и один
+  directed edge без passable reverse;
 - до Apply нет topology writes;
 - после Apply существует только exact `5 --N--> 1`, без reverse/ложного face;
 - второй круг и круг после restart заканчиваются green без conflict;
@@ -282,7 +306,8 @@ credentials и не предназначена для загрузки или п
 
 ## Не входит
 
-- provisional room creation continuous autorecord;
+- multi-hop autorecord solver, authoritative room IDs и automatic provisional
+  promotion;
 - GMCP/MSDP identity auto-close;
 - frozen-set COW reconciliation;
 - solver/drag и cross-zone target search;

@@ -17,12 +17,13 @@ func main() {
 	dbPath := flag.String("db", "", "SQLite path inside run-dir")
 	mudHost := flag.String("mud-host", "127.0.0.1", "test MUD loopback host")
 	mudPort := flag.Int("mud-port", 0, "test MUD port")
+	autorecord := flag.Bool("autorecord", false, "seed only the anchor room for the continuous autorecord E2E")
 	flag.Parse()
 	if *runDir == "" || *dbPath == "" {
 		fatal(fmt.Errorf("--run-dir and --db are required"))
 	}
 	result, err := mapperfixture.Seed(mapperfixture.Options{
-		RunDir: *runDir, DBPath: *dbPath, MUDHost: *mudHost, MUDPort: *mudPort,
+		RunDir: *runDir, DBPath: *dbPath, MUDHost: *mudHost, MUDPort: *mudPort, Autorecord: *autorecord,
 	})
 	if err != nil {
 		fatal(err)

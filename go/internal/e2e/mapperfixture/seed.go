@@ -14,10 +14,11 @@ import (
 const Zone = "Five Room Loop"
 
 type Options struct {
-	RunDir  string
-	DBPath  string
-	MUDHost string
-	MUDPort int
+	RunDir     string
+	DBPath     string
+	MUDHost    string
+	MUDPort    int
+	Autorecord bool
 }
 
 type Result struct {
@@ -69,10 +70,19 @@ func Seed(opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("disable MCCP for fixture: %w", err)
 	}
 
-	rooms := fiveRooms()
+	allRooms := fiveRooms()
+	rooms := allRooms
+	archive := "e2e-five-room-loop"
+	if opts.Autorecord {
+		// Keep the physical world unchanged but seed only the confirmed anchor.
+		// The first E movement therefore lands in a real, complete room that is
+		// deliberately absent from the active map set.
+		rooms = allRooms[:1]
+		archive = "e2e-autorecord-unseeded-target"
+	}
 	importedID, err := store.CreateMapSet(storage.MapSetInput{
 		Name:          "Five Room Loop E2E source",
-		SourceArchive: "e2e-five-room-loop",
+		SourceArchive: archive,
 		ZoneCount:     1,
 		RoomCount:     len(rooms),
 		Rooms:         rooms,

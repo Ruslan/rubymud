@@ -8,8 +8,10 @@ import (
 	"strings"
 	"testing"
 
+	appi18n "rubymud/go/internal/i18n"
 	"rubymud/go/internal/mapper"
 	"rubymud/go/internal/session"
+	"rubymud/go/internal/storage"
 )
 
 func TestMapRecordingRESTStrictStartStateStop(t *testing.T) {
@@ -17,12 +19,10 @@ func TestMapRecordingRESTStrictStartStateStop(t *testing.T) {
 	ts := httptest.NewServer(s.httpServer.Handler)
 	defer ts.Close()
 	sid := sess.SessionID()
-	seedTrackerSet(t, s, sid)
-	sess.LoadActiveMapSet()
-	if ok, exact := sess.AnchorMapPosition(mapper.Coord{Zone: "Z"}); !ok || !exact {
-		t.Fatal("anchor failed")
+	frozen := seedTrackerSet(t, s, sid)
+	if err := s.store.DB().Model(&storage.MapSet{}).Where("id=?", frozen).Update("editable", false).Error; err != nil {
+		t.Fatal(err)
 	}
-	setLiveRoom(t, sess, "Первая", "one", "S")
 
 	post := func(path, body string) (int, map[string]any) {
 		req, _ := newAuthenticatedRequest(http.MethodPost, fmt.Sprintf("%s/api/sessions/%d/%s", ts.URL, sid, path), strings.NewReader(body), s.apiToken)
@@ -35,6 +35,35 @@ func TestMapRecordingRESTStrictStartStateStop(t *testing.T) {
 		_ = json.NewDecoder(resp.Body).Decode(&out)
 		return resp.StatusCode, out
 	}
+	// Continuous autorecord is intentionally refused on the imported/frozen
+	// active set, with one stable reason code in both REST locales.
+	sess.LoadActiveMapSet()
+	if ok, exact := sess.AnchorMapPosition(mapper.Coord{Zone: "Z"}); !ok || !exact {
+		t.Fatal("frozen-set anchor failed")
+	}
+	setLiveRoom(t, sess, "Первая", "one", "S")
+	if code, out := post("map-recording-start", `{}`); code != http.StatusOK || out["reason_code"] != "mapper.recording.map_set_not_editable" || out["reason"] != "room autorecord requires an editable map set" {
+		t.Fatalf("frozen-set English refusal code=%d out=%#v", code, out)
+	}
+	s.setMapperLanguage(appi18n.Russian)
+	if code, out := post("map-recording-start", `{}`); code != http.StatusOK || out["reason_code"] != "mapper.recording.map_set_not_editable" || !strings.Contains(out["reason"].(string), "редактируемого") {
+		t.Fatalf("frozen-set Russian refusal code=%d out=%#v", code, out)
+	}
+	s.setMapperLanguage(appi18n.English)
+
+	editable, err := s.store.ForkMapSet(frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.store.SetActiveMapSetID(sid, editable); err != nil {
+		t.Fatal(err)
+	}
+	sess.LoadActiveMapSet()
+	if ok, exact := sess.AnchorMapPosition(mapper.Coord{Zone: "Z"}); !ok || !exact {
+		t.Fatal("anchor failed")
+	}
+	setLiveRoom(t, sess, "Первая", "one", "S")
+
 	if code, _ := post("map-recording-start", `{"unknown":1}`); code != http.StatusBadRequest {
 		t.Fatalf("unknown field status=%d", code)
 	}

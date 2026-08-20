@@ -236,6 +236,16 @@ func runMigrations(db *gorm.DB) error {
 					return err
 				}
 			}
+			if file == "032_autorecord_provenance.sql" {
+				// This migration is intentionally idempotent for historical upgrade
+				// probes that may have applied the mapper tail, removed its ledger
+				// entries, and then replayed it. SQLite has no ADD COLUMN IF NOT EXISTS,
+				// so inspect the live table and add only missing provenance columns.
+				if err := ensureAutorecordProvenance(tx); err != nil {
+					return err
+				}
+				skipSQL = true
+			}
 			if !skipSQL {
 				if err := tx.Exec(string(content)).Error; err != nil {
 					return err
@@ -253,6 +263,44 @@ func runMigrations(db *gorm.DB) error {
 	}
 
 	return nil
+}
+
+func ensureAutorecordProvenance(tx *gorm.DB) error {
+	var roomsTable int64
+	if err := tx.Raw(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='rooms'`).Scan(&roomsTable).Error; err != nil {
+		return err
+	}
+	if roomsTable == 0 {
+		return nil
+	}
+	type columnInfo struct {
+		Name string `gorm:"column:name"`
+	}
+	var columns []columnInfo
+	if err := tx.Raw(`PRAGMA table_info('rooms')`).Scan(&columns).Error; err != nil {
+		return err
+	}
+	present := make(map[string]bool, len(columns))
+	for _, c := range columns {
+		present[c.Name] = true
+	}
+	for _, ddl := range []struct {
+		name string
+		sql  string
+	}{
+		{"verification_state", `ALTER TABLE rooms ADD COLUMN verification_state TEXT NOT NULL DEFAULT 'verified'`},
+		{"record_source", `ALTER TABLE rooms ADD COLUMN record_source TEXT NOT NULL DEFAULT 'import'`},
+		{"record_batch_id", `ALTER TABLE rooms ADD COLUMN record_batch_id TEXT NOT NULL DEFAULT ''`},
+		{"recorded_at", `ALTER TABLE rooms ADD COLUMN recorded_at DATETIME`},
+		{"record_origin", `ALTER TABLE rooms ADD COLUMN record_origin TEXT NOT NULL DEFAULT ''`},
+	} {
+		if !present[ddl.name] {
+			if err := tx.Exec(ddl.sql).Error; err != nil {
+				return err
+			}
+		}
+	}
+	return tx.Exec(`CREATE INDEX IF NOT EXISTS idx_rooms_record_batch ON rooms(map_set_id,record_batch_id) WHERE record_batch_id <> ''`).Error
 }
 
 func (s *Store) Close() error {

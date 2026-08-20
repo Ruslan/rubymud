@@ -5,13 +5,18 @@ import { expect, test, type Page } from "@playwright/test";
 import { LiveStack } from "./live-stack";
 
 let stack: LiveStack;
+let primaryStack: LiveStack;
 let failed = false;
 
-test.beforeAll(async () => { stack = await LiveStack.start(); });
+test.beforeAll(async () => { stack = await LiveStack.start(); primaryStack = stack; });
 test.afterEach(async ({}, testInfo) => { if (testInfo.status !== testInfo.expectedStatus) failed = true; });
 test.afterAll(async () => {
-  const target = await stack.cleanup(failed || process.env.KEEP_E2E_ARTIFACTS === "1");
-  if (target) console.log(`E2E artifacts: ${target}`);
+  const preserve = failed || process.env.KEEP_E2E_ARTIFACTS === "1";
+  const candidates = stack === primaryStack ? [primaryStack] : [primaryStack, stack];
+  for (const candidate of candidates) {
+    const target = await candidate.cleanup(preserve);
+    if (target) console.log(`E2E artifacts: ${target}`);
+  }
 });
 
 test("reconciles the live five-room loop and survives restart", async ({ browser, page }) => {
@@ -95,6 +100,45 @@ test("reconciles the live five-room loop and survives restart", async ({ browser
   await context.close();
 });
 
+test("creates one provisional room and directed edge from a real unseeded move", async ({ page }) => {
+  stack = await LiveStack.start({ autorecord: true });
+  await installMapLayout(page);
+  await page.goto(`${stack.baseURL}/?session_id=${stack.seed.session_id}`);
+  await connectAnchorAndArm(page);
+
+  expect(stack.query<{ n: number }>(
+    `SELECT count(*) AS n FROM rooms WHERE map_set_id=${stack.seed.map_set_id}`,
+  )).toEqual([{ n: 1 }]);
+
+  // This is the same user path as the regression: the browser sends one real
+  // movement after the green anchor, and the room event comes from the live
+  // deterministic MUD. No REST topology write is used.
+  await sendAndExpectRoom(page, "E", "Loop Room 2");
+  await expect.poll(() => stack.query<{ n: number }>(
+    `SELECT count(*) AS n FROM rooms WHERE map_set_id=${stack.seed.map_set_id}`,
+  )).toEqual([{ n: 2 }]);
+  await expectRecordingAtRoomOne(page);
+  await expect(page.locator(".map-pane__confidence")).toHaveAttribute("title", /Confidence: green/);
+
+  expect(stack.query<Record<string, unknown>>(
+    `SELECT hint,desc,exits,verification_state,record_source,record_batch_id,record_origin FROM rooms WHERE map_set_id=${stack.seed.map_set_id} AND zone='Five Room Loop' AND x=0 AND y=1 AND l=0`,
+  )).toEqual([{
+    hint: "Loop Room 2", desc: "The second chamber is lined with blue tiles.", exits: "E W",
+    verification_state: "provisional", record_source: "autorecord",
+    record_batch_id: expect.stringMatching(/^session-\d+-epoch-\d+-move-\d+$/),
+    record_origin: `session:${stack.seed.session_id}`,
+  }]);
+  expect(stack.query<Record<string, unknown>>(
+    `SELECT kind,source,passable,dir,command,to_zone,to_x,to_y,to_l FROM map_edges WHERE map_set_id=${stack.seed.map_set_id} AND from_zone='Five Room Loop' AND from_x=0 AND from_y=0 AND from_l=0 AND dir='E'`,
+  )).toEqual([{
+    kind: "corridor", source: "autorecord", passable: 1, dir: "E", command: "E",
+    to_zone: "Five Room Loop", to_x: 0, to_y: 1, to_l: 0,
+  }]);
+  expect(stack.query(
+    `SELECT 1 AS present FROM map_edges WHERE map_set_id=${stack.seed.map_set_id} AND from_zone='Five Room Loop' AND from_x=0 AND from_y=1 AND from_l=0 AND dir='W' AND passable=1`,
+  )).toHaveLength(0);
+});
+
 async function installMapLayout(page: Page): Promise<void> {
   await page.context().addInitScript(mapLayoutInit);
 }
@@ -133,7 +177,7 @@ async function connectAnchorAndArm(page: Page): Promise<void> {
 }
 
 function obsButton(page: Page) {
-  return page.locator('.map-pane button[aria-label="Diagnostic movement observation; no rooms are written"]');
+  return page.getByRole("button", { name: "OBS records one explored room at a time; wait for the new cell to turn green before moving again" });
 }
 
 async function openCurrentRoomKnowledge(page: Page, roomName: string) {

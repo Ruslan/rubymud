@@ -163,8 +163,8 @@ describe("map pane compact toolbar", () => {
     expect(button.getAttribute("aria-pressed")).toBe("true");
     pane.onMapRecordingState({ mode: "off", pending: 0, revision: 4 });
     expect(button.textContent).toBe("STOP OBS");
-    pane.onMapRecordingState({ mode: "recording", pending: 2, revision: 6 });
-    expect(button.title).toContain("2 pending");
+    pane.onMapRecordingState({ mode: "recording", pending: 1, revision: 6 });
+    expect(button.title).toContain("wait for the new cell to turn green");
     pane.onMapRecordingState({ mode: "conflict", pending: 0, revision: 7, reason: "mismatch" });
     expect(button.textContent).toBe("OBS!");
     expect(button.getAttribute("aria-pressed")).toBe("false");

@@ -58,6 +58,12 @@ const (
 	MapperRecordingWalkOutcome         Key = "mapper.recording.walk_outcome_unknown"
 	MapperRecordingWalkTimeout         Key = "mapper.recording.walk_timeout"
 	MapperRecordingDisconnected        Key = "mapper.recording.disconnected"
+	MapperRecordingMapSetNotEditable   Key = "mapper.recording.map_set_not_editable"
+	MapperRecordingIncompleteRoom      Key = "mapper.recording.incomplete_room"
+	MapperRecordingRoomEventTooLarge   Key = "mapper.recording.room_event_too_large"
+	MapperRecordingTopologyChanged     Key = "mapper.recording.topology_changed"
+	MapperRecordingLifecycleChanged    Key = "mapper.recording.lifecycle_changed"
+	MapperRecordingPendingTimeout      Key = "mapper.recording.pending_timeout"
 	MapperRecordingStopped             Key = "mapper.recording.stopped"
 	MapperRoomNotFound                 Key = "mapper.room_not_found"
 	MapperInvalidBody                  Key = "mapper.invalid_body"
@@ -171,7 +177,7 @@ var catalogs = map[Locale]map[Key]string{
 		MapperRecordingNoActiveMapSet:      "no active map set",
 		MapperRecordingStoppedByUser:       "stopped by user",
 		MapperRecordingPositionLost:        "position lost",
-		MapperRecordingPendingLimit:        "pending movement limit exceeded",
+		MapperRecordingPendingLimit:        "previous autorecord step is still pending; wait for the new cell to turn green",
 		MapperRecordingOccupiedMismatch:    "occupied expected room content mismatch",
 		MapperRecordingActiveMapChanged:    "active map changed",
 		MapperRecordingRoomFormatChanged:   "room format changed",
@@ -180,6 +186,12 @@ var catalogs = map[Locale]map[Key]string{
 		MapperRecordingWalkOutcome:         "map walk command outcome unknown",
 		MapperRecordingWalkTimeout:         "walk confirmation timeout",
 		MapperRecordingDisconnected:        "session disconnected",
+		MapperRecordingMapSetNotEditable:   "room autorecord requires an editable map set",
+		MapperRecordingIncompleteRoom:      "incomplete room event",
+		MapperRecordingRoomEventTooLarge:   "room event too large",
+		MapperRecordingTopologyChanged:     "map topology changed while autorecord was pending",
+		MapperRecordingLifecycleChanged:    "autorecord lifecycle changed",
+		MapperRecordingPendingTimeout:      "movement confirmation timed out",
 		MapperRecordingStopped:             "{detail}",
 		MapperRoomNotFound:                 "room not found in the active map set",
 		MapperInvalidBody:                  "invalid body: {detail}",
@@ -291,7 +303,7 @@ var catalogs = map[Locale]map[Key]string{
 		MapperRecordingNoActiveMapSet:      "нет активного набора карт",
 		MapperRecordingStoppedByUser:       "остановлено пользователем",
 		MapperRecordingPositionLost:        "запись карты остановлена: позиция потеряна",
-		MapperRecordingPendingLimit:        "запись карты остановлена: превышен предел ожидающих перемещений",
+		MapperRecordingPendingLimit:        "предыдущий шаг автозаписи ещё не завершён; дождитесь, пока новая клетка станет зелёной",
 		MapperRecordingOccupiedMismatch:    "содержимое занятой целевой комнаты не совпало — нужна сверка карты",
 		MapperRecordingActiveMapChanged:    "запись карты остановлена: активный набор карт изменён",
 		MapperRecordingRoomFormatChanged:   "запись карты остановлена: формат комнат изменён",
@@ -300,6 +312,12 @@ var catalogs = map[Locale]map[Key]string{
 		MapperRecordingWalkOutcome:         "запись карты остановлена: результат команды автоперехода неизвестен",
 		MapperRecordingWalkTimeout:         "запись карты остановлена: подтверждение автоперехода не получено вовремя",
 		MapperRecordingDisconnected:        "запись карты остановлена: сессия отключена",
+		MapperRecordingMapSetNotEditable:   "пошаговая запись комнат требует редактируемого набора карт",
+		MapperRecordingIncompleteRoom:      "запись карты остановлена: блок комнаты неполный",
+		MapperRecordingRoomEventTooLarge:   "запись карты остановлена: блок комнаты слишком велик",
+		MapperRecordingTopologyChanged:     "запись карты остановлена: топология набора карт изменилась",
+		MapperRecordingLifecycleChanged:    "запись карты остановлена: состояние сессии изменилось",
+		MapperRecordingPendingTimeout:      "запись карты остановлена: подтверждение перемещения не получено вовремя",
 		MapperRecordingStopped:             "запись карты остановлена: {detail}",
 		MapperRoomNotFound:                 "комната не найдена в активном наборе карт",
 		MapperInvalidBody:                  "неверное тело запроса: {detail}",

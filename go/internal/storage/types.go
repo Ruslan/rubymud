@@ -28,6 +28,10 @@ type Store struct {
 	// frozen set. Guarded by topoMu for the lazy per-key create.
 	topoMu    sync.Mutex
 	topoLocks map[int64]*sync.Mutex
+	// topologyApplyAttemptHook is a test seam for deterministic SQLITE_BUSY
+	// retry coverage. It is nil in production and is invoked inside the outer
+	// transaction after the revision snapshot is read.
+	topologyApplyAttemptHook func() error
 
 	// Inhabitant patches use bounded lock striping so concurrent partial writes
 	// to one normalized entity cannot interleave with a full replacement and
