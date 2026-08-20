@@ -47,9 +47,22 @@ const initialRows = [
 
 describe("map room inhabitants knowledge dialog", () => {
   let pane: MapPaneController;
+  let nextRoomList: unknown | null;
+  let roomListResponses: unknown[];
+  let failNextRoomList = false;
+  let legacyCursorFailure = false;
+  let catalogItems: unknown[];
 
   beforeEach(() => {
     stubCanvas();
+    nextRoomList = null;
+    roomListResponses = [];
+    failNextRoomList = false;
+    legacyCursorFailure = false;
+    catalogItems = [{
+      id: 8, map_set_id: 5, name: "Странствующий лекарь", kind: "npc",
+      look_target: "лекарь", strategy: "Купить бинты.", placement_count: 1,
+    }];
     vi.spyOn(window, "confirm").mockReturnValue(true);
     fetchMock.mockImplementation((rawURL: string, init?: RequestInit) => {
       const url = decodeURIComponent(rawURL);
@@ -58,12 +71,19 @@ describe("map room inhabitants knowledge dialog", () => {
       if (url.includes("/api/rooms?map_set=5&zone=Город")) return Promise.resolve(response([room]));
       if (url.includes("/api/map-sets/5/inhabitants") && (!init?.method || init.method === "GET")) {
 		if (url.includes("/catalog?")) {
-		  return Promise.resolve(response({ items: [{
-			id: 8, map_set_id: 5, name: "Странствующий лекарь", kind: "npc",
-			look_target: "лекарь", strategy: "Купить бинты.", placement_count: 1,
-		  }], truncated: false }));
+		  return Promise.resolve(response({ items: catalogItems, truncated: false }));
 		}
-        return Promise.resolve(response(initialRows.map((row) => ({ ...row }))));
+		if (failNextRoomList) {
+		  failNextRoomList = false;
+		  return Promise.resolve(response("refresh failed", 500));
+		}
+		if (legacyCursorFailure && url.includes("cursor=")) {
+		  legacyCursorFailure = false;
+		  return Promise.resolve(response("legacy_room_inhabitant_cursor", 400));
+		}
+        const body = roomListResponses.shift() ?? nextRoomList ?? initialRows.map((row) => ({ ...row }));
+        nextRoomList = null;
+        return Promise.resolve(response(body));
       }
       if (url.endsWith("/api/map-sets/5/inhabitants") && init?.method === "POST") {
         const body = JSON.parse(String(init.body));
@@ -73,13 +93,37 @@ describe("map room inhabitants knowledge dialog", () => {
 			look_target: "лекарь", look_text: "", note: "", strategy: "Купить бинты.", ...body,
 		  }, 201));
 		}
+		if (body.inhabitant_id === 1) {
+		  return Promise.resolve(response({
+			id: 1, placement_id: 101, map_set_id: 5, name: "Low ID", kind: "npc",
+			look_target: "low", look_text: "", note: "", strategy: "", ...body,
+		  }, 201));
+		}
+		if (body.name === "New at page edge") {
+		  return Promise.resolve(response({
+			id: 999, placement_id: 1999, map_set_id: 5, kind: "npc",
+			look_target: "new", look_text: "", note: "", strategy: "", ...body,
+		  }, 201));
+		}
         return Promise.resolve(response({ id: 3, placement_id: 13, map_set_id: 5, ...body }, 201));
       }
       if (url.endsWith("/api/map-sets/5/inhabitants/1") && init?.method === "PATCH") {
         const body = JSON.parse(String(init.body));
         return Promise.resolve(response({ id: 1, placement_id: 11, map_set_id: 5, ...body }));
       }
+      if (url.endsWith("/api/map-sets/5/inhabitants/121") && init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body));
+        return Promise.resolve(response({ id: 121, placement_id: 121, map_set_id: 5, ...body }));
+      }
+      if (url.includes("/api/map-sets/5/inhabitants/") && init?.method === "PATCH") {
+        const body = JSON.parse(String(init.body));
+        const id = Number(url.split("/").at(-1));
+        return Promise.resolve(response({ id, placement_id: id + 100, map_set_id: 5, ...body }));
+      }
       if (url.includes("/api/map-sets/5/inhabitants/2?") && init?.method === "DELETE") {
+        return Promise.resolve(response("", 204));
+      }
+      if (url.includes("/api/map-sets/5/inhabitants/121?") && init?.method === "DELETE") {
         return Promise.resolve(response("", 204));
       }
       throw new Error(`unexpected request: ${rawURL} ${init?.method ?? "GET"}`);
@@ -168,6 +212,207 @@ describe("map room inhabitants knowledge dialog", () => {
     expect(document.activeElement).not.toBe(document.body);
   });
 
+  it("announces when the bounded room list is truncated", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
+    nextRoomList = { items: initialRows, truncated: true };
+    clickRoom();
+    [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
+      .find((button) => button.textContent === "Knowledge…")!.click();
+    const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
+    await vi.waitFor(() => expect(dialog.textContent).toContain("Showing the first 20 inhabitants"));
+    expect(dialog.querySelector('[role="status"]')?.textContent).toContain("room has more");
+    expect(dialog.querySelectorAll(".map-inhabitant-card")).toHaveLength(initialRows.length);
+  });
+
+  it("loads later pages so every bounded entry remains editable and removable", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
+    const firstPage = Array.from({ length: 20 }, (_, index) => ({
+      ...initialRows[0], id: 101 + index, placement_id: 201 + index, name: `NPC ${String(index).padStart(2, "0")}`,
+    }));
+    const twentyFirst = { ...firstPage[0], id: 121, placement_id: 221, name: "NPC 20" };
+    roomListResponses.push(
+      { items: firstPage, truncated: true, next_cursor: "cursor-20" },
+      { items: [twentyFirst], truncated: false },
+      { items: [{ ...twentyFirst, name: "NPC 20 edited" }], truncated: false },
+      { items: [], truncated: false },
+      { items: firstPage, truncated: true, next_cursor: "cursor-20" },
+    );
+    clickRoom();
+    [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
+      .find((button) => button.textContent === "Knowledge…")!.click();
+    const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
+    await vi.waitFor(() => expect(dialog.querySelectorAll(".map-inhabitant-card")).toHaveLength(20));
+    const more = [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Load more")!;
+    more.focus();
+    more.click();
+    await vi.waitFor(() => expect(dialog.querySelector('[data-inhabitant-id="121"]')).not.toBeNull());
+    expect(dialog.querySelectorAll(".map-inhabitant-card")).toHaveLength(1);
+    expect(document.activeElement).not.toBe(more);
+
+    const card = dialog.querySelector<HTMLElement>('[data-inhabitant-id="121"]')!;
+    [...card.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Edit")!.click();
+    const editForm = dialog.querySelector<HTMLFormElement>(".map-inhabitant-form")!;
+    (editForm.elements.namedItem("name") as HTMLInputElement).value = "NPC 20 edited";
+    editForm.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(dialog.textContent).toContain("NPC 20 edited"));
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).endsWith("/inhabitants/121") && init?.method === "PATCH")).toBe(true);
+
+    const editedCard = dialog.querySelector<HTMLElement>('[data-inhabitant-id="121"]')!;
+    editedCard.querySelector<HTMLButtonElement>('button:last-of-type')!.click();
+    await vi.waitFor(() => expect(dialog.querySelector('[data-inhabitant-id="121"]')).toBeNull());
+    expect(fetchMock.mock.calls.some(([url, init]) => String(url).includes("/inhabitants/121?") && init?.method === "DELETE")).toBe(true);
+    const previous = dialog.querySelector<HTMLButtonElement>('button.map-knowledge-dialog__previous')!;
+    expect(previous.textContent).toBe("Previous page");
+    previous.click();
+    await vi.waitFor(() => expect(dialog.querySelectorAll(".map-inhabitant-card")).toHaveLength(20));
+    expect(dialog.querySelector('[data-inhabitant-id="121"]')).toBeNull();
+  });
+
+  it("reloads a full first page after create and keeps the DOM bounded without a WS echo", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
+    const firstPage = Array.from({ length: 20 }, (_, index) => ({
+      ...initialRows[0], id: 401 + index, placement_id: 501 + index, name: `Existing ${String(index).padStart(2, "0")}`,
+    }));
+    roomListResponses.push(
+      { items: firstPage, truncated: true, next_cursor: "cursor-edge" },
+      { items: firstPage, truncated: true, next_cursor: "cursor-edge" },
+    );
+    clickRoom();
+    [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
+      .find((button) => button.textContent === "Knowledge…")!.click();
+    const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
+    await vi.waitFor(() => expect(dialog.querySelectorAll(".map-inhabitant-card")).toHaveLength(20));
+    const before = fetchMock.mock.calls.filter(([url]) => String(url).includes("/inhabitants?")).length;
+    [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Add new")!.click();
+    const form = dialog.querySelector<HTMLFormElement>(".map-inhabitant-form")!;
+    (form.elements.namedItem("name") as HTMLInputElement).value = "New at page edge";
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(fetchMock.mock.calls.filter(([url]) => String(url).includes("/inhabitants?")).length).toBe(before + 1));
+    await vi.waitFor(() => expect(dialog.querySelectorAll(".map-inhabitant-card")).toHaveLength(20));
+    expect(dialog.querySelector('[data-inhabitant-id="999"]')).toBeNull();
+    const reload = fetchMock.mock.calls.filter(([url]) => String(url).includes("/inhabitants?")).at(-1)?.[0];
+    expect(String(reload)).toContain("limit=20");
+    expect(String(reload)).not.toContain("cursor=");
+    expect(dialog.querySelector<HTMLButtonElement>('button.map-knowledge-dialog__previous')?.hidden).toBe(true);
+    expect(dialog.querySelector<HTMLButtonElement>('button.map-knowledge-dialog__load-more')?.hidden).toBe(false);
+  });
+
+  it("closes a successful-write form and offers retry when the authoritative refresh fails", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
+    roomListResponses.push({
+      items: Array.from({ length: 20 }, (_, index) => ({
+        ...initialRows[0], id: 101 + index, placement_id: 201 + index, name: `Existing ${String(index).padStart(2, "0")}`,
+      })), truncated: true, next_cursor: "cursor-refresh-failure",
+    });
+    clickRoom();
+    [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
+      .find((button) => button.textContent === "Knowledge…")!.click();
+    const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
+    await vi.waitFor(() => expect(dialog.textContent).toContain("Кузнец"));
+    [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Add new")!.click();
+    const form = dialog.querySelector<HTMLFormElement>(".map-inhabitant-form")!;
+    (form.elements.namedItem("name") as HTMLInputElement).value = "Written before refresh failure";
+    const postCount = () => fetchMock.mock.calls.filter(([, init]) => init?.method === "POST").length;
+    const writesBefore = postCount();
+    failNextRoomList = true;
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(dialog.querySelector(".map-inhabitant-form")).toBeNull());
+    expect(postCount()).toBe(writesBefore + 1);
+    expect(dialog.querySelector('[role="status"]')?.textContent).toContain("Failed to load inhabitants");
+    const retry = [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Retry")!;
+    expect(retry.hidden).toBe(false);
+    expect(document.activeElement).toBe(retry);
+
+    nextRoomList = [{ ...initialRows[0], name: "Authoritative after retry" }];
+    retry.click();
+    await vi.waitFor(() => expect(dialog.textContent).toContain("Authoritative after retry"));
+    expect(postCount()).toBe(writesBefore + 1);
+  });
+
+  it("does not leave a successful PATCH form disabled when its refresh fails", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
+    roomListResponses.push({
+      items: Array.from({ length: 20 }, (_, index) => ({
+        ...initialRows[0], id: 501 + index, placement_id: 601 + index, name: `Patch ${String(index).padStart(2, "0")}`,
+      })), truncated: true, next_cursor: "cursor-patch-refresh",
+    });
+    clickRoom();
+    [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
+      .find((button) => button.textContent === "Knowledge…")!.click();
+    const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
+    await vi.waitFor(() => expect(dialog.querySelectorAll(".map-inhabitant-card")).toHaveLength(20));
+    const card = dialog.querySelector<HTMLElement>('[data-inhabitant-id="501"]')!;
+    card.querySelector<HTMLButtonElement>('button')!.click();
+    const form = dialog.querySelector<HTMLFormElement>(".map-inhabitant-form")!;
+    (form.elements.namedItem("name") as HTMLInputElement).value = "Patched before refresh failure";
+    const patchCount = () => fetchMock.mock.calls.filter(([, init]) => init?.method === "PATCH").length;
+    const writesBefore = patchCount();
+    failNextRoomList = true;
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(dialog.querySelector(".map-inhabitant-form")).toBeNull());
+    expect(patchCount()).toBe(writesBefore + 1);
+    expect(dialog.querySelector<HTMLButtonElement>('button.map-knowledge-dialog__retry')?.hidden).toBe(false);
+    expect(document.activeElement).toBe(dialog.querySelector<HTMLButtonElement>('button.map-knowledge-dialog__retry'));
+  });
+
+  it("resets to page zero when the old id-only cursor is invalidated", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
+    const firstPage = Array.from({ length: 20 }, (_, index) => ({
+      ...initialRows[0], id: 301 + index, placement_id: 401 + index, name: `Cursor ${String(index).padStart(2, "0")}`,
+    }));
+    // Raw base64url({"id":20}) — the short-lived cursor emitted before v2.
+    roomListResponses.push({ items: firstPage, truncated: true, next_cursor: "eyJpZCI6MjB9" });
+    clickRoom();
+    [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
+      .find((button) => button.textContent === "Knowledge…")!.click();
+    const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
+    await vi.waitFor(() => expect(dialog.querySelectorAll(".map-inhabitant-card")).toHaveLength(20));
+    legacyCursorFailure = true;
+    dialog.querySelector<HTMLButtonElement>('button.map-knowledge-dialog__load-more')!.click();
+    await vi.waitFor(() => expect(dialog.querySelector<HTMLButtonElement>('button.map-knowledge-dialog__retry')?.hidden).toBe(false));
+    expect(dialog.querySelector('[role="status"]')?.textContent).toContain("list changed");
+    expect(dialog.querySelector<HTMLButtonElement>('button.map-knowledge-dialog__previous')?.hidden).toBe(true);
+    nextRoomList = [{ ...initialRows[0], name: "Fresh first page" }];
+    dialog.querySelector<HTMLButtonElement>('button.map-knowledge-dialog__retry')!.click();
+    await vi.waitFor(() => expect(dialog.textContent).toContain("Fresh first page"));
+    const lastListURL = fetchMock.mock.calls.filter(([url]) => String(url).includes("/inhabitants?")).at(-1)?.[0];
+    expect(String(lastListURL)).not.toContain("cursor=");
+  });
+
+  it("discards a stale load-more page when live knowledge refresh replaces the room list", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
+    const firstPage = Array.from({ length: 20 }, (_, index) => ({
+      ...initialRows[0], id: 201 + index, placement_id: 301 + index, name: `Page ${String(index).padStart(2, "0")}`,
+    }));
+    roomListResponses.push({ items: firstPage, truncated: true, next_cursor: "cursor-page" });
+    clickRoom();
+    [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
+      .find((button) => button.textContent === "Knowledge…")!.click();
+    const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
+    await vi.waitFor(() => expect(dialog.querySelectorAll(".map-inhabitant-card")).toHaveLength(20));
+
+    let resolveStale!: (value: Response) => void;
+    fetchMock.mockImplementationOnce(() => new Promise<Response>((resolve) => { resolveStale = resolve; }));
+    dialog.querySelector<HTMLButtonElement>('button')?.focus();
+    [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Load more")!.click();
+    await vi.waitFor(() => expect(resolveStale).toBeTypeOf("function"));
+
+    roomListResponses.push({ items: [{ ...initialRows[0], id: 999, placement_id: 999, name: "Fresh page" }], truncated: false });
+    pane.onRoomKnowledgeChanged(5, "Город", 3, 4, 0);
+    await vi.waitFor(() => expect(dialog.textContent).toContain("Fresh page"));
+    resolveStale(response({ items: [{ ...initialRows[0], id: 998, placement_id: 998, name: "Stale page" }], truncated: false }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(dialog.textContent).not.toContain("Stale page");
+    expect(dialog.textContent).toContain("Fresh page");
+  });
+
 	it("searches the bounded catalog and places an existing entity", async () => {
 	  await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
 	  clickRoom();
@@ -200,6 +445,52 @@ describe("map room inhabitants knowledge dialog", () => {
 	  });
 	  expect(document.activeElement?.closest(".map-inhabitant-card")?.textContent).toContain("Странствующий лекарь");
 	});
+
+  it("resets traversal after placing a low-id catalog entry from a later page", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
+    const firstPage = Array.from({ length: 20 }, (_, index) => ({
+      ...initialRows[0], id: 2 + index, placement_id: 202 + index, name: `NPC ${String(2 + index).padStart(2, "0")}`,
+    }));
+    const secondPage = [{ ...firstPage[0], id: 22, placement_id: 222, name: "NPC 22" }];
+    const refreshedFirstPage = Array.from({ length: 20 }, (_, index) => ({
+      ...initialRows[0], id: 1 + index, placement_id: 201 + index, name: `NPC ${String(1 + index).padStart(2, "0")}`,
+    }));
+    const refreshedSecondPage = [
+      { ...firstPage[0], id: 21, placement_id: 221, name: "NPC 21" },
+      { ...secondPage[0], id: 22, placement_id: 222, name: "NPC 22" },
+    ];
+    roomListResponses.push(
+      { items: firstPage, truncated: true, next_cursor: "cursor-before-placement" },
+      { items: secondPage, truncated: false },
+      { items: refreshedFirstPage, truncated: true, next_cursor: "cursor-after-placement" },
+      { items: refreshedSecondPage, truncated: false },
+    );
+    catalogItems = [{
+      id: 1, map_set_id: 5, name: "Low ID catalog NPC", kind: "npc",
+      look_target: "low", strategy: "", placement_count: 0,
+    }];
+    clickRoom();
+    [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
+      .find((button) => button.textContent === "Knowledge…")!.click();
+    const dialog = pane.root.querySelector<HTMLElement>(".map-knowledge-dialog")!;
+    await vi.waitFor(() => expect(dialog.querySelectorAll(".map-inhabitant-card")).toHaveLength(20));
+    dialog.querySelector<HTMLButtonElement>('button.map-knowledge-dialog__load-more')!.click();
+    await vi.waitFor(() => expect(dialog.querySelector('[data-inhabitant-id="22"]')).not.toBeNull());
+    [...dialog.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent === "Place existing")!.click();
+    await vi.waitFor(() => expect(dialog.querySelector(".map-inhabitant-catalog__item")?.textContent).toContain("Low ID catalog NPC"));
+    dialog.querySelector<HTMLButtonElement>('.map-inhabitant-catalog__item button')!.click();
+    const form = dialog.querySelector<HTMLFormElement>(".map-inhabitant-placement-form")!;
+    form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(dialog.querySelector('[data-inhabitant-id="1"]')).not.toBeNull());
+    const listCalls = fetchMock.mock.calls.filter(([url]) => String(url).includes("/inhabitants?"));
+    expect(String(listCalls.at(-1)?.[0])).not.toContain("cursor=");
+    expect(dialog.querySelector<HTMLButtonElement>('button.map-knowledge-dialog__previous')?.hidden).toBe(true);
+    expect(dialog.querySelector('[data-inhabitant-id="21"]')).toBeNull();
+    dialog.querySelector<HTMLButtonElement>('button.map-knowledge-dialog__load-more')!.click();
+    await vi.waitFor(() => expect(dialog.querySelector('[data-inhabitant-id="21"]')).not.toBeNull());
+    expect(dialog.querySelectorAll(".map-inhabitant-card")).toHaveLength(2);
+  });
 
   it("restores catalog focus on cancel and placement back", async () => {
     await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));

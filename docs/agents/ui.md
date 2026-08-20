@@ -55,6 +55,17 @@ The cell menu action `Knowledge…` opens a room-scoped dialog. Its `Inhabitants
 loads lazily from `/api/map-sets/{id}/inhabitants`; the full catalogue must not
 be added to the hot slim-room/zone payload. Cards and forms use DOM `textContent`
 and native controls rather than HTML interpolation.
+The room list response is a bounded `{items, truncated, next_cursor}` envelope:
+the UI pages through 20 entries at a time with an opaque versioned (v2)
+inhabitant-id keyset cursor (the server query follows the covering room index;
+the UI sorts each page for display), keeping only the current page in the DOM
+while `Load more`/`Previous page` make every placement reachable. An
+unversioned historical positive-id cursor (including both the old name+id
+shape and the short-lived id-only shape) is rejected with
+`legacy_room_inhabitant_cursor`; the UI resets its page boundary and offers a
+first-page retry rather than silently changing order and skipping entries.
+During rolling upgrades it also accepts the historical bare array response
+(which has no continuation page).
 
 Knowledge writes are overlays: they do not reload the zone or tracker. The
 server broadcasts `room_knowledge_changed`, and only an open dialog for the

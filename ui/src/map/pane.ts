@@ -261,6 +261,8 @@ export class MapPaneController {
   private walkEpoch = 0;
   private disposed = false;
   private loadGeneration = 0;
+  private positionRequest: AbortController | null = null;
+  private positionEpoch = 0;
   private attrWriteGeneration = new Map<string, number>();
   private attrWriteTail = new Map<string, Promise<void>>();
   private selectionToggle: HTMLButtonElement;
@@ -268,6 +270,10 @@ export class MapPaneController {
   private recordingState: MapRecordingState = { mode: "off", pending: 0, revision: 0 };
   private reconciliationDialog: HTMLDialogElement | null = null;
   private reconciliationOpener: HTMLElement | null = null;
+  private reconciliationGeneration = 0;
+  private reconciliationZoneRequest: AbortController | null = null;
+  private reconciliationDialogRevision = -1;
+  private reconciliationDialogConflictID = 0;
   private selectionCount: HTMLElement;
   private moveZoneButton: HTMLButtonElement;
   private renameZoneButton: HTMLButtonElement;
@@ -527,6 +533,9 @@ export class MapPaneController {
     if (!accepted) return;
     const next = createMapperI18n(accepted);
     if (next.locale === this.i18n.locale) return;
+    this.positionEpoch++;
+    this.positionRequest?.abort();
+    this.positionRequest = null;
     const opener = this.searchPopover ? this.searchOpener
       : this.managerPopover ? this.managerOpener
         : this.zoneDialog ? this.zoneDialogOpener
@@ -582,11 +591,15 @@ export class MapPaneController {
   dispose(): void {
     this.disposed = true;
     this.loadGeneration++;
+    this.positionEpoch++;
+    this.positionRequest?.abort();
+    this.positionRequest = null;
     this.clearStatusTimer();
     this.closeCellMenu();
     this.closeSearchPopover(false);
     this.closeManagerPopover(false);
     this.closeZoneDialog(false);
+    this.closeReconciliationDialog(false);
     this.knowledgeDialog.dispose();
     this.keyboardListeners.abort();
     this.renderer.destroy();
@@ -627,6 +640,12 @@ export class MapPaneController {
 
   private isCurrentLoad(generation: number, mapSetID: number | null): boolean {
     return !this.disposed && generation === this.loadGeneration && mapSetID === this.mapSetID;
+  }
+
+  private isCurrentZoneRequest(generation: number | null, mapSetID: number | null): boolean {
+    return generation === null
+      ? !this.disposed && mapSetID === this.mapSetID
+      : this.isCurrentLoad(generation, mapSetID);
   }
 
   private clearMapView(): void {
@@ -689,6 +708,7 @@ export class MapPaneController {
       this.closeZoneDialog();
       this.closeSearchPopover(false);
       this.closeManagerPopover(false);
+      this.closeReconciliationDialog(false);
       this.knowledgeDialog.close(false);
     }
     const preserveSelection = opts.preserveView === true &&
@@ -752,10 +772,12 @@ export class MapPaneController {
 
   private async fetchZone(
     zone: string,
-    generation: number,
+    generation: number | null,
     mapSetID: number | null,
     signal?: AbortSignal,
   ): Promise<SlimRoom[] | null> {
+    if (signal?.aborted) return null;
+    if (!this.isCurrentZoneRequest(generation, mapSetID)) return null;
     if (this.zoneCache.has(zone)) return this.zoneCache.get(zone)!;
     if (mapSetID == null) return [];
     const res = await fetchWithToken(
@@ -764,7 +786,7 @@ export class MapPaneController {
     );
     if (!res.ok) throw new Error(await res.text());
     const rooms: SlimRoom[] = await res.json();
-    if (!this.isCurrentLoad(generation, mapSetID)) return null;
+    if (signal?.aborted || !this.isCurrentZoneRequest(generation, mapSetID)) return null;
     this.zoneCache.set(zone, rooms);
     return rooms;
   }
@@ -773,8 +795,10 @@ export class MapPaneController {
     zone: string,
     opts: { resetView: boolean },
     generation = this.nextLoadGeneration(),
+    signal?: AbortSignal,
   ): Promise<SlimRoom[] | null> {
     try {
+      if (signal?.aborted) return null;
       if (zone !== this.currentZone) {
         this.closeZoneDialog();
         this.closeSearchPopover(false);
@@ -784,8 +808,8 @@ export class MapPaneController {
       }
       const preserveTransform = !opts.resetView && zone === this.currentZone;
       const mapSetID = this.mapSetID;
-      const rooms = await this.fetchZone(zone, generation, mapSetID);
-      if (rooms === null || !this.isCurrentLoad(generation, mapSetID)) return null;
+      const rooms = await this.fetchZone(zone, generation, mapSetID, signal);
+      if (rooms === null || signal?.aborted || !this.isCurrentLoad(generation, mapSetID)) return null;
       this.currentZone = zone;
       this.renameZoneButton.disabled = this.zoneOperationBusy || this.config.sessionID == null;
       if (this.zoneSelect.value !== zone) this.zoneSelect.value = zone;
@@ -805,7 +829,7 @@ export class MapPaneController {
       this.reconcileCellMenu();
       return rooms;
     } catch (err) {
-      if (!this.isCurrentLoad(generation, this.mapSetID)) return null;
+      if (signal?.aborted || !this.isCurrentLoad(generation, this.mapSetID)) return null;
       this.setStatus(
         this.i18n.t('failedLoadZone', { error: err instanceof Error ? err.message : String(err) }),
       );
@@ -1283,21 +1307,31 @@ export class MapPaneController {
     const prior = this.lastPosition;
     const repeatedCoord = prior?.valid && pos.valid &&
       prior.zone === pos.zone && prior.x === pos.x && prior.y === pos.y && prior.l === pos.l;
+    this.positionRequest?.abort();
+    const controller = new AbortController();
+    this.positionRequest = controller;
+    const epoch = this.positionEpoch;
     this.lastPosition = pos;
-    this.updateConfidence(pos);
-    if (!pos.valid) {
-      // Lost/red: keep the last marker where it was, just recolor via confidence.
-      // The candidate cell is dropped — there is no coord to offer recording at.
+    try {
+      this.updateConfidence(pos);
+      if (!pos.valid) {
+        // Lost/red: keep the last marker where it was, just recolor via confidence.
+        // The candidate cell is dropped — there is no coord to offer recording at.
+        this.refreshGhost();
+        return;
+      }
+      await this.applyPosition(
+        pos,
+        // ReloadActiveMapSet/WriteTopology replay the unchanged tracker snapshot.
+        // Follow reacts to movement, not to that administrative re-broadcast.
+        this.followToggle.checked && !repeatedCoord,
+        controller.signal,
+      );
+      if (controller.signal.aborted || epoch !== this.positionEpoch) return;
       this.refreshGhost();
-      return;
+    } finally {
+      if (this.positionRequest === controller) this.positionRequest = null;
     }
-    await this.applyPosition(
-      pos,
-      // ReloadActiveMapSet/WriteTopology replay the unchanged tracker snapshot.
-      // Follow reacts to movement, not to that administrative re-broadcast.
-      this.followToggle.checked && !repeatedCoord,
-    );
-    this.refreshGhost();
   }
 
   // Tell the pane which door-opening command this session's ROOM FORMAT supplies,
@@ -1322,7 +1356,13 @@ export class MapPaneController {
     if (state.revision < this.recordingState.revision) return;
     this.recordingState = state;
     this.renderRecordingControl(state);
-    if (state.mode === "conflict" && state.conflict && !this.reconciliationDialog) this.openReconciliationDialog();
+    if (state.mode === "conflict" && state.conflict) {
+      const staleDialog = this.reconciliationDialog &&
+        (this.reconciliationDialogRevision !== state.revision ||
+          this.reconciliationDialogConflictID !== state.conflict.id);
+      if (staleDialog) this.closeReconciliationDialog(false);
+      if (!this.reconciliationDialog) this.openReconciliationDialog();
+    }
     if (state.mode !== "conflict") this.closeReconciliationDialog();
   }
 
@@ -1362,23 +1402,96 @@ export class MapPaneController {
     }
   }
 
-  private closeReconciliationDialog(returnFocus = true): void { const d=this.reconciliationDialog;if(!d)return;this.reconciliationDialog=null;d.closest(".map-zone-dialog-backdrop")?.remove();const opener=this.reconciliationOpener;this.reconciliationOpener=null;if(returnFocus&&opener?.isConnected)opener.focus(); }
+  private closeReconciliationDialog(returnFocus = true): void {
+    this.reconciliationGeneration++;
+    this.reconciliationZoneRequest?.abort();
+    this.reconciliationZoneRequest = null;
+    const d = this.reconciliationDialog;
+    this.reconciliationDialog = null;
+    this.reconciliationDialogRevision = -1;
+    this.reconciliationDialogConflictID = 0;
+    d?.closest(".map-zone-dialog-backdrop")?.remove();
+    const opener = this.reconciliationOpener;
+    this.reconciliationOpener = null;
+    if (returnFocus && opener?.isConnected) opener.focus();
+  }
 
   private openReconciliationDialog(): void {
-    const conflict=this.recordingState.conflict;if(!conflict||this.reconciliationDialog||this.config.sessionID==null)return;
+    const conflict = this.recordingState.conflict;
+    if (!conflict || this.reconciliationDialog || this.config.sessionID == null) return;
+    const revision = this.recordingState.revision;
+    const conflictID = conflict.id;
+    const targetZone = conflict.expected.zone;
+    this.reconciliationGeneration++;
+    const generation = this.reconciliationGeneration;
+    this.reconciliationZoneRequest?.abort();
+    this.reconciliationZoneRequest = null;
+    const cached = this.zoneCache.get(targetZone);
+    if (cached) {
+      this.buildReconciliationDialog(conflict, cached);
+      return;
+    }
+    const controller = new AbortController();
+    this.reconciliationZoneRequest = controller;
+    // This request fills the expected-zone cache without changing the visible
+    // zone. It must survive an unrelated position-driven view generation; the
+    // fetch still fences on the active map-set id and the reconciliation token.
+    void this.fetchZone(targetZone, null, this.mapSetID, controller.signal)
+      .then((rooms) => {
+        if (
+          controller.signal.aborted ||
+          generation !== this.reconciliationGeneration ||
+          this.recordingState.mode !== "conflict" ||
+          this.recordingState.revision !== revision ||
+          this.recordingState.conflict?.id !== conflictID ||
+          !rooms
+        ) return;
+        this.buildReconciliationDialog(conflict, rooms);
+      })
+      .catch((error) => {
+        if (
+          controller.signal.aborted ||
+          generation !== this.reconciliationGeneration ||
+          this.recordingState.mode !== "conflict" ||
+          this.recordingState.revision !== revision ||
+          this.recordingState.conflict?.id !== conflictID
+        ) return;
+        this.setStatus(this.i18n.t('failedLoadZone', { error: error instanceof Error ? error.message : String(error) }));
+      })
+      .finally(() => {
+        if (this.reconciliationZoneRequest === controller) this.reconciliationZoneRequest = null;
+      });
+  }
+
+  private buildReconciliationDialog(
+    conflict: NonNullable<MapRecordingState["conflict"]>,
+    rooms: SlimRoom[],
+  ): void {
     this.reconciliationOpener=this.root.contains(document.activeElement)?document.activeElement as HTMLElement:this.recordingToggle;
     const backdrop=document.createElement("div");backdrop.className="map-zone-dialog-backdrop";
     const dialog=document.createElement("dialog");dialog.className="map-zone-dialog";dialog.setAttribute("aria-modal","true");dialog.setAttribute("aria-label",this.i18n.t('reconcileDialog'));backdrop.appendChild(dialog);
     const title=document.createElement("h3");title.textContent=this.i18n.t('reconcileTitle');dialog.appendChild(title);
     const expectedName=conflict.expected_hint || `${conflict.expected.zone} (${conflict.expected.x}, ${conflict.expected.y}, ${conflict.expected.l})`;const summary=document.createElement("p");summary.textContent=this.i18n.t('reconcileSummary',{observed:conflict.observed.hint||this.i18n.t('unnamed'),expected:expectedName,command:conflict.move.command});dialog.appendChild(summary);
     const fieldLabels={hint:this.i18n.t('fieldHint'),desc:this.i18n.t('fieldDesc'),exits:this.i18n.t('fieldExits')};const diff=document.createElement("div");diff.className="map-reconciliation-diff";for(const field of ["hint","desc","exits"] as const){const row=document.createElement("div");const heading=document.createElement("strong");heading.textContent=fieldLabels[field];const expected=document.createElement("pre");expected.textContent=this.i18n.t('expected',{value:conflict.expected_room?.[field]??''});const observed=document.createElement("pre");observed.textContent=this.i18n.t('observed',{value:conflict.observed[field]??''});row.append(heading,expected,observed);diff.appendChild(row)}dialog.appendChild(diff);
-    const rooms=this.zoneCache.get(this.currentZone)??[];const select=document.createElement("select");select.setAttribute("aria-label",this.i18n.t('existingTargetRoom'));for(const room of rooms){const o=document.createElement("option");o.value=JSON.stringify({zone:room.z,x:room.x,y:room.y,l:room.l});o.textContent=`${room.h||this.i18n.t('unnamed')} — (${room.x}, ${room.y}, ${room.l})`;select.appendChild(o)}dialog.appendChild(select);
+    const targetZone = conflict.expected.zone;
+    const targetRooms = rooms.filter((room) => room.z === targetZone);
+    const expected = conflict.expected;
+    if (!targetRooms.some((room) => room.x === expected.x && room.y === expected.y && room.l === expected.l)) {
+      targetRooms.push({
+        z: targetZone,
+        x: expected.x,
+        y: expected.y,
+        l: expected.l,
+        h: conflict.expected_hint || conflict.expected_room?.hint || "",
+      } as SlimRoom);
+    }
+    const select=document.createElement("select");select.setAttribute("aria-label",this.i18n.t('existingTargetRoom'));for(const room of targetRooms){const o=document.createElement("option");o.value=JSON.stringify({zone:room.z,x:room.x,y:room.y,l:room.l});o.textContent=`${room.h||this.i18n.t('unnamed')} — (${room.x}, ${room.y}, ${room.l})`;if(room.x===expected.x&&room.y===expected.y&&room.l===expected.l)o.selected=true;select.appendChild(o)}dialog.appendChild(select);
     const source=conflict.move.from;const coords=["display_x","display_y","display_l"] as const;const values=[source.x,source.y,source.l];const inputs:HTMLInputElement[]=[];coords.forEach((name,i)=>{const copy=this.i18n.t('displayCoord',{axis:name.slice(-1).toUpperCase()});const label=document.createElement("label");label.textContent=copy+' ';const input=document.createElement("input");input.type="number";input.value=String(values[i]);input.setAttribute("aria-label",copy);label.appendChild(input);dialog.appendChild(label);inputs.push(input)});
     const status=document.createElement("p");status.setAttribute("aria-live","polite");dialog.appendChild(status);const actions=document.createElement("div");actions.className="map-zone-dialog__actions";const preview=document.createElement("button");preview.type="button";preview.textContent=this.i18n.t('preview');const apply=document.createElement("button");apply.type="button";apply.textContent=this.i18n.t('apply');apply.disabled=true;const cancel=document.createElement("button");cancel.type="button";cancel.textContent=this.i18n.t('cancel');actions.append(preview,apply,cancel);dialog.appendChild(actions);
     let token="";const invalidate=()=>{token="";apply.disabled=true};select.addEventListener("change",invalidate);inputs.forEach(i=>i.addEventListener("input",invalidate));
     preview.addEventListener("click",async()=>{try{if(!select.value)throw new Error(this.i18n.t('chooseTarget'));if(inputs.some(input=>input.value.trim()===""||!Number.isSafeInteger(Number(input.value))))throw new Error(this.i18n.t('displayCoordsInteger'));const target=JSON.parse(select.value);const layouts=[{zone:source.zone,x:source.x,y:source.y,l:source.l,display_x:Number(inputs[0].value),display_y:Number(inputs[1].value),display_l:Number(inputs[2].value),pinned:false}];const res=await fetchWithToken(`/api/sessions/${this.config.sessionID}/map-reconciliation/preview`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({conflict_id:conflict.id,target,layouts})});if(!res.ok)throw new Error(await res.text());const data=await res.json();token=data.token;apply.disabled=!token;status.textContent=this.i18n.t('previewReady',{command:data.command,zone:data.target.zone,coords:`${data.target.x}, ${data.target.y}, ${data.target.l}`});}catch(err){invalidate();status.textContent=this.i18n.t('previewFailed',{error:err instanceof Error?err.message:String(err)})}});
     apply.addEventListener("click",async()=>{if(!token)return;apply.disabled=true;try{const res=await fetchWithToken(`/api/sessions/${this.config.sessionID}/map-reconciliation/apply`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({conflict_id:conflict.id,token})});if(!res.ok)throw new Error(await res.text());const data=await res.json();if(data.state)this.onMapRecordingState(data.state);this.closeReconciliationDialog();}catch(err){status.textContent=this.i18n.t('applyFailed',{error:err instanceof Error?err.message:String(err)});token="";apply.disabled=true;}});
-    cancel.addEventListener("click",()=>this.closeReconciliationDialog());dialog.addEventListener("cancel",e=>{e.preventDefault();this.closeReconciliationDialog()});dialog.addEventListener("keydown",event=>{if(event.key==="Escape"){event.preventDefault();this.closeReconciliationDialog();return}if(event.key!=="Tab")return;const focusable=[...dialog.querySelectorAll<HTMLElement>("button:not([disabled]), input, select")];if(focusable.length===0)return;const first=focusable[0]!,last=focusable.at(-1)!;if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus()}});backdrop.addEventListener("mousedown",e=>{if(e.target===backdrop)this.closeReconciliationDialog()});this.root.appendChild(backdrop);this.reconciliationDialog=dialog;if(typeof dialog.showModal==="function"){try{dialog.showModal()}catch{}}select.focus();
+    cancel.addEventListener("click",()=>this.closeReconciliationDialog());dialog.addEventListener("cancel",e=>{e.preventDefault();this.closeReconciliationDialog()});dialog.addEventListener("keydown",event=>{if(event.key==="Escape"){event.preventDefault();this.closeReconciliationDialog();return}if(event.key!=="Tab")return;const focusable=[...dialog.querySelectorAll<HTMLElement>("button:not([disabled]), input, select")];if(focusable.length===0)return;const first=focusable[0]!,last=focusable.at(-1)!;if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus()}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus()}});backdrop.addEventListener("mousedown",e=>{if(e.target===backdrop)this.closeReconciliationDialog()});this.root.appendChild(backdrop);this.reconciliationDialog=dialog;this.reconciliationDialogRevision=this.recordingState.revision;this.reconciliationDialogConflictID=conflict.id;if(typeof dialog.showModal==="function"){try{dialog.showModal()}catch{}}select.focus();
   }
 
   // A knowledge write is an overlay invalidation, not a map mutation. Only an
@@ -1581,6 +1694,7 @@ export class MapPaneController {
   private async applyPosition(
     pos: PlayerPosition,
     follow: boolean,
+    signal?: AbortSignal,
   ): Promise<void> {
     if (!pos.valid) return;
     // Switch zone if the player left the currently displayed one and we're
@@ -1591,7 +1705,7 @@ export class MapPaneController {
       (follow || !this.currentZone)
     ) {
       if (this.zoneNames.includes(pos.zone)) {
-        await this.showZone(pos.zone, { resetView: false });
+        await this.showZone(pos.zone, { resetView: false }, this.nextLoadGeneration(), signal);
       }
     }
     if (pos.zone === this.currentZone) {

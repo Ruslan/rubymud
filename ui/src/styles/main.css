@@ -1597,6 +1597,13 @@ body {
   flex-direction: column;
   gap: 9px;
 }
+.map-knowledge-dialog__pagination {
+  display: flex;
+  gap: 6px;
+}
+.map-knowledge-dialog__pagination button {
+  flex: 1;
+}
 .map-knowledge-dialog__message,
 .map-inhabitant-form__message {
   min-height: 16px;
@@ -1644,6 +1651,7 @@ body {
   gap: 6px;
 }
 .map-inhabitant-card button,
+.map-knowledge-dialog__pagination button,
 .map-knowledge-dialog__actions button,
 .map-inhabitant-form__actions button {
   min-height: 28px;
@@ -1656,8 +1664,10 @@ body {
   cursor: pointer;
 }
 .map-inhabitant-card button:hover,
+.map-knowledge-dialog__pagination button:hover,
 .map-knowledge-dialog__actions button:hover,
 .map-inhabitant-form__actions button:hover { border-color: #54e888; }
+.map-knowledge-dialog__pagination button:disabled { opacity: .55; cursor: wait; }
 .map-inhabitant-form {
   display: flex;
   flex-direction: column;

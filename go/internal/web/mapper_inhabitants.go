@@ -1,11 +1,13 @@
 package web
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"strconv"
+	"unicode/utf8"
 
 	"github.com/go-chi/chi/v5"
 
@@ -33,6 +35,52 @@ const roomInhabitantBodyLimit int64 = 64 << 10
 type inhabitantCatalogResponse struct {
 	Items     []storage.MapInhabitantSummary `json:"items"`
 	Truncated bool                           `json:"truncated"`
+}
+
+type roomInhabitantListResponse struct {
+	Items      []storage.RoomInhabitantView `json:"items"`
+	Truncated  bool                         `json:"truncated"`
+	NextCursor string                       `json:"next_cursor,omitempty"`
+}
+
+const roomInhabitantCursorVersion = 2
+
+var errLegacyRoomInhabitantCursor = errors.New("legacy_room_inhabitant_cursor")
+
+type roomInhabitantCursor struct {
+	Version int    `json:"v"`
+	ID      int64  `json:"id"`
+	Name    string `json:"name,omitempty"`
+}
+
+func encodeRoomInhabitantCursor(row storage.RoomInhabitantView) string {
+	payload, _ := json.Marshal(roomInhabitantCursor{Version: roomInhabitantCursorVersion, ID: row.ID})
+	return base64.RawURLEncoding.EncodeToString(payload)
+}
+
+func decodeRoomInhabitantCursor(raw string) (string, int64, error) {
+	if raw == "" {
+		return "", 0, nil
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(raw)
+	if err != nil || len(payload) > 4096 {
+		return "", 0, errors.New("invalid inhabitant cursor")
+	}
+	var cursor roomInhabitantCursor
+	if err := json.Unmarshal(payload, &cursor); err != nil {
+		return "", 0, errors.New("invalid inhabitant cursor")
+	}
+	// Version 0 covers both the original name+id cursor and the short-lived
+	// 02fb cursor that emitted only {"id":N}. A positive id is enough to
+	// identify either as an expired legacy cursor; zero/negative ids remain
+	// ordinary malformed input below.
+	if cursor.Version == 0 && cursor.ID > 0 {
+		return "", 0, errLegacyRoomInhabitantCursor
+	}
+	if cursor.Version != roomInhabitantCursorVersion || cursor.ID <= 0 || cursor.Name != "" || utf8.RuneCountInString(cursor.Name) > 256 {
+		return "", 0, errors.New("invalid inhabitant cursor")
+	}
+	return cursor.Name, cursor.ID, nil
 }
 
 func (body roomInhabitantRequest) cell() (storage.EdgeCell, error) {
@@ -148,12 +196,39 @@ func (s *Server) listRoomInhabitants(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "map set not found", http.StatusNotFound)
 		return
 	}
-	rows, err := s.store.ListRoomInhabitants(mapSetID, cell)
+	limit := storage.InhabitantListDefaultLimit
+	if raw := r.URL.Query().Get("limit"); raw != "" {
+		limit, err = strconv.Atoi(raw)
+		if err != nil || limit <= 0 || limit > storage.InhabitantListMaxLimit {
+			http.Error(w, "limit must be between 1 and 100", http.StatusBadRequest)
+			return
+		}
+	}
+	afterName, afterID, err := decodeRoomInhabitantCursor(r.URL.Query().Get("cursor"))
+	if err != nil {
+		if errors.Is(err, errLegacyRoomInhabitantCursor) {
+			http.Error(w, errLegacyRoomInhabitantCursor.Error(), http.StatusBadRequest)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	rows, truncated, err := s.store.ListRoomInhabitantsBoundedAfter(mapSetID, cell, limit, afterName, afterID)
 	if err != nil {
 		writeRoomInhabitantError(w, err)
 		return
 	}
-	writeJSON(w, rows)
+	nextCursor := ""
+	if truncated && len(rows) > 0 {
+		last := rows[0]
+		for _, row := range rows[1:] {
+			if row.ID > last.ID {
+				last = row
+			}
+		}
+		nextCursor = encodeRoomInhabitantCursor(last)
+	}
+	writeJSON(w, roomInhabitantListResponse{Items: rows, Truncated: truncated, NextCursor: nextCursor})
 }
 
 func (s *Server) listInhabitantCatalog(w http.ResponseWriter, r *http.Request) {

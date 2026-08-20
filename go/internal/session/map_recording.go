@@ -42,6 +42,43 @@ type MapReconciliationPreview struct {
 	Epoch            int64                     `json:"-"`
 }
 
+func normalizeReconciliationCoord(coord mapper.Coord) (mapper.Coord, error) {
+	zone, err := storage.NormalizeZoneName(coord.Zone)
+	if err != nil {
+		return coord, err
+	}
+	coord.Zone = zone
+	return coord, nil
+}
+
+func normalizeReconciliationLayouts(layouts []MapReconciliationLayout) ([]MapReconciliationLayout, error) {
+	out := make([]MapReconciliationLayout, len(layouts))
+	copy(out, layouts)
+	for i := range out {
+		zone, err := storage.NormalizeZoneName(out[i].Zone)
+		if err != nil {
+			return nil, err
+		}
+		out[i].Zone = zone
+	}
+	return out, nil
+}
+
+func normalizeReconciliationPreviewZones(preview *MapReconciliationPreview) error {
+	var err error
+	if preview.Source, err = normalizeReconciliationCoord(preview.Source); err != nil {
+		return err
+	}
+	if preview.Expected, err = normalizeReconciliationCoord(preview.Expected); err != nil {
+		return err
+	}
+	if preview.Target, err = normalizeReconciliationCoord(preview.Target); err != nil {
+		return err
+	}
+	preview.Layouts, err = normalizeReconciliationLayouts(preview.Layouts)
+	return err
+}
+
 const mapRecordingPendingCap = 64
 
 type MapRecordingMode string
@@ -208,19 +245,35 @@ func (s *Session) PreviewMapReconciliation(choice MapReconciliationChoice) (MapR
 	if !set.Editable {
 		return MapReconciliationPreview{}, fmt.Errorf("reconciliation of frozen map sets is not supported; create an editable copy first")
 	}
-	layouts := make([]storage.LayoutMutation, 0, len(choice.Layouts))
-	for _, l := range choice.Layouts {
+	source, err := normalizeReconciliationCoord(c.Move.From)
+	if err != nil {
+		return MapReconciliationPreview{}, err
+	}
+	expected, err := normalizeReconciliationCoord(c.Expected)
+	if err != nil {
+		return MapReconciliationPreview{}, err
+	}
+	target, err := normalizeReconciliationCoord(choice.Target)
+	if err != nil {
+		return MapReconciliationPreview{}, err
+	}
+	normalizedLayouts, err := normalizeReconciliationLayouts(choice.Layouts)
+	if err != nil {
+		return MapReconciliationPreview{}, err
+	}
+	layouts := make([]storage.LayoutMutation, 0, len(normalizedLayouts))
+	for _, l := range normalizedLayouts {
 		v := storage.RoomLayout{Zone: l.Zone, X: l.X, Y: l.Y, L: l.L, DisplayX: l.DisplayX, DisplayY: l.DisplayY, DisplayL: l.DisplayL, Pinned: l.Pinned}
 		layouts = append(layouts, storage.LayoutMutation{Cell: storage.EdgeCell{Zone: l.Zone, X: l.X, Y: l.Y, L: l.L}, Layout: &v})
 	}
-	if err := s.store.ValidateReconciliationPreview(setID, storage.EdgeCell{Zone: choice.Target.Zone, X: choice.Target.X, Y: choice.Target.Y, L: choice.Target.L}, layouts); err != nil {
+	if err := s.store.ValidateReconciliationPreview(setID, storage.EdgeCell{Zone: target.Zone, X: target.X, Y: target.Y, L: target.L}, layouts); err != nil {
 		return MapReconciliationPreview{}, err
 	}
 	b := make([]byte, 24)
 	if _, err := rand.Read(b); err != nil {
 		return MapReconciliationPreview{}, err
 	}
-	p := MapReconciliationPreview{Token: base64.RawURLEncoding.EncodeToString(b), ConflictID: c.ID, MapSetID: setID, ExpectedRevision: set.TopologyRevision, Source: c.Move.From, Expected: c.Expected, Target: choice.Target, Direction: c.Move.Direction, Command: c.Move.Command, Layouts: append([]MapReconciliationLayout(nil), choice.Layouts...), Epoch: epoch}
+	p := MapReconciliationPreview{Token: base64.RawURLEncoding.EncodeToString(b), ConflictID: c.ID, MapSetID: setID, ExpectedRevision: set.TopologyRevision, Source: source, Expected: expected, Target: target, Direction: c.Move.Direction, Command: c.Move.Command, Layouts: normalizedLayouts, Epoch: epoch}
 	s.mapMu.Lock()
 	defer s.mapMu.Unlock()
 	if s.mapRecordingMode != MapRecordingConflict || s.mapRecordingConflict == nil || s.mapRecordingConflict.ID != c.ID || s.mapRecordingEpoch != epoch {
@@ -245,6 +298,10 @@ func (s *Session) ApplyMapReconciliation(conflictID uint64, token string) (MapRe
 	}
 	cp := *p
 	cp.Layouts = append([]MapReconciliationLayout(nil), p.Layouts...)
+	if err := normalizeReconciliationPreviewZones(&cp); err != nil {
+		s.mapMu.Unlock()
+		return MapRecordingState{}, 0, err
+	}
 	s.mapReconcilePreview = nil
 	s.mapReconcileApplying = true
 	s.mapMu.Unlock()

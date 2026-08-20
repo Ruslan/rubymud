@@ -2,6 +2,7 @@ package storage
 
 import (
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -151,6 +152,75 @@ func TestListMapInhabitantsFiltersExcludesAndBoundsCatalog(t *testing.T) {
 	})
 	if err != nil || truncated || len(rows) != 0 {
 		t.Fatalf("room-excluded catalog = %+v truncated=%v err=%v", rows, truncated, err)
+	}
+}
+
+func TestListRoomInhabitantsBoundedReturnsStablePageAndTruncation(t *testing.T) {
+	store := newMapperTestStore(t)
+	setID, err := store.CreateMapSet(sampleInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	cell := EdgeCell{Zone: "Alpha", X: 0, Y: 0, L: 0}
+	for i := 0; i < InhabitantListDefaultLimit+1; i++ {
+		if _, err := store.CreateRoomInhabitant(setID, cell, RoomInhabitantFields{
+			InhabitantFields: inhabitantFields(fmt.Sprintf("NPC %02d", i), InhabitantKindNPC),
+		}); err != nil {
+			t.Fatalf("create inhabitant %d: %v", i, err)
+		}
+	}
+
+	rows, truncated, err := store.ListRoomInhabitantsBounded(setID, cell, InhabitantListDefaultLimit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != InhabitantListDefaultLimit || !truncated {
+		t.Fatalf("bounded room list = %d rows truncated=%v, want %d/true", len(rows), truncated, InhabitantListDefaultLimit)
+	}
+	if rows[0].Name != "NPC 00" || rows[len(rows)-1].Name != "NPC 19" {
+		t.Fatalf("bounded room list order = %q..%q", rows[0].Name, rows[len(rows)-1].Name)
+	}
+
+	next, truncated, err := store.ListRoomInhabitantsBoundedAfter(setID, cell, InhabitantListDefaultLimit, rows[len(rows)-1].Name, rows[len(rows)-1].ID)
+	if err != nil || truncated || len(next) != 1 || next[0].Name != "NPC 20" {
+		t.Fatalf("bounded room continuation = %+v truncated=%v err=%v", next, truncated, err)
+	}
+}
+
+func TestListRoomInhabitantsBoundedPlanUsesRoomKeysetWithoutTempSort(t *testing.T) {
+	store := newMapperTestStore(t)
+	setID, err := store.CreateMapSet(sampleInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var plan []struct {
+		Detail string `gorm:"column:detail"`
+	}
+	err = store.db.Raw(`EXPLAIN QUERY PLAN
+		SELECT mi.id, ri.id AS placement_id, mi.map_set_id, ri.zone, ri.x, ri.y, ri.l,
+			mi.name, mi.kind, mi.look_target, mi.look_text, mi.note, mi.strategy,
+			ri.presence_text, ri.resident, mi.updated_at, ri.updated_at AS placement_updated_at
+		FROM room_inhabitants AS ri
+		JOIN map_inhabitants AS mi ON mi.id=ri.inhabitant_id AND mi.map_set_id=ri.map_set_id
+		WHERE ri.map_set_id=? AND ri.zone=? AND ri.x=? AND ri.y=? AND ri.l=?
+		  AND ri.inhabitant_id>?
+		ORDER BY ri.inhabitant_id ASC
+		LIMIT ?`, setID, "Alpha", 0, 0, 0, 0, InhabitantListDefaultLimit+1).Scan(&plan).Error
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := ""
+	for _, row := range plan {
+		joined += row.Detail + "\n"
+	}
+	if strings.Contains(strings.ToUpper(joined), "TEMP B-TREE") {
+		t.Fatalf("bounded room list performs a full temp sort:\n%s", joined)
+	}
+	if strings.Contains(strings.ToUpper(joined), "SCAN RI") {
+		t.Fatalf("bounded room list scans placements instead of using the room keyset:\n%s", joined)
+	}
+	if !strings.Contains(strings.ToUpper(joined), "USING INDEX") {
+		t.Fatalf("bounded room list did not use the room covering index:\n%s", joined)
 	}
 }
 

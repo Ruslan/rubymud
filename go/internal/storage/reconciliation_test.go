@@ -3,6 +3,8 @@ package storage
 import (
 	"slices"
 	"testing"
+
+	"golang.org/x/text/unicode/norm"
 )
 
 func reconciliationFixture(t *testing.T) (*Store, int64) {
@@ -20,6 +22,21 @@ func reconciliationFixture(t *testing.T) (*Store, int64) {
 		t.Fatal(err)
 	}
 	return s, id
+}
+
+func TestValidateReconciliationPreviewNormalizesZoneNames(t *testing.T) {
+	s, id := reconciliationFixture(t)
+	composed := "Зона"
+	if _, _, err := s.ApplyTopologyOp(id, TopologyOp{Kind: TopoUpsertRoom, Zone: composed, X: 9, Y: 9, L: 0, Fields: RoomFields{Hint: ptrStr("remote")}}); err != nil {
+		t.Fatal(err)
+	}
+	decomposed := norm.NFD.String(composed)
+	target := EdgeCell{Zone: decomposed, X: 9, Y: 9, L: 0}
+	source := EdgeCell{Zone: "Z", X: 1, Y: 1, L: 0}
+	layout := &RoomLayout{DisplayX: 2, DisplayY: 2, DisplayL: 0}
+	if err := s.ValidateReconciliationPreview(id, target, []LayoutMutation{{Cell: source, Layout: layout}}); err != nil {
+		t.Fatalf("preview with NFC-equivalent zones: %v", err)
+	}
 }
 
 func TestApplyReconciliationExactDirectedFaceSurvivesRecomputeAndUndo(t *testing.T) {

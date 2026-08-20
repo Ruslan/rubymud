@@ -7,6 +7,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/text/unicode/norm"
+
 	"rubymud/go/internal/mapper"
 	"rubymud/go/internal/storage"
 )
@@ -131,6 +133,52 @@ func TestReconciliationPreviewApplyIsServerOwnedOneShotAndExact(t *testing.T) {
 	}
 	if _, _, err := s.ApplyMapReconciliation(cid, p.Token); err == nil {
 		t.Fatal("preview token reused")
+	}
+}
+
+func TestReconciliationPreviewApplyCanonicalizesUnicodeZonesForTrackerAndWire(t *testing.T) {
+	s, store, setID, cid := reconciliationSessionHarness(t)
+	composed := "Café"
+	decomposed := norm.NFD.String(composed)
+	if _, _, err := store.ApplyTopologyOp(setID, storage.TopologyOp{
+		Kind: storage.TopoUpsertRoom, Zone: composed, X: 5, Y: 5, L: 0,
+		Fields: storage.RoomFields{Hint: func() *string { v := "remote"; return &v }()},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	p, err := s.PreviewMapReconciliation(MapReconciliationChoice{
+		ConflictID: cid,
+		Target:     mapper.Coord{Zone: decomposed, X: 5, Y: 5, L: 0},
+		Layouts: []MapReconciliationLayout{{
+			Zone: decomposed, X: 5, Y: 5, L: 0, DisplayX: 9, DisplayY: 9,
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Target.Zone != composed || len(p.Layouts) != 1 || p.Layouts[0].Zone != composed {
+		t.Fatalf("preview retained non-canonical zones: target=%q layouts=%+v", p.Target.Zone, p.Layouts)
+	}
+	if _, _, err := s.ApplyMapReconciliation(cid, p.Token); err != nil {
+		t.Fatal(err)
+	}
+	var edge storage.MapEdge
+	if err := store.DB().Where("map_set_id=? AND kind=?", setID, storage.EdgeKindCorridor).First(&edge).Error; err != nil {
+		t.Fatal(err)
+	}
+	to, ok := edge.To()
+	if !ok || to.Zone != composed {
+		t.Fatalf("stored corridor target=%+v, want canonical zone %q", to, composed)
+	}
+	var layout storage.RoomLayout
+	if err := store.DB().Where("map_set_id=? AND x=5 AND y=5 AND l=0", setID).First(&layout).Error; err != nil {
+		t.Fatal(err)
+	}
+	if layout.Zone != composed {
+		t.Fatalf("stored layout zone=%q, want %q", layout.Zone, composed)
+	}
+	if pos := s.mapTracker.Position(); !pos.Valid || pos.Confidence != mapper.Green || pos.Coord != (mapper.Coord{Zone: composed, X: 5, Y: 5}) {
+		t.Fatalf("tracker did not anchor canonical target: %+v", pos)
 	}
 }
 

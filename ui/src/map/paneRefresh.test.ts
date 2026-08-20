@@ -107,6 +107,34 @@ describe("map pane corpus refresh", () => {
     return internal;
   }
 
+  it("aborts an older position zone load and applies only the latest position", async () => {
+    await vi.waitFor(() => expect((pane as unknown as PaneInternals).currentZone).toBe("A"));
+    const firstB = deferred<Response>();
+    const secondB = deferred<Response>();
+    let bCalls = 0;
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("map-live-room")) return Promise.resolve(jsonRes({ seen: false }));
+      if (url.includes("/zones")) return Promise.resolve(jsonRes(zones));
+      if (url.includes("zone=A")) return Promise.resolve(jsonRes([room({ z: "A" })]));
+      if (url.includes("zone=B")) return ++bCalls === 1 ? firstB.promise : secondB.promise;
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    const old = pane.onRoomPosition({ ...playerInA, zone: "B", x: 1 });
+    await vi.waitFor(() => expect(bCalls).toBe(1));
+    const latest = pane.onRoomPosition({ ...playerInA, zone: "B", x: 2 });
+    await vi.waitFor(() => expect(bCalls).toBe(2));
+
+    firstB.resolve(jsonRes([room({ z: "B", h: "stale position", x: 1 })]));
+    await Promise.resolve();
+    expect((pane as unknown as PaneInternals).currentZone).toBe("A");
+    secondB.resolve(jsonRes([room({ z: "B", h: "latest position", x: 2 })]));
+    await Promise.all([old, latest]);
+    const internal = pane as unknown as PaneInternals;
+    expect(internal.currentZone).toBe("B");
+    expect(internal.renderer.findRoom(2, 0, 0)?.h).toBe("latest position");
+  });
+
   it.each([true, false])("keeps an admin view in B during rooms_changed with Follow=%s", async (follow) => {
     const internal = await viewB();
     const followToggle = pane.root.querySelector<HTMLInputElement>(".map-pane__follow input")!;

@@ -153,6 +153,45 @@ export function createRenderer({
   let lastMapWalkTerminalJobID = 0;
   let lastMapWalkSeenJobID = 0;
   let lastMapWalkEpoch = 0;
+  // Position delivery is deliberately independent from room/recording events:
+  // a pane may be waiting on a zone fetch, but that network wait must not delay
+  // an OBS state or reconnect reset. Coalesce synchronous bursts per pane and
+  // fence a pending position when the locale changes before it is delivered.
+  let mapperPositionEpoch = 0;
+  const pendingMapPositions = new Map<string, {
+    controller: MapPaneController;
+    position: PlayerPosition;
+    epoch: number;
+  }>();
+
+  function scheduleMapPosition(id: string, controller: MapPaneController, position: PlayerPosition): void {
+    const pending = pendingMapPositions.get(id);
+    if (pending) {
+      pending.position = position;
+      pending.epoch = mapperPositionEpoch;
+      return;
+    }
+    const next = { controller, position, epoch: mapperPositionEpoch };
+    pendingMapPositions.set(id, next);
+    queueMicrotask(() => {
+      if (pendingMapPositions.get(id) !== next) return;
+      pendingMapPositions.delete(id);
+      if (next.epoch !== mapperPositionEpoch || mapControllers.get(id) !== controller) return;
+      void controller.onRoomPosition(next.position).catch((error) => {
+        console.warn("Mapper room position delivery failed", error);
+      });
+    });
+  }
+
+  function notifyMapControllers(task: (controller: MapPaneController) => void): void {
+    mapControllers.forEach((controller) => {
+      try {
+        task(controller);
+      } catch (error) {
+        console.warn("Mapper event delivery failed", error);
+      }
+    });
+  }
 
   function isMapBuffer(buffer: string): boolean {
     return buffer === MAP_BUFFER;
@@ -221,6 +260,7 @@ export function createRenderer({
     // Dispose any live map controllers before wiping the DOM; createPaneDOM
     // makes fresh ones for surviving map panes.
     mapControllers.forEach((c) => c.dispose());
+    pendingMapPositions.clear();
     mapControllers.clear();
     elements.panesContainer.innerHTML = "";
     renderedPanes.clear();
@@ -516,7 +556,7 @@ export function createRenderer({
         controller.onMounted();
         // Replay the latest known position so a freshly mounted map follows too.
         if (lastMapPosition) {
-          void controller.onRoomPosition(lastMapPosition);
+          scheduleMapPosition(node.id, controller, lastMapPosition);
         }
         if (lastLiveRoom) {
           controller.onRoomEvent(lastLiveRoom);
@@ -2253,20 +2293,20 @@ export function createRenderer({
   // pane. Cached so a map pane mounted after the broadcast still follows.
   function handleRoomPosition(pos: PlayerPosition) {
     lastMapPosition = pos;
-    mapControllers.forEach((c) => void c.onRoomPosition(pos));
+    mapControllers.forEach((controller, id) => scheduleMapPosition(id, controller, pos));
   }
 
   // Deliver the live room block (`room` WS broadcast) to every map pane. Cached
   // like the position so a later-mounted pane still knows the current room.
   function handleRoomEvent(live: LiveRoom) {
     lastLiveRoom = live;
-    mapControllers.forEach((c) => c.onRoomEvent(live));
+    notifyMapControllers((controller) => controller.onRoomEvent(live));
   }
 
   function handleMapRecording(state: MapRecordingState) {
     if (lastMapRecording && state.revision < lastMapRecording.revision) return;
     lastMapRecording = state;
-    mapControllers.forEach((c) => c.onMapRecordingState(state));
+    notifyMapControllers((controller) => controller.onMapRecordingState(state));
   }
 
   // Recording revisions are session-local. A reconnect may attach this browser
@@ -2275,7 +2315,7 @@ export function createRenderer({
   function resetMapRecordingRevision() {
     const reset: MapRecordingState = { mode: "off", pending: 0, revision: 0 };
     lastMapRecording = reset;
-    mapControllers.forEach((c) => c.resetMapRecordingState(reset));
+    notifyMapControllers((controller) => controller.resetMapRecordingState(reset));
   }
 
   function handleRoomKnowledgeChanged(mapSetID: number, zone: string, x: number, y: number, l: number) {
@@ -2344,6 +2384,19 @@ export function createRenderer({
   function setMapperLocale(value: unknown): Locale | null {
     const next = supportedLocale(value);
     if (!next) return null;
+    if (next === mapperLocale) return next;
+    mapperPositionEpoch++;
+    if (lastMapPosition?.reason) lastMapPosition = { ...lastMapPosition, reason: undefined };
+    if (lastMapRecording) {
+      lastMapRecording = {
+        ...lastMapRecording,
+        reason: undefined,
+        conflict: lastMapRecording.conflict
+          ? { ...lastMapRecording.conflict, reason: '' }
+          : undefined,
+      };
+    }
+    if (lastMapWalk?.reason) lastMapWalk = { ...lastMapWalk, reason: undefined };
     mapperLocale = next;
     mapControllers.forEach((controller) => controller.setLocale(next));
     const copy = createMapperI18n(next);

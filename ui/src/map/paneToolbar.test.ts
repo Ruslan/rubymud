@@ -193,6 +193,84 @@ describe("map pane compact toolbar", () => {
     dialog.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true,cancelable:true}));expect(pane.root.querySelector('[aria-label="Resolve mapper conflict"]')).toBeNull();expect(document.activeElement?.textContent).toBe("OBS!");
   });
 
+  it("loads the expected cross-zone room before offering reconciliation targets", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("A"));
+    const conflict = {
+      id: 10,
+      move: { command: "portal", direction: "N", source: "input", from: { zone: "A", x: 1, y: 0, l: 1 }, expected: { zone: "B", x: 7, y: 9, l: 2 } },
+      expected: { zone: "B", x: 7, y: 9, l: 2 },
+      expected_hint: "Remote expected",
+      expected_room: { hint: "Remote Atrium", desc: "", exits: "N" },
+      observed: { hint: "Atrium", desc: "", exits: "S" }, reason: "mismatch",
+    };
+    pane.onMapRecordingState({ mode: "conflict", pending: 0, revision: 21, conflict });
+    await vi.waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("zone=B"))).toBe(true));
+    await vi.waitFor(() => expect(pane.root.querySelector('[aria-label="Resolve mapper conflict"]')).not.toBeNull());
+    const dialog = pane.root.querySelector<HTMLDialogElement>('[aria-label="Resolve mapper conflict"]')!;
+    const select = dialog.querySelector<HTMLSelectElement>("select")!;
+    await vi.waitFor(() => expect([...select.options].some((option) => option.value.includes('"zone":"B"'))).toBe(true));
+    expect([...select.options].every((option) => option.value.includes('"zone":"B"'))).toBe(true);
+  });
+
+  it("keeps the explicit expected-zone load across a position-driven view generation", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("A"));
+    let resolveB!: (response: Response) => void;
+    const delayedB = new Promise<Response>((resolve) => { resolveB = resolve; });
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("map-live-room")) return Promise.resolve(json({ seen: false }));
+      if (url.includes("/zones")) return Promise.resolve(json([{ zone: "A", room_count: 2 }, { zone: "B", room_count: 1 }]));
+      if (url.includes("zone=B")) return delayedB;
+      if (url.includes("zone=A")) return Promise.resolve(json([room(), upperRoom()]));
+      throw new Error(`unexpected ${url}`);
+    });
+    const conflict = {
+      id: 11,
+      move: { command: "portal", direction: "N", source: "input", from: { zone: "A", x: 1, y: 0, l: 1 }, expected: { zone: "B", x: 7, y: 9, l: 2 } },
+      expected: { zone: "B", x: 7, y: 9, l: 2 },
+      expected_hint: "Remote expected",
+      expected_room: { hint: "Remote Atrium", desc: "", exits: "N" },
+      observed: { hint: "Atrium", desc: "", exits: "S" }, reason: "mismatch",
+    };
+    pane.onMapRecordingState({ mode: "conflict", pending: 0, revision: 22, conflict });
+    await vi.waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("zone=B"))).toBe(true));
+
+    await pane.reload({ preserveView: true });
+    resolveB(json([remoteRoom()]));
+    await vi.waitFor(() => expect(pane.root.querySelector('[aria-label="Resolve mapper conflict"]')).not.toBeNull());
+  });
+
+  it("keeps a newer reconciliation target when an older zone response arrives late", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("A"));
+    let resolveB!: (response: Response) => void;
+    const delayedB = new Promise<Response>((resolve) => { resolveB = resolve; });
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("map-live-room")) return Promise.resolve(json({ seen: false }));
+      if (url.includes("/zones")) return Promise.resolve(json([{ zone: "A", room_count: 2 }, { zone: "B", room_count: 1 }]));
+      if (url.includes("zone=B")) return delayedB;
+      if (url.includes("zone=A")) return Promise.resolve(json([room(), upperRoom()]));
+      throw new Error(`unexpected ${url}`);
+    });
+    const conflict = (id: number, zone: string, x: number, y: number, l: number) => ({
+      id,
+      move: { command: "portal", direction: "N", source: "input", from: { zone: "A", x: 1, y: 0, l: 1 }, expected: { zone, x, y, l } },
+      expected: { zone, x, y, l },
+      expected_hint: "Expected",
+      expected_room: { hint: "Expected", desc: "", exits: "N" },
+      observed: { hint: "Atrium", desc: "", exits: "S" }, reason: "mismatch",
+    });
+    pane.onMapRecordingState({ mode: "conflict", pending: 0, revision: 30, conflict: conflict(30, "B", 7, 9, 2) });
+    await vi.waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).includes("zone=B"))).toBe(true));
+
+    pane.onMapRecordingState({ mode: "conflict", pending: 0, revision: 31, conflict: conflict(31, "A", 0, 0, 0) });
+    const dialog = await vi.waitFor(() => pane.root.querySelector<HTMLDialogElement>('[aria-label="Resolve mapper conflict"]'));
+    const select = dialog!.querySelector<HTMLSelectElement>("select")!;
+    expect([...select.options].every((option) => option.value.includes('"zone":"A"'))).toBe(true);
+    resolveB(json([remoteRoom()]));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect([...select.options].every((option) => option.value.includes('"zone":"A"'))).toBe(true);
+  });
+
   it("closes either popover when the floor or map-set context changes", async () => {
     await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("A"));
     pane.root.querySelector<HTMLButtonElement>('[aria-label="Find room"]')!.click();

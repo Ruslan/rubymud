@@ -45,7 +45,11 @@ export interface KnowledgeRoom {
 
 const textLimit = 2048;
 const nameLimit = 256;
+const roomPageLimit = 20;
+const legacyRoomInhabitantCursorCode = 'legacy_room_inhabitant_cursor';
 let knowledgePanelSequence = 0;
+
+type RoomListLoadResult = 'loaded' | 'stale' | 'failed';
 
 function sameRoom(a: KnowledgeRoom | null, mapSetID: number, zone: string, x: number, y: number, l: number): boolean {
   return !!a && a.mapSetID === mapSetID && a.zone === zone && a.x === x && a.y === y && a.l === l;
@@ -93,10 +97,18 @@ export class RoomKnowledgeDialog {
   private dialog: HTMLDialogElement | null = null;
   private room: KnowledgeRoom | null = null;
   private rows: RoomInhabitant[] = [];
+  private listCursor: string | null = null;
+  private listPageStarts: Array<string | null> = [null];
+  private listPage = 0;
+  private listHasMore = false;
+  private listLoading = false;
   private list: HTMLElement | null = null;
   private message: HTMLElement | null = null;
   private addButton: HTMLButtonElement | null = null;
 	private placeExistingButton: HTMLButtonElement | null = null;
+  private retryButton: HTMLButtonElement | null = null;
+  private previousButton: HTMLButtonElement | null = null;
+  private loadMoreButton: HTMLButtonElement | null = null;
   private form: HTMLFormElement | null = null;
   private catalog: HTMLElement | null = null;
   private loadRequest: AbortController | null = null;
@@ -215,6 +227,17 @@ export class RoomKnowledgeDialog {
     this.message.setAttribute("aria-live", "polite");
     this.list = document.createElement("div");
     this.list.className = "map-knowledge-dialog__list";
+    this.previousButton = document.createElement("button");
+    this.previousButton.type = "button";
+    this.previousButton.className = "map-knowledge-dialog__previous";
+    this.previousButton.addEventListener("click", () => void this.load(false, this.listPage - 1));
+    this.loadMoreButton = document.createElement("button");
+    this.loadMoreButton.type = "button";
+    this.loadMoreButton.className = "map-knowledge-dialog__load-more";
+    this.loadMoreButton.addEventListener("click", () => void this.load(false, this.listPage + 1));
+    const pageNavigation = document.createElement("div");
+    pageNavigation.className = "map-knowledge-dialog__pagination";
+    pageNavigation.append(this.previousButton, this.loadMoreButton);
 
     const actions = document.createElement("div");
     actions.className = "map-knowledge-dialog__actions";
@@ -222,16 +245,22 @@ export class RoomKnowledgeDialog {
     this.addButton.type = "button";
     this.copy(this.addButton, 'addNew');
     this.addButton.addEventListener("click", () => this.openForm(null));
-	this.placeExistingButton = document.createElement("button");
+    this.placeExistingButton = document.createElement("button");
 	this.placeExistingButton.type = "button";
 	this.copy(this.placeExistingButton, 'placeExisting');
 	this.placeExistingButton.addEventListener("click", () => this.openCatalog());
+    this.retryButton = document.createElement("button");
+    this.retryButton.type = "button";
+    this.retryButton.className = "map-knowledge-dialog__retry";
+    this.retryButton.hidden = true;
+    this.copy(this.retryButton, 'retry');
+    this.retryButton.addEventListener("click", () => void this.retryList());
     const close = document.createElement("button");
     close.type = "button";
     this.copy(close, 'close');
     close.addEventListener("click", () => this.close());
-    actions.append(this.addButton, this.placeExistingButton, close);
-    panel.append(this.message, this.list, actions);
+    actions.append(this.addButton, this.placeExistingButton, this.retryButton, close);
+    panel.append(this.message, this.list, pageNavigation, actions);
     dialog.append(title, roomLine, tabs, panel);
 
     backdrop.addEventListener("mousedown", (event) => {
@@ -291,7 +320,15 @@ export class RoomKnowledgeDialog {
     this.message = null;
     this.addButton = null;
 	this.placeExistingButton = null;
+    this.retryButton = null;
+    this.previousButton = null;
+    this.loadMoreButton = null;
     this.form = null;
+    this.listCursor = null;
+    this.listPageStarts = [null];
+    this.listPage = 0;
+    this.listHasMore = false;
+    this.listLoading = false;
     this.pendingRefresh = false;
     this.returnFocus = null;
     if (_returnFocus) {
@@ -331,32 +368,100 @@ export class RoomKnowledgeDialog {
     void this.load();
   }
 
-  private async load(): Promise<void> {
+  private async load(reset = true, targetPage = 0, force = false): Promise<RoomListLoadResult> {
     const room = this.room;
-    if (!room || !this.dialog) return;
+    if (!room || !this.dialog) return 'stale';
+    const page = reset ? 0 : targetPage;
+    if (page < 0 || (!reset && !force && page === this.listPage)) return 'stale';
+    const cursor = reset ? null : page === this.listPage + 1
+      ? this.listCursor
+      : this.listPageStarts[page];
+    if (!reset && cursor === undefined) return 'stale';
     this.loadRequest?.abort();
     const controller = new AbortController();
     this.loadRequest = controller;
     const generation = ++this.generation;
-    this.setMessageKey('loading');
+    this.listLoading = true;
+    if (this.retryButton) this.retryButton.hidden = true;
+    this.setMessageKey(reset ? 'loading' : page > this.listPage ? 'loadingMore' : 'loadingPrevious');
+    this.renderLoadMore();
     try {
+      const params = roomParams(room);
+      params.set('limit', String(roomPageLimit));
+      if (cursor) params.set('cursor', cursor);
       const response = await fetchWithToken(
-        `/api/map-sets/${room.mapSetID}/inhabitants?${roomParams(room)}`,
+        `/api/map-sets/${room.mapSetID}/inhabitants?${params}`,
         { signal: controller.signal },
       );
       if (!response.ok) throw new Error(await response.text());
-      const rows = await response.json() as RoomInhabitant[];
-      if (!this.isCurrent(room, generation, controller)) return;
-      this.rows = Array.isArray(rows) ? rows : [];
+      const payload = await response.json() as RoomInhabitant[] | {
+        items?: RoomInhabitant[];
+        truncated?: boolean;
+        next_cursor?: string;
+      };
+      if (!this.isCurrent(room, generation, controller)) return 'stale';
+      // The envelope is the bounded REST contract. Accepting the historical
+      // bare-array response keeps a pane usable while an older server is being
+      // upgraded, but it is never emitted by the current server.
+      const envelope = !Array.isArray(payload) && payload && typeof payload === "object" ? payload : null;
+      const items = Array.isArray(payload) ? payload : Array.isArray(envelope?.items) ? envelope.items : [];
+      // Keep one server page in the DOM. Previous/next page cursors make every
+      // placement reachable without turning a pathological room into an
+      // ever-growing card list.
+      this.rows = items.slice(0, roomPageLimit)
+        .sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
+      if (page === 0) this.listPageStarts = [null];
+      else this.listPageStarts[page] = cursor ?? null;
+      this.listPage = page;
+      this.listCursor = typeof envelope?.next_cursor === 'string' && envelope.next_cursor !== ''
+        ? envelope.next_cursor
+        : null;
+      const rowsTruncated = envelope?.truncated === true;
+      this.listHasMore = rowsTruncated && !!this.listCursor && items.length > 0;
       if (this.rows.length === 0) this.setMessageKey('noInhabitants');
+      else if (rowsTruncated) {
+        this.setMessageKey(
+          page === 0 ? 'listTruncated' : 'listMoreTruncated',
+          { count: this.rows.length },
+        );
+      }
       else this.setMessage('');
       this.renderList();
+      if (this.retryButton) this.retryButton.hidden = true;
+      return 'loaded';
     } catch (error) {
-      if (!this.isCurrent(room, generation, controller)) return;
-      this.setMessageKey('loadFailed', { error: error instanceof Error ? error.message : String(error) }, true);
+      if (!this.isCurrent(room, generation, controller)) return 'stale';
+      const detail = error instanceof Error ? error.message.trim() : String(error).trim();
+      if (detail === legacyRoomInhabitantCursorCode && page > 0) {
+        this.listCursor = null;
+        this.listPageStarts = [null];
+        this.listPage = 0;
+        this.listHasMore = false;
+        this.setMessageKey('cursorExpired', {}, true);
+      } else {
+        this.setMessageKey('loadFailed', { error: detail }, true);
+      }
+      if (this.retryButton) {
+        this.retryButton.hidden = false;
+        this.retryButton.focus();
+      }
+      return 'failed';
     } finally {
-      if (this.loadRequest === controller) this.loadRequest = null;
+      if (this.loadRequest === controller) {
+        this.loadRequest = null;
+        this.listLoading = false;
+        this.renderLoadMore();
+      }
     }
+  }
+
+  private async retryList(): Promise<void> {
+    if (!this.room || !this.dialog || this.form || this.catalog) return;
+    const result = this.listPage === 0
+      ? await this.load()
+      : await this.load(false, this.listPage, true);
+    if (result === 'failed') this.retryButton?.focus();
+    else if (result === 'loaded') this.focusList();
   }
 
   private isCurrent(room: KnowledgeRoom, generation: number, controller: AbortController): boolean {
@@ -385,14 +490,76 @@ export class RoomKnowledgeDialog {
     this.clearCatalog();
     this.list.hidden = false;
     if (this.addButton) this.addButton.hidden = false;
-	if (this.placeExistingButton) this.placeExistingButton.hidden = false;
+    if (this.placeExistingButton) this.placeExistingButton.hidden = false;
     this.list.replaceChildren();
     for (const row of this.rows) this.list.appendChild(this.card(row));
+    this.renderLoadMore();
     if (restoreCatalogFocus) this.placeExistingButton?.focus();
     if (this.pendingRefresh) {
       this.pendingRefresh = false;
       void this.load();
     }
+  }
+
+  private renderLoadMore(): void {
+    if (!this.loadMoreButton || !this.previousButton) return;
+    const wasNextFocused = document.activeElement === this.loadMoreButton;
+    const wasPreviousFocused = document.activeElement === this.previousButton;
+    this.previousButton.hidden = this.listPage === 0;
+    this.previousButton.disabled = this.listLoading;
+    this.copy(this.previousButton, this.listLoading ? 'loadingPrevious' : 'previousPage');
+    this.loadMoreButton.hidden = !this.listHasMore;
+    this.loadMoreButton.disabled = this.listLoading;
+    this.copy(this.loadMoreButton, this.listLoading ? 'loadingMore' : 'loadMore');
+    if ((wasNextFocused && this.loadMoreButton.hidden) || (wasPreviousFocused && this.previousButton.hidden)) {
+      const target = this.list?.querySelector<HTMLButtonElement>('button');
+      if (target) target.focus();
+      else this.addButton?.focus();
+    }
+  }
+
+  private mutationNeedsPageReload(): boolean {
+    return this.rows.length >= roomPageLimit || this.listPage > 0 || this.listHasMore;
+  }
+
+  private closeFormAfterRefreshFailure(): void {
+    this.form?.remove();
+    this.form = null;
+    this.clearCatalog();
+    if (this.list) this.list.hidden = false;
+    if (this.addButton) this.addButton.hidden = false;
+    if (this.placeExistingButton) this.placeExistingButton.hidden = false;
+    this.renderList();
+    this.retryButton?.focus();
+  }
+
+  private focusList(preferredID?: number): void {
+    const preferred = preferredID == null
+      ? null
+      : this.list?.querySelector<HTMLButtonElement>(`[data-inhabitant-id="${preferredID}"] button`);
+    const target = preferred || this.list?.querySelector<HTMLButtonElement>('.map-inhabitant-card button')
+      || (this.listPage > 0 ? this.previousButton : this.addButton);
+    target?.focus();
+  }
+
+  private async reloadAfterMutation(preferredID?: number, targetPage = this.listPage): Promise<RoomListLoadResult> {
+    this.pendingRefresh = false;
+    const result = targetPage <= 0
+      ? await this.load()
+      : await this.load(false, targetPage, true);
+    if (result === 'failed') this.closeFormAfterRefreshFailure();
+    else if (result === 'loaded') this.focusList(preferredID);
+    return result;
+  }
+
+  private async reloadAfterDelete(): Promise<RoomListLoadResult> {
+    const page = this.listPage;
+    const result = await this.reloadAfterMutation(undefined, page);
+    if (result !== 'loaded') return result;
+    if (this.rows.length === 0 && page > 0) {
+      return this.reloadAfterMutation(undefined, page - 1);
+    }
+    return 'loaded';
   }
 
   private card(row: RoomInhabitant): HTMLElement {
@@ -457,8 +624,11 @@ export class RoomKnowledgeDialog {
     this.clearCatalog();
     this.form?.remove();
     this.list.hidden = true;
+    if (this.previousButton) this.previousButton.hidden = true;
+    if (this.loadMoreButton) this.loadMoreButton.hidden = true;
     if (this.addButton) this.addButton.hidden = true;
 	if (this.placeExistingButton) this.placeExistingButton.hidden = true;
+    if (this.retryButton) this.retryButton.hidden = true;
     const form = document.createElement("form");
     form.className = "map-inhabitant-form";
     const heading = document.createElement("h3");
@@ -535,8 +705,11 @@ export class RoomKnowledgeDialog {
 	  this.form?.remove();
 	  this.form = null;
 	  this.list.hidden = true;
+	  if (this.previousButton) this.previousButton.hidden = true;
+	  if (this.loadMoreButton) this.loadMoreButton.hidden = true;
 	  if (this.addButton) this.addButton.hidden = true;
 	  if (this.placeExistingButton) this.placeExistingButton.hidden = true;
+	  if (this.retryButton) this.retryButton.hidden = true;
 
 	  const panel = document.createElement("section");
 	  panel.className = "map-inhabitant-catalog";
@@ -626,6 +799,9 @@ export class RoomKnowledgeDialog {
 	  }
 	  this.catalogRequest?.abort();
 	  catalog.hidden = true;
+	  if (this.previousButton) this.previousButton.hidden = true;
+	  if (this.loadMoreButton) this.loadMoreButton.hidden = true;
+	  if (this.retryButton) this.retryButton.hidden = true;
 	  const form = document.createElement("form");
 	  form.className = "map-inhabitant-form map-inhabitant-placement-form";
 	  const heading = document.createElement("h3");
@@ -693,11 +869,20 @@ export class RoomKnowledgeDialog {
 		if (!response.ok) throw new Error(await response.text());
 		const saved = await response.json() as RoomInhabitant;
 		if (controller.signal.aborted || this.room !== room || this.form !== form) return;
-		this.rows.push(saved);
-		this.rows.sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
-		this.setMessage("");
-		this.renderList();
-		this.list?.querySelector<HTMLButtonElement>(`[data-inhabitant-id="${saved.id}"] button`)?.focus();
+		const page = this.listPage;
+		if (this.mutationNeedsPageReload()) {
+			// A catalog placement can have an id below the current page's keyset
+			// boundary. Rebuild page zero so both the visible slice and all saved
+			// page starts are authoritative before allowing further traversal.
+			await this.reloadAfterMutation(saved.id, page > 0 ? 0 : page);
+		} else {
+			this.rows = [...this.rows, saved]
+			  .sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id)
+			  .slice(0, roomPageLimit);
+			this.setMessage("");
+			this.renderList();
+			this.list?.querySelector<HTMLButtonElement>(`[data-inhabitant-id="${saved.id}"] button`)?.focus();
+		}
 	  } catch (error) {
 		if (controller.signal.aborted || this.room !== room || this.form !== form) return;
 		this.copy(message, 'placeFailed', { error: error instanceof Error ? error.message : String(error) });
@@ -751,12 +936,18 @@ export class RoomKnowledgeDialog {
       if (!response.ok) throw new Error(await response.text());
       const saved = await response.json() as RoomInhabitant;
       if (controller.signal.aborted || this.room !== room || this.form !== form) return;
-      const at = this.rows.findIndex((candidate) => candidate.id === saved.id);
-      if (at >= 0) this.rows[at] = saved;
-      else this.rows.push(saved);
-      this.rows.sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
-      this.setMessage("");
-      this.renderList();
+      const page = this.listPage;
+      if (this.mutationNeedsPageReload()) {
+        await this.reloadAfterMutation(saved.id, row ? page : 0);
+      } else {
+        const at = this.rows.findIndex((candidate) => candidate.id === saved.id);
+        if (at >= 0) this.rows[at] = saved;
+        else this.rows.push(saved);
+        this.rows.sort((a, b) => a.name.localeCompare(b.name) || a.id - b.id);
+        this.setMessage("");
+        this.renderList();
+        this.focusList(saved.id);
+      }
     } catch (error) {
       if (controller.signal.aborted || this.room !== room || this.form !== form) return;
       this.copy(message, 'saveFailed', { error: error instanceof Error ? error.message : String(error) });
@@ -780,10 +971,15 @@ export class RoomKnowledgeDialog {
       );
       if (!response.ok) throw new Error(await response.text());
       if (controller.signal.aborted || this.room !== room) return;
-      this.rows = this.rows.filter((candidate) => candidate.id !== row.id);
-      if (this.rows.length === 0) this.setMessageKey('noInhabitants');
-      else this.setMessage('');
-      this.renderList();
+      if (this.mutationNeedsPageReload()) {
+        await this.reloadAfterDelete();
+      } else {
+        this.rows = this.rows.filter((candidate) => candidate.id !== row.id);
+        if (this.rows.length === 0) this.setMessageKey('noInhabitants');
+        else this.setMessage('');
+        this.renderList();
+        this.focusList();
+      }
     } catch (error) {
       if (controller.signal.aborted || this.room !== room) return;
       this.setMessageKey('deleteFailed', { error: error instanceof Error ? error.message : String(error) }, true);

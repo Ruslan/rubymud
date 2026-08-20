@@ -240,6 +240,18 @@ func validateEffectiveLayoutTx(tx *gorm.DB, mapSetID int64) error {
 }
 
 func (s *Store) ValidateReconciliationPreview(mapSetID int64, target EdgeCell, layouts []LayoutMutation) error {
+	var err error
+	if target.Zone, err = NormalizeZoneName(target.Zone); err != nil {
+		return err
+	}
+	if len(layouts) > 0 {
+		layouts = append([]LayoutMutation(nil), layouts...)
+	}
+	for i := range layouts {
+		if layouts[i].Cell.Zone, err = NormalizeZoneName(layouts[i].Cell.Zone); err != nil {
+			return err
+		}
+	}
 	return s.db.Transaction(func(tx *gorm.DB) error {
 		var n int64
 		if err := tx.Model(&Room{}).Where("map_set_id=? AND zone=? AND x=? AND y=? AND l=?", mapSetID, target.Zone, target.X, target.Y, target.L).Count(&n).Error; err != nil {

@@ -583,9 +583,22 @@ func (s *Store) ListRoomInhabitants(mapSetID int64, cell EdgeCell) ([]RoomInhabi
 }
 
 func (s *Store) ListRoomInhabitantsBounded(mapSetID int64, cell EdgeCell, limit int) ([]RoomInhabitantView, bool, error) {
+	return s.ListRoomInhabitantsBoundedAfter(mapSetID, cell, limit, "", 0)
+}
+
+// ListRoomInhabitantsBoundedAfter returns one stable keyset page. The cursor is
+// the last returned entity id; unlike OFFSET it uses the room's covering key
+// and stays bounded without a name sort/temp B-tree. afterName is accepted for
+// compatibility with the original name+id cursor but the numeric id is the
+// authoritative continuation key. Callers may sort each returned page for
+// display without changing pagination order.
+func (s *Store) ListRoomInhabitantsBoundedAfter(mapSetID int64, cell EdgeCell, limit int, afterName string, afterID int64) ([]RoomInhabitantView, bool, error) {
 	cell, err := normalizeInhabitantCell(cell)
 	if err != nil {
 		return nil, false, err
+	}
+	if afterID < 0 || (afterName != "" && afterID == 0) {
+		return nil, false, fmt.Errorf("%w: invalid continuation cursor", ErrInvalidInhabitant)
 	}
 	if limit <= 0 {
 		limit = InhabitantListDefaultLimit
@@ -593,15 +606,18 @@ func (s *Store) ListRoomInhabitantsBounded(mapSetID int64, cell EdgeCell, limit 
 	if limit > InhabitantListMaxLimit {
 		limit = InhabitantListMaxLimit
 	}
-	var rows []RoomInhabitantView
-	err = s.db.Table("room_inhabitants AS ri").
+	query := s.db.Table("room_inhabitants AS ri").
 		Select(`mi.id, ri.id AS placement_id, mi.map_set_id, ri.zone, ri.x, ri.y, ri.l,
 			mi.name, mi.kind, mi.look_target, mi.look_text, mi.note, mi.strategy,
 			ri.presence_text, ri.resident, mi.updated_at, ri.updated_at AS placement_updated_at`).
 		Joins("JOIN map_inhabitants AS mi ON mi.id=ri.inhabitant_id AND mi.map_set_id=ri.map_set_id").
 		Where("ri.map_set_id=? AND ri.zone=? AND ri.x=? AND ri.y=? AND ri.l=?",
-			mapSetID, cell.Zone, cell.X, cell.Y, cell.L).
-		Order("mi.name COLLATE NOCASE ASC, mi.id ASC").Limit(limit + 1).Scan(&rows).Error
+			mapSetID, cell.Zone, cell.X, cell.Y, cell.L)
+	if afterID > 0 {
+		query = query.Where("ri.inhabitant_id > ?", afterID)
+	}
+	var rows []RoomInhabitantView
+	err = query.Order("ri.inhabitant_id ASC").Limit(limit + 1).Scan(&rows).Error
 	if err != nil {
 		return nil, false, err
 	}

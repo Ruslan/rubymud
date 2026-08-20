@@ -2,7 +2,9 @@ package web
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -86,7 +88,8 @@ func TestRESTRoomInhabitantsLazyCRUDOnFrozenMapSet(t *testing.T) {
 
 	endpoint := fmt.Sprintf("%s/api/map-sets/%d/inhabitants?zone=%s&x=1&y=2&l=0", ts.URL, setID, url.QueryEscape("Alpha"))
 	resp, data := doInhabitantRequest(t, s, http.MethodGet, endpoint, nil)
-	if resp.StatusCode != http.StatusOK || string(data) != "[]\n" {
+	var emptyPayload roomInhabitantListResponse
+	if resp.StatusCode != http.StatusOK || json.Unmarshal(data, &emptyPayload) != nil || len(emptyPayload.Items) != 0 || emptyPayload.Truncated {
 		t.Fatalf("empty list: status=%d body=%s", resp.StatusCode, data)
 	}
 
@@ -137,8 +140,13 @@ func TestRESTRoomInhabitantsLazyCRUDOnFrozenMapSet(t *testing.T) {
 
 	resp, data = doInhabitantRequest(t, s, http.MethodGet, endpoint, nil)
 	var rows []storage.RoomInhabitantView
-	if resp.StatusCode != http.StatusOK || json.Unmarshal(data, &rows) != nil || len(rows) != 2 {
+	var listPayload roomInhabitantListResponse
+	if resp.StatusCode != http.StatusOK || json.Unmarshal(data, &listPayload) != nil || listPayload.Truncated {
 		t.Fatalf("list: status=%d rows=%+v body=%s", resp.StatusCode, rows, data)
+	}
+	rows = listPayload.Items
+	if len(rows) != 2 {
+		t.Fatalf("list: rows=%+v body=%s", rows, data)
 	}
 
 	resp, data = doInhabitantRequest(t, s, http.MethodPatch,
@@ -162,7 +170,7 @@ func TestRESTRoomInhabitantsLazyCRUDOnFrozenMapSet(t *testing.T) {
 		t.Fatalf("delete: status=%d body=%s", resp.StatusCode, data)
 	}
 	_, data = doInhabitantRequest(t, s, http.MethodGet, endpoint, nil)
-	if err := json.Unmarshal(data, &rows); err != nil || len(rows) != 1 || rows[0].Name != "Master Smith" {
+	if err := json.Unmarshal(data, &listPayload); err != nil || listPayload.Truncated || len(listPayload.Items) != 1 || listPayload.Items[0].Name != "Master Smith" {
 		t.Fatalf("after delete rows=%+v err=%v", rows, err)
 	}
 
@@ -215,6 +223,117 @@ func TestRESTRoomInhabitantsLazyCRUDOnFrozenMapSet(t *testing.T) {
 	}
 	if _, included := slim[0]["inhabitants"]; included {
 		t.Fatalf("slim room unexpectedly contains inhabitants: %s", data)
+	}
+}
+
+func TestRESTRoomInhabitantsReturnsBoundedEnvelope(t *testing.T) {
+	s, _ := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+	setID, err := s.store.CreateMapSet(storage.MapSetInput{
+		Name: "bounded", Rooms: []storage.Room{{Zone: "Alpha", X: 0, Y: 0, L: 0}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cell := storage.EdgeCell{Zone: "Alpha", X: 0, Y: 0, L: 0}
+	for i := 0; i < storage.InhabitantListDefaultLimit+1; i++ {
+		if _, err := s.store.CreateRoomInhabitant(setID, cell, storage.RoomInhabitantFields{
+			InhabitantFields: storage.InhabitantFields{
+				Name: fmt.Sprintf("NPC %02d", i), Kind: storage.InhabitantKindNPC,
+			},
+		}); err != nil {
+			t.Fatalf("create inhabitant %d: %v", i, err)
+		}
+	}
+
+	endpoint := fmt.Sprintf("%s/api/map-sets/%d/inhabitants?zone=Alpha&x=0&y=0&l=0", ts.URL, setID)
+	resp, data := doInhabitantRequest(t, s, http.MethodGet, endpoint, nil)
+	var payload struct {
+		Items      []storage.RoomInhabitantView `json:"items"`
+		Truncated  bool                         `json:"truncated"`
+		NextCursor string                       `json:"next_cursor"`
+	}
+	if resp.StatusCode != http.StatusOK || json.Unmarshal(data, &payload) != nil {
+		t.Fatalf("bounded room list: status=%d body=%s", resp.StatusCode, data)
+	}
+	if len(payload.Items) != storage.InhabitantListDefaultLimit || !payload.Truncated {
+		t.Fatalf("bounded room payload = %d rows truncated=%v, want %d/true", len(payload.Items), payload.Truncated, storage.InhabitantListDefaultLimit)
+	}
+	if payload.Items[0].Name != "NPC 00" || payload.Items[len(payload.Items)-1].Name != "NPC 19" {
+		t.Fatalf("bounded room payload order = %q..%q", payload.Items[0].Name, payload.Items[len(payload.Items)-1].Name)
+	}
+	if payload.NextCursor == "" {
+		t.Fatal("bounded room payload did not provide a continuation cursor")
+	}
+	resp, data = doInhabitantRequest(t, s, http.MethodGet, endpoint+"&cursor="+url.QueryEscape(payload.NextCursor), nil)
+	var continuation struct {
+		Items     []storage.RoomInhabitantView `json:"items"`
+		Truncated bool                         `json:"truncated"`
+	}
+	if resp.StatusCode != http.StatusOK || json.Unmarshal(data, &continuation) != nil || continuation.Truncated || len(continuation.Items) != 1 || continuation.Items[0].Name != "NPC 20" {
+		t.Fatalf("bounded room continuation: status=%d body=%s", resp.StatusCode, data)
+	}
+	legacyPayload, _ := json.Marshal(map[string]any{"name": payload.Items[len(payload.Items)-1].Name, "id": payload.Items[len(payload.Items)-1].ID})
+	legacyCursor := base64.RawURLEncoding.EncodeToString(legacyPayload)
+	resp, data = doInhabitantRequest(t, s, http.MethodGet, endpoint+"&cursor="+url.QueryEscape(legacyCursor), nil)
+	if resp.StatusCode != http.StatusBadRequest || string(data) != "legacy_room_inhabitant_cursor\n" {
+		t.Fatalf("legacy room cursor: status=%d body=%q", resp.StatusCode, data)
+	}
+	resp, _ = doInhabitantRequest(t, s, http.MethodGet, endpoint+"&cursor=not-a-cursor", nil)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid room cursor status=%d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+}
+
+func TestRESTRoomInhabitantsRejectsUnversionedLegacyCursorWithoutSkippingNames(t *testing.T) {
+	s, _ := setupTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+	setID, err := s.store.CreateMapSet(storage.MapSetInput{Name: "cursor-version"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cell := storage.EdgeCell{Zone: "Alpha", X: 0, Y: 0, L: 0}
+	for _, name := range []string{"Zed", "Alpha", "Beta"} {
+		if _, err := s.store.CreateRoomInhabitant(setID, cell, storage.RoomInhabitantFields{
+			InhabitantFields: storage.InhabitantFields{Name: name, Kind: storage.InhabitantKindNPC},
+		}); err != nil {
+			t.Fatalf("create %s: %v", name, err)
+		}
+	}
+
+	endpoint := fmt.Sprintf("%s/api/map-sets/%d/inhabitants?zone=Alpha&x=0&y=0&l=0&limit=1", ts.URL, setID)
+	resp, data := doInhabitantRequest(t, s, http.MethodGet, endpoint, nil)
+	var first struct {
+		Items      []storage.RoomInhabitantView `json:"items"`
+		NextCursor string                       `json:"next_cursor"`
+	}
+	if resp.StatusCode != http.StatusOK || json.Unmarshal(data, &first) != nil || len(first.Items) != 1 || first.Items[0].Name != "Zed" {
+		t.Fatalf("versioned cursor first page: status=%d body=%s", resp.StatusCode, data)
+	}
+	if first.NextCursor == "" {
+		t.Fatal("versioned cursor first page did not provide a cursor")
+	}
+	legacyPayload, _ := json.Marshal(map[string]any{"name": "Alpha", "id": first.Items[0].ID})
+	legacyCursor := base64.RawURLEncoding.EncodeToString(legacyPayload)
+	resp, data = doInhabitantRequest(t, s, http.MethodGet, endpoint+"&cursor="+url.QueryEscape(legacyCursor), nil)
+	if resp.StatusCode != http.StatusBadRequest || string(data) != "legacy_room_inhabitant_cursor\n" {
+		t.Fatalf("legacy cursor response: status=%d body=%q, want stable 400 code", resp.StatusCode, data)
+	}
+	idOnlyCursor := base64.RawURLEncoding.EncodeToString([]byte(`{"id":20}`))
+	resp, data = doInhabitantRequest(t, s, http.MethodGet, endpoint+"&cursor="+url.QueryEscape(idOnlyCursor), nil)
+	if resp.StatusCode != http.StatusBadRequest || string(data) != "legacy_room_inhabitant_cursor\n" {
+		t.Fatalf("id-only legacy cursor response: status=%d body=%q, want stable 400 code", resp.StatusCode, data)
+	}
+}
+
+func TestDecodeRoomInhabitantCursorKeepsZeroAndNegativeIDsInvalid(t *testing.T) {
+	for _, raw := range []string{`{"id":0}`, `{"id":-1}`} {
+		cursor := base64.RawURLEncoding.EncodeToString([]byte(raw))
+		if _, _, err := decodeRoomInhabitantCursor(cursor); err == nil || errors.Is(err, errLegacyRoomInhabitantCursor) {
+			t.Fatalf("cursor %s classified as %v, want ordinary invalid cursor", raw, err)
+		}
 	}
 }
 
