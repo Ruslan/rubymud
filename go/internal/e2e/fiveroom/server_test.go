@@ -75,10 +75,52 @@ func TestServerSendsRMUDBlocksIgnoresTelnetAndTracesCommands(t *testing.T) {
 	}
 }
 
+func TestServerDarkRoomBecomesVisibleAfterTorch(t *testing.T) {
+	tracePath := filepath.Join(t.TempDir(), "trace.jsonl")
+	server, err := ListenWithOptions("127.0.0.1:0", tracePath, Options{DarkRoom: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+
+	conn, err := net.Dial("tcp", server.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	if got := readBlock(t, reader); !strings.Contains(got, "Loop Room 1") {
+		t.Fatalf("initial block = %q", got)
+	}
+
+	writeCommand(t, conn, "E")
+	if got := readLines(t, reader, 2); got != "Здесь кромешная тьма.\r\n[ Exits: E W ]\r\n" {
+		t.Fatalf("dark room block = %q", got)
+	}
+	writeCommand(t, conn, "W")
+	if got := readBlock(t, reader); !strings.Contains(got, "Loop Room 1") {
+		t.Fatalf("return block = %q", got)
+	}
+
+	writeCommand(t, conn, "torch")
+	if got := readLines(t, reader, 2); got != "Вы зажгли факел.\r\n\r\n" {
+		t.Fatalf("torch acknowledgement = %q", got)
+	}
+	writeCommand(t, conn, "E")
+	if got := readBlock(t, reader); !strings.Contains(got, "Loop Room 2") || strings.Contains(got, "кромешная тьма") {
+		t.Fatalf("lit room block = %q", got)
+	}
+}
+
 func readBlock(t *testing.T, reader *bufio.Reader) string {
 	t.Helper()
+	return readLines(t, reader, 3)
+}
+
+func readLines(t *testing.T, reader *bufio.Reader, count int) string {
+	t.Helper()
 	var b strings.Builder
-	for i := 0; i < 3; i++ {
+	for i := 0; i < count; i++ {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			t.Fatal(err)
@@ -86,4 +128,11 @@ func readBlock(t *testing.T, reader *bufio.Reader) string {
 		b.WriteString(line)
 	}
 	return b.String()
+}
+
+func writeCommand(t *testing.T, conn net.Conn, command string) {
+	t.Helper()
+	if _, err := conn.Write([]byte(command + "\r\n")); err != nil {
+		t.Fatal(err)
+	}
 }

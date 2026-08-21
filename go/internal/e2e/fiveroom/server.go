@@ -32,6 +32,7 @@ type TraceEntry struct {
 type Server struct {
 	listener net.Listener
 	trace    *os.File
+	options  Options
 
 	traceMu sync.Mutex
 	connMu  sync.Mutex
@@ -45,7 +46,17 @@ type Server struct {
 	closeErr       error
 }
 
+// Options changes only fixture presentation. DarkRoom makes that room emit the
+// exact RMUD visibility-loss block until the same connection sends `torch`.
+type Options struct {
+	DarkRoom int
+}
+
 func Listen(addr, tracePath string) (*Server, error) {
+	return ListenWithOptions(addr, tracePath, Options{})
+}
+
+func ListenWithOptions(addr, tracePath string, options Options) (*Server, error) {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return nil, err
@@ -55,7 +66,7 @@ func Listen(addr, tracePath string) (*Server, error) {
 		listener.Close()
 		return nil, err
 	}
-	s := &Server{listener: listener, trace: trace, conns: make(map[net.Conn]struct{})}
+	s := &Server{listener: listener, trace: trace, options: options, conns: make(map[net.Conn]struct{})}
 	s.acceptWG.Add(1)
 	go s.acceptLoop()
 	return s, nil
@@ -109,7 +120,8 @@ func (s *Server) handleConnection(conn net.Conn, connectionID uint64) {
 	}()
 
 	world := NewWorld()
-	if err := writeRoomBlock(conn, world.Current()); err != nil {
+	lit := s.options.DarkRoom == 0
+	if err := s.writeObservedRoom(conn, world.Current(), lit); err != nil {
 		return
 	}
 	reader := bufio.NewReaderSize(conn, maxCommandBytes+16)
@@ -122,6 +134,17 @@ func (s *Server) handleConnection(conn net.Conn, connectionID uint64) {
 			continue
 		}
 		from := world.Current().ID
+		if strings.EqualFold(command, "torch") {
+			entry := TraceEntry{Sequence: s.nextSequence.Add(1), ConnectionID: connectionID, From: from, Command: command, To: from, Moved: false}
+			if err := s.appendTrace(entry); err != nil {
+				return
+			}
+			lit = true
+			if err := writeAcknowledgement(conn, "Вы зажгли факел."); err != nil {
+				return
+			}
+			continue
+		}
 		if strings.EqualFold(command, "scan") {
 			entry := TraceEntry{Sequence: s.nextSequence.Add(1), ConnectionID: connectionID, From: from, Command: command, To: from, Moved: false}
 			if err := s.appendTrace(entry); err != nil {
@@ -146,10 +169,21 @@ func (s *Server) handleConnection(conn net.Conn, connectionID uint64) {
 			}
 			continue
 		}
-		if err := writeRoomBlock(conn, room); err != nil {
+		if err := s.writeObservedRoom(conn, room, lit); err != nil {
 			return
 		}
 	}
+}
+
+func (s *Server) writeObservedRoom(conn net.Conn, room Room, lit bool) error {
+	if room.ID == s.options.DarkRoom && !lit {
+		if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintf(conn, "Здесь кромешная тьма.\r\n[ Exits: %s ]\r\n", room.Exits)
+		return err
+	}
+	return writeRoomBlock(conn, room)
 }
 
 func writeScanBlock(conn net.Conn, lines []string) error {
@@ -184,6 +218,14 @@ func writeLine(conn net.Conn, line string) error {
 		return err
 	}
 	_, err := io.WriteString(conn, line+"\r\n")
+	return err
+}
+
+func writeAcknowledgement(conn net.Conn, line string) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+		return err
+	}
+	_, err := io.WriteString(conn, line+"\r\n\r\n")
 	return err
 }
 
