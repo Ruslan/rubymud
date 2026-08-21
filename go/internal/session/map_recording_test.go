@@ -442,10 +442,13 @@ func TestMapRecordingCreatesOneProvisionalRoomAfterCompletedMove(t *testing.T) {
 	}
 	tracker := mapper.NewTracker(mapper.BuildIndexWithEdges(setID, rooms, edges))
 	tracker.Anchor(mapper.Coord{Zone: "Z", X: 0, Y: 0, L: 0})
+	conn := &recordingConn{}
 	s := &Session{
 		sessionID:        rec.ID,
 		store:            store,
+		conn:             conn,
 		mapTracker:       tracker,
+		mapDetector:      mapper.NewSpecDetector(mapper.BuiltinRMUD(), mapper.DetectorInfo{Key: "rmud"}),
 		lastRoom:         mapper.RoomEvent{Hint: "Start", Desc: "start", Exits: "S"},
 		lastRoomOK:       true,
 		mapRecordingMode: MapRecordingOff,
@@ -456,9 +459,14 @@ func TestMapRecordingCreatesOneProvisionalRoomAfterCompletedMove(t *testing.T) {
 	if _, err := s.StartMapRecording(); err != nil {
 		t.Fatal(err)
 	}
+	// Drain the initial-room probe. The assertion below concerns the scan started
+	// after the newly recorded room, not this already-safe start path.
+	waitFor(t, func() bool { return conn.String() == "scan\n" })
+	s.observeIncomingLine("", "")
+	conn.Reset()
 	s.observeOutgoingMove("s", "input")
 	s.mapMu.Lock()
-	if s.observeMapRecordingRoomLocked(mapper.RoomEvent{Hint: "New room", Desc: "fresh", Exits: "N"}) {
+	if s.observeMapRecordingRoomLocked(mapper.RoomEvent{Hint: "New room", Desc: "fresh", Exits: "N E"}) {
 		s.mapMu.Unlock()
 		t.Fatal("empty predicted target was misclassified as a conflict")
 	}
@@ -499,6 +507,14 @@ func TestMapRecordingCreatesOneProvisionalRoomAfterCompletedMove(t *testing.T) {
 	if state := s.MapRecordingState(); state.Mode != MapRecordingRecording || state.Pending != 0 {
 		t.Fatalf("recording state after commit=%+v", state)
 	}
+	// The detached SQLite commit won before this test supplied the room's trailing
+	// blank. A scan written now would capture that blank as an empty response.
+	time.Sleep(10 * time.Millisecond)
+	if got := conn.String(); got != "" {
+		t.Fatalf("scan written before newly recorded room boundary: %q", got)
+	}
+	s.observeIncomingLine("", "")
+	waitFor(t, func() bool { return conn.String() == "scan\n" })
 	pos := tracker.Position()
 	if !pos.Valid || pos.Confidence != mapper.Green || pos.Coord != (mapper.Coord{Zone: "Z", X: 1, Y: 0, L: 0}) {
 		t.Fatalf("tracker position after commit=%+v", pos)

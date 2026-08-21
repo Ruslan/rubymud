@@ -499,6 +499,7 @@ func (s *Session) observeIncomingLine(plainText, raw string) {
 	recordingConflict := false
 
 	s.mapMu.Lock()
+	s.noteMapAutorecordBoundaryLocked(plainText)
 	scanAfterBoundary = s.takeMapScanAfterRoomBoundaryLocked(plainText)
 	scanMsg, scanLine := s.consumeMapScanLineLocked(plainText)
 	if scanMsg != nil {

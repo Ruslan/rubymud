@@ -31,6 +31,18 @@ type mapScanCapture struct {
 	canceled bool
 }
 
+// mapAutorecordBoundary bridges the only asynchronous room path: the detector
+// emits a new-room event at the exits line, while the SQLite writer may finish
+// either before or after the room's trailing blank/prompt. mapMu serializes the
+// boundary observation with commit publication so the follow-up scan starts on
+// the correct side in both orders.
+type mapAutorecordBoundary struct {
+	epoch  int64
+	move   uint64
+	config mapper.ScanConfig
+	passed bool
+}
+
 // scheduleMapScan is intentionally cheap and best-effort. It probes only while
 // single-step recording is active, the tracker is green with no move in flight,
 // and the current room advertises at least one exit without a known target.
@@ -78,6 +90,45 @@ func (s *Session) takeMapScanAfterRoomBoundaryLocked(line string) *mapScanJob {
 		return nil
 	}
 	copy := *job
+	return &copy
+}
+
+func (s *Session) reserveMapAutorecordBoundaryLocked(epoch int64, move uint64) {
+	s.mapAutorecordBoundary = nil
+	config, ok := mapper.DetectorScan(s.mapDetector)
+	if !ok || !config.HasRoomBoundary() {
+		return
+	}
+	s.mapAutorecordBoundary = &mapAutorecordBoundary{epoch: epoch, move: move, config: config}
+}
+
+func (s *Session) noteMapAutorecordBoundaryLocked(line string) {
+	waiting := s.mapAutorecordBoundary
+	if waiting != nil && waiting.config.RoomBoundary(line) {
+		waiting.passed = true
+	}
+}
+
+// prepareMapScanAfterAutorecordLocked decides under the same mapMu as incoming
+// lines whether the room boundary is already behind us. Returning a job means
+// "write now"; nil with mapScanAfterBoundary set means the parser will launch it
+// immediately after the pending boundary. Caller holds mapMu.
+func (s *Session) prepareMapScanAfterAutorecordLocked(job mapAutorecordJob) *mapScanJob {
+	prepared, ok := s.prepareMapScanLocked()
+	if !ok {
+		s.mapAutorecordBoundary = nil
+		return nil
+	}
+	waiting := s.mapAutorecordBoundary
+	matched := waiting != nil && waiting.epoch == job.Epoch && waiting.move == job.Move.Sequence
+	if prepared.config.HasRoomBoundary() && matched && !waiting.passed {
+		copy := prepared
+		s.mapScanAfterBoundary = &copy
+		s.mapAutorecordBoundary = nil
+		return nil
+	}
+	s.mapAutorecordBoundary = nil
+	copy := prepared
 	return &copy
 }
 

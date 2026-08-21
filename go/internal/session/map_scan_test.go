@@ -236,6 +236,45 @@ func TestMapRecordingAutoScanStartsAfterReturnedRoomBoundary(t *testing.T) {
 	t.Fatalf("returned room scan was lost at its trailing boundary: %+v", messages.snapshot())
 }
 
+func TestAutorecordScanRendezvousHandlesBothCommitBoundaryOrders(t *testing.T) {
+	for _, boundaryFirst := range []bool{false, true} {
+		name := "commit-before-boundary"
+		if boundaryFirst {
+			name = "boundary-before-commit"
+		}
+		t.Run(name, func(t *testing.T) {
+			s, _, _ := scanHarness(t)
+			job := mapAutorecordJob{Epoch: 7, Move: PendingMapMove{Sequence: 11}}
+			s.mapMu.Lock()
+			s.mapRecordingMode = MapRecordingRecording
+			s.mapRecordingEpoch = job.Epoch
+			s.reserveMapAutorecordBoundaryLocked(job.Epoch, job.Move.Sequence)
+			if boundaryFirst {
+				s.noteMapAutorecordBoundaryLocked("")
+			}
+			immediate := s.prepareMapScanAfterAutorecordLocked(job)
+			deferred := s.mapScanAfterBoundary
+			s.mapMu.Unlock()
+
+			if boundaryFirst {
+				if immediate == nil || deferred != nil {
+					t.Fatalf("boundary-first scan immediate=%v deferred=%v, want immediate only", immediate != nil, deferred != nil)
+				}
+				return
+			}
+			if immediate != nil || deferred == nil {
+				t.Fatalf("commit-first scan immediate=%v deferred=%v, want deferred only", immediate != nil, deferred != nil)
+			}
+			s.mapMu.Lock()
+			released := s.takeMapScanAfterRoomBoundaryLocked("")
+			s.mapMu.Unlock()
+			if released == nil || released.token != deferred.token {
+				t.Fatalf("boundary did not release reserved scan: released=%+v deferred=%+v", released, deferred)
+			}
+		})
+	}
+}
+
 func TestMapRecordingAutoScanBlankResponseClosesCapture(t *testing.T) {
 	s, conn, messages := scanHarness(t)
 	if _, err := s.StartMapRecording(); err != nil {

@@ -318,6 +318,7 @@ func (s *Session) stopMapRecordingLocked(reason string) {
 	s.mapRecordingWrites = 0
 	s.mapReconcilePreview = nil
 	s.mapScanAfterBoundary = nil
+	s.mapAutorecordBoundary = nil
 	s.cancelMapScanCaptureLocked()
 	s.mapScanSnapshot = nil
 	if changed {
@@ -719,6 +720,7 @@ func (s *Session) observeMapRecordingRoomLockedForAutorecord(ev mapper.RoomEvent
 		BatchID:          fmt.Sprintf("session-%d-epoch-%d-move-%d", s.sessionID, s.mapRecordingEpoch, move.Sequence),
 	}
 	s.mapRecordingWrites++
+	s.reserveMapAutorecordBoundaryLocked(job.Epoch, job.Move.Sequence)
 	s.mapRecordingRevision++
 	return false, job
 }
@@ -880,6 +882,7 @@ func (s *Session) failMapAutorecord(job mapAutorecordJob, reason string) {
 func (s *Session) completeMapAutorecord(job mapAutorecordJob, setID int64) {
 	s.mapMu.Lock()
 	current := s.mapRecordingEpoch == job.Epoch && s.mapRecordingWrites > 0
+	var scanNow *mapScanJob
 	if current {
 		s.mapRecordingWrites--
 		if s.mapTracker != nil {
@@ -887,6 +890,7 @@ func (s *Session) completeMapAutorecord(job mapAutorecordJob, setID int64) {
 			s.syncDoorOpenLocked()
 		}
 		s.mapRecordingRevision++
+		scanNow = s.prepareMapScanAfterAutorecordLocked(job)
 	}
 	// A parser/internal stop is intentionally allowed to avoid waiting on SQLite.
 	// Once the final current-job check has passed, however, the transaction owns
@@ -901,7 +905,12 @@ func (s *Session) completeMapAutorecord(job mapAutorecordJob, setID int64) {
 	}
 	s.broadcastRoomsChanged(setID)
 	s.broadcastMsg(mapRecordingMsg(state))
-	s.scheduleMapScan()
+	if scanNow != nil {
+		go func(scan mapScanJob) {
+			defer s.recoverGoroutine("mapper scan writer")
+			s.writeMapScan(scan)
+		}(*scanNow)
+	}
 }
 
 func boundedMapText(v string, max int) string {
