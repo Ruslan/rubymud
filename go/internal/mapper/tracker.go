@@ -1,7 +1,6 @@
 package mapper
 
 import (
-	"sort"
 	"strconv"
 	"strings"
 
@@ -273,6 +272,11 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 	}
 
 	fp := mapimport.Fingerprint(ev.Hint, ev.Desc, ev.Exits)
+	matchFP := fp
+	if strings.TrimSpace(ev.Hint) == "" {
+		// Exits-only pipe events deliberately do not identify a physical room.
+		matchFP = ""
+	}
 	evExits, _ := mapimport.NormExits(ev.Exits)
 
 	// 1) If we have a valid position and a pending head, try the predicted cell.
@@ -292,7 +296,7 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 					pred = skipped
 				}
 			}
-			if room := t.idx.Room(pred); room != nil && matches(room, ev, evExits) {
+			if room := t.idx.Room(pred); room != nil && matchesFingerprint(room, matchFP) {
 				// confirmed step
 				t.pos = Position{Valid: true, Coord: pred, Confidence: Green, EventDescribesCell: true}
 				t.pending = t.pending[1:]
@@ -304,7 +308,7 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 	// 2) Following / teleport with an empty queue: search neighbors (incl seams)
 	//    for a cell matching the event.
 	if t.pos.Valid && len(t.pending) == 0 {
-		nb, ambiguous := t.neighborMatch(t.pos.Coord, ev, evExits, true)
+		nb, ambiguous := t.neighborMatch(t.pos.Coord, matchFP, true)
 		if nb != nil {
 			t.pos = Position{Valid: true, Coord: nb.Coord, Confidence: Green, EventDescribesCell: true}
 			return
@@ -490,7 +494,7 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 	//    It runs AFTER the unique-fingerprint resync above on purpose: a unique
 	//    fingerprint is hard evidence and deserves its 🟢; adjacency is a guess.
 	if t.pos.Valid && len(t.pending) == 0 {
-		nb, ambiguous := t.neighborMatch(t.pos.Coord, ev, evExits, false)
+		nb, ambiguous := t.neighborMatch(t.pos.Coord, matchFP, false)
 		if nb != nil {
 			t.pos = Position{Valid: true, Coord: nb.Coord, Confidence: Yellow,
 				Reason:             "assumed " + coordStr(nb.Coord) + " — adjacent and matching, but the map records no way there",
@@ -701,7 +705,7 @@ func seamDir(cmd string) string {
 // A cell with no room in the index is never a candidate; when the tracker stands
 // on a cell that is not in the map at all there are no rows to read, so even the
 // graph mode falls back to raw deltas for that one hop.
-func (t *Tracker) neighborMatch(c Coord, ev RoomEvent, evExits []string, graphOnly bool) (match *IndexRoom, ambiguous bool) {
+func (t *Tracker) neighborMatch(c Coord, fingerprint string, graphOnly bool) (match *IndexRoom, ambiguous bool) {
 	room := t.idx.Room(c)
 	var cands []*IndexRoom
 	// grid neighbors, in a fixed direction order.
@@ -723,7 +727,7 @@ func (t *Tracker) neighborMatch(c Coord, ev RoomEvent, evExits []string, graphOn
 				}
 			}
 		}
-		if nb := t.idx.Room(nc); nb != nil && matches(nb, ev, evExits) {
+		if nb := t.idx.Room(nc); nb != nil && matchesFingerprint(nb, fingerprint) {
 			cands = appendUniqueRoom(cands, nb)
 		}
 	}
@@ -732,7 +736,7 @@ func (t *Tracker) neighborMatch(c Coord, ev RoomEvent, evExits []string, graphOn
 	if room != nil {
 		for _, e := range room.seams {
 			if e.Passable && e.To != nil {
-				if tr := t.idx.Room(*e.To); tr != nil && matches(tr, ev, evExits) {
+				if tr := t.idx.Room(*e.To); tr != nil && matchesFingerprint(tr, fingerprint) {
 					cands = appendUniqueRoom(cands, tr)
 				}
 			}
@@ -759,34 +763,12 @@ func appendUniqueRoom(list []*IndexRoom, r *IndexRoom) []*IndexRoom {
 	return append(list, r)
 }
 
-// matches reports whether an IndexRoom matches a room-event by hint + normalized
-// exits, tolerant to door-marker differences (exits compared as canonical dir
-// sets, doors ignored — mapimport.NormExits already strips door markers). An
-// empty event hint is not matched here (pipe path handled separately).
-func matches(room *IndexRoom, ev RoomEvent, evExits []string) bool {
-	if ev.Hint == "" {
-		return false
-	}
-	if !strings.EqualFold(strings.TrimSpace(room.Hint), strings.TrimSpace(ev.Hint)) {
-		return false
-	}
-	return sameDirSet(room.EDirs, evExits)
-}
-
-func sameDirSet(a, b []string) bool {
-	as := append([]string(nil), a...)
-	bs := append([]string(nil), b...)
-	sort.Strings(as)
-	sort.Strings(bs)
-	if len(as) != len(bs) {
-		return false
-	}
-	for i := range as {
-		if as[i] != bs[i] {
-			return false
-		}
-	}
-	return true
+// matchesFingerprint uses the same normalized hint+description+exits identity
+// as import and global resync. Room names are routinely repeated in MUDs; the
+// cleaned description is what distinguishes those cells. Door markers remain
+// irrelevant because mapimport.Fingerprint canonicalizes the exit directions.
+func matchesFingerprint(room *IndexRoom, fingerprint string) bool {
+	return fingerprint != "" && room.Fingerprint == fingerprint
 }
 
 // containsDir is a membership test over a direction list. Since migration 018 moved

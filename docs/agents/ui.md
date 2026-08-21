@@ -55,7 +55,10 @@ The cell menu action `Knowledge…` opens a room-scoped dialog. Its `Inhabitants
 loads lazily from `/api/map-sets/{id}/inhabitants`; the full catalogue must not
 be added to the hot slim-room/zone payload. Cards and forms use DOM `textContent`
 and native controls rather than HTML interpolation.
-The room list response is a bounded `{items, truncated, next_cursor}` envelope:
+The same lazy response carries the persisted room `hint`, cleaned `desc`, and
+`exits`, which Knowledge renders above the tab; full descriptions still never
+ride on the hot zone payload. The room list response is a bounded
+`{room, items, truncated, next_cursor}` envelope:
 the UI pages through 20 entries at a time with an opaque versioned (v2)
 inhabitant-id keyset cursor (the server query follows the covering room index;
 the UI sorts each page for display), keeping only the current page in the DOM
@@ -82,6 +85,11 @@ detection remains intentionally out of scope.
 Catalog-to-placement transitions abort any in-flight room refresh and keep its
 generation stale, preserving the unsaved placement form. Back completes a
 pending refresh; automatic catalog closure restores focus to `Place existing`.
+
+Cross-zone room search matches NFC/case-folded `hint + desc` on the server and
+returns at most the requested bound. Results show logical coordinates and a
+bounded visual excerpt of the raw persisted description so same-named rooms
+remain distinguishable; the description is not translated.
 
 ## Mapper localization
 

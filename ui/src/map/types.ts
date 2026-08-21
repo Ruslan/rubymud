@@ -51,6 +51,7 @@ export interface SlimCorridor {
 export interface MapRoomSearchResult {
   z: string;
   h: string;
+  desc?: string;
   x: number;
   y: number;
   l: number;

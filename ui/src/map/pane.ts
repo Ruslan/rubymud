@@ -3294,7 +3294,17 @@ export class MapPaneController {
     for (const candidate of candidates) {
       const button = document.createElement("button");
       button.type = "button";
-      button.textContent = `${candidate.h || `${candidate.x},${candidate.y},${candidate.l}`} — ${candidate.z}`;
+      const name = candidate.h || this.i18n.t('unnamed');
+      const summary = document.createElement("span");
+      summary.textContent = `${name} — ${candidate.z} (${candidate.x},${candidate.y},${candidate.l})`;
+      button.appendChild(summary);
+      const description = candidate.desc?.trim();
+      if (description) {
+        const excerpt = document.createElement("small");
+        excerpt.textContent = description.length > 140 ? `${description.slice(0, 139)}…` : description;
+        excerpt.title = description;
+        button.appendChild(excerpt);
+      }
       button.addEventListener("click", () => void this.openSearchResult(candidate));
       this.searchResults.appendChild(button);
     }

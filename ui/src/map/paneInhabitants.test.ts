@@ -149,6 +149,11 @@ describe("map room inhabitants knowledge dialog", () => {
     await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("Город"));
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/inhabitants"))).toBe(false);
 
+    nextRoomList = {
+      room: { hint: "Кузница", desc: "У стены пылает горн без точек миникарты.", exits: "E W" },
+      items: initialRows,
+      truncated: false,
+    };
     clickRoom();
     expect(fetchMock.mock.calls.some(([url]) => String(url).includes("/inhabitants"))).toBe(false);
     const knowledge = [...pane.root.querySelectorAll<HTMLButtonElement>(".map-cell-menu__item")]
@@ -163,6 +168,10 @@ describe("map room inhabitants knowledge dialog", () => {
     expect(tab.getAttribute("aria-controls")).toBe(panel.id);
     await vi.waitFor(() => expect(dialog.textContent).toContain("Кузнец"));
     expect(dialog.textContent).toContain("Крыса");
+    expect(dialog.textContent).toContain("Description");
+    expect(dialog.textContent).toContain("У стены пылает горн без точек миникарты.");
+    expect(dialog.textContent).toContain("Exits");
+    expect(dialog.textContent).toContain("E W");
     const listCall = fetchMock.mock.calls.find(([url]) => String(url).includes("/inhabitants?"))!;
     expect(decodeURIComponent(String(listCall[0]))).toContain("zone=Город&x=3&y=4&l=0");
 

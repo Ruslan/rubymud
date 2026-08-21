@@ -140,6 +140,7 @@ func TestSearchMapRoomsAcrossZonesUnicodeFoldAndLimit(t *testing.T) {
 	store := newMapperTestStore(t)
 	in := sampleInput()
 	in.Rooms[0].Hint = "Городской БАНК"
+	in.Rooms[0].Desc = "За стойкой лежит потемневшая долговая книга."
 	in.Rooms[1].Hint = "Северный банк"
 	in.Rooms[2].Hint = "Банк у площади"
 	id, err := store.CreateMapSet(in)
@@ -159,6 +160,10 @@ func TestSearchMapRoomsAcrossZonesUnicodeFoldAndLimit(t *testing.T) {
 	}
 	if got[1].Zone != "Alpha" {
 		t.Fatalf("cross-zone result = %+v, want Alpha", got[1])
+	}
+	descHits, err := store.SearchMapRooms(id, "ДОЛГОВАЯ книга", "", 20)
+	if err != nil || len(descHits) != 1 || descHits[0].Hint != "Городской БАНК" || descHits[0].Desc != in.Rooms[0].Desc {
+		t.Fatalf("description search = (%+v, %v), want cleaned room description hit", descHits, err)
 	}
 
 	empty, err := store.SearchMapRooms(id, "   ", "", 20)

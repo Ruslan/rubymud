@@ -69,8 +69,8 @@ presentation passage `4–5`. Logical coordinates не меняются; дли�
 Основной reconciliation run seed'ит пять logical rooms заранее. В отдельном
 изолированном autorecord run seed'ится только anchor room `1`, тогда как
 физический emulator по-прежнему содержит полный мир. Один настоящий `E` после
-OBS должен создать room `2` как provisional и записать только направленный
-autorecord corridor; reverse остаётся непроходимым до отдельного наблюдения.
+OBS должен создать room `2` как provisional и записать двустороннюю пару
+autorecord corridor; one-way остаётся явным свойством прохода.
 
 ## Компоненты
 
@@ -242,8 +242,8 @@ session/web tests и не блокируют первый live harness.
 set остаётся только подтверждённая room `1`, но emulator всё ещё возвращает
 полный block room `2`. Browser повторяет A (connect, anchor, OBS), отправляет
 один `E`, а затем Playwright проверяет в SQLite ровно одну новую provisional
-room, `source='autorecord'` directed corridor `1 --E--> 2`, отсутствие
-проходимого reverse `2 --W--> 1`, green position и `recording:0`. Этот сценарий
+room, `source='autorecord'` corridors `1 --E--> 2` и `2 --W--> 1`, затем реально
+проходит `W, E` обратно через эту пару и проверяет green position и `recording:0`. Этот сценарий
 не вызывает REST topology write.
 
 ## Артефакты
@@ -292,8 +292,8 @@ credentials и не предназначена для загрузки или п
 
 - одна команда запускает весь сценарий из clean checkout;
 - A–G три раза подряд проходят без retry;
-- autorecord smoke три раза подряд создаёт ровно одну provisional room и один
-  directed edge без passable reverse;
+- autorecord smoke три раза подряд создаёт ровно одну provisional room и два
+  passable направления, затем проходит по ним обратно без потери green position;
 - до Apply нет topology writes;
 - после Apply существует только exact `5 --N--> 1`, без reverse/ложного face;
 - второй круг и круг после restart заканчиваются green без conflict;

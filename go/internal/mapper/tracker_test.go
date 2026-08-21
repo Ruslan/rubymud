@@ -338,6 +338,20 @@ func TestTrackerFingerprintFullyAmbiguousNoResync(t *testing.T) {
 	}
 }
 
+func TestTrackerUsesDescriptionFingerprintToChooseSameNamedNeighbor(t *testing.T) {
+	rooms := []storage.Room{
+		mkRoom("Z", 0, 0, 0, 1, "Старт", "начало", "E S", chMask("E", "S")),
+		mkRoom("Z", 0, 1, 0, 2, "Еле заметная тропинка", "тропа вдоль карниза", "N W", chMask("N", "W")),
+		mkRoom("Z", 1, 0, 0, 3, "Еле заметная тропинка", "тропа среди камней", "N W", chMask("N", "W")),
+	}
+	tr := NewTracker(buildTestIndex(1, rooms))
+	tr.Anchor(Coord{"Z", 0, 0, 0})
+	pos, _ := tr.Reconcile(ev("Еле заметная тропинка", "тропа среди камней", "N W"))
+	if pos.Confidence != Green || pos.Coord != (Coord{"Z", 1, 0, 0}) {
+		t.Fatalf("description fingerprint chose %+v, want south same-named room", pos)
+	}
+}
+
 func TestTrackerAmbiguousNeighborStaysYellow(t *testing.T) {
 	// From the anchor cell, TWO grid neighbors both match the same event (same
 	// hint+exits). With an empty queue (following), the neighbor search must NOT

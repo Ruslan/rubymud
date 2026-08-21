@@ -195,13 +195,13 @@ func runMigrations(db *gorm.DB) error {
 		// Apply migration in a transaction
 		err = db.Transaction(func(tx *gorm.DB) error {
 			skipSQL := false
-			if file == "030_exact_corridors.sql" {
+			if file == "030_exact_corridors.sql" || file == "033_autorecord_bidirectional.sql" {
 				var edgesTable int64
 				if err := tx.Raw(`SELECT count(*) FROM sqlite_master WHERE type='table' AND name='map_edges'`).Scan(&edgesTable).Error; err != nil {
 					return err
 				}
 				// Historical migration probes may intentionally stop before 016.
-				// A production upgrade can only reach 030 after map_edges exists.
+				// A production upgrade can only reach either migration after map_edges exists.
 				skipSQL = edgesTable == 0
 			}
 			// 026 is intentionally a Go-assisted SQL migration. Its source data is

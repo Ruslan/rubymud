@@ -451,11 +451,11 @@ func TestMapRecordingCreatesOneProvisionalRoomAfterCompletedMove(t *testing.T) {
 		t.Fatalf("autorecord corridor count=%d, want 1", edgeCount)
 	}
 	var reverseCount int64
-	if err := store.DB().Model(&storage.MapEdge{}).Where("map_set_id=? AND kind IN ? AND source NOT IN ? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=? AND passable=1", setID, []string{storage.EdgeKindGrid, storage.EdgeKindCorridor}, []string{storage.EdgeSourceReconciled}, "Z", 1, 0, 0, "N").Count(&reverseCount).Error; err != nil {
+	if err := store.DB().Model(&storage.MapEdge{}).Where("map_set_id=? AND kind=? AND source=? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=? AND to_zone=? AND to_x=? AND to_y=? AND to_l=? AND passable=1", setID, storage.EdgeKindCorridor, storage.EdgeSourceAutorecord, "Z", 1, 0, 0, "N", "Z", 0, 0, 0).Count(&reverseCount).Error; err != nil {
 		t.Fatal(err)
 	}
-	if reverseCount != 0 {
-		t.Fatalf("autorecord invented reverse edge count=%d", reverseCount)
+	if reverseCount != 1 {
+		t.Fatalf("autorecord reverse edge count=%d, want 1", reverseCount)
 	}
 	if state := s.MapRecordingState(); state.Mode != MapRecordingRecording || state.Pending != 0 {
 		t.Fatalf("recording state after commit=%+v", state)

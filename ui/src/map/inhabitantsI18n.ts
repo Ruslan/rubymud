@@ -9,7 +9,7 @@ import {
 } from '../i18n';
 
 const en = {
-  knowledge: 'Knowledge', roomFallback: 'Room', roomLine: '{room} · {zone} ({x},{y},{l})', inhabitants: 'Inhabitants',
+  knowledge: 'Knowledge', roomFallback: 'Room', roomLine: '{room} · {zone} ({x},{y},{l})', description: 'Description', exits: 'Exits', noDescription: 'No description recorded.', noExits: 'No exits recorded.', inhabitants: 'Inhabitants',
   addNew: 'Add new', placeExisting: 'Place existing', close: 'Close', changedPending: 'Room data changed; the list will refresh after the form closes.',
   loading: 'Loading…', loadingMore: 'Loading more…', loadingPrevious: 'Loading previous page…', loadMore: 'Load more', previousPage: 'Previous page', retry: 'Retry', noInhabitants: 'No inhabitants have been recorded for this room.', listTruncated: 'Showing the first 20 inhabitants; the room has more recorded entries.', listMoreTruncated: 'Showing {count} inhabitants; more recorded entries are available.', loadFailed: 'Failed to load inhabitants: {error}', cursorExpired: 'The list changed; reload the first page.',
   residentBadge: 'resident', presence: 'Presence', lookTarget: 'Look target', lookResult: 'Look result', note: 'Note', strategy: 'Strategy', edit: 'Edit', delete: 'Delete',
@@ -25,7 +25,7 @@ export type InhabitantsMessageKey = keyof typeof en;
 type Catalog = Readonly<Record<InhabitantsMessageKey, string>>;
 
 const ru = {
-  knowledge: 'Знания', roomFallback: 'Комната', roomLine: '{room} · {zone} ({x},{y},{l})', inhabitants: 'Обитатели',
+  knowledge: 'Знания', roomFallback: 'Комната', roomLine: '{room} · {zone} ({x},{y},{l})', description: 'Описание', exits: 'Выходы', noDescription: 'Описание не записано.', noExits: 'Выходы не записаны.', inhabitants: 'Обитатели',
   addNew: 'Добавить нового', placeExisting: 'Разместить существующего', close: 'Закрыть', changedPending: 'Данные комнаты изменились; список обновится после закрытия формы.',
   loading: 'Загрузка…', loadingMore: 'Загрузка ещё…', loadingPrevious: 'Загрузка предыдущей страницы…', loadMore: 'Загрузить ещё', previousPage: 'Предыдущая страница', retry: 'Повторить', noInhabitants: 'Для этой комнаты ещё не записаны обитатели.', listTruncated: 'Показаны первые 20 обитателей; для комнаты записано больше.', listMoreTruncated: 'Показаны {count} обитателей; доступны ещё записи.', loadFailed: 'Не удалось загрузить обитателей: {error}', cursorExpired: 'Список изменился; загрузите первую страницу.',
   residentBadge: 'постоянный', presence: 'Присутствие', lookTarget: 'Цель осмотра', lookResult: 'Результат осмотра', note: 'Заметка', strategy: 'Стратегия', edit: 'Изменить', delete: 'Удалить',

@@ -101,9 +101,9 @@ func (s *Store) autorecordRoomWithSnapshotTx(tx *gorm.DB, mapSetID int64, in Aut
 			return e
 		}
 
-		// Capture both directional faces even when absent. The reverse face may be
-		// materialized from the newly observed room's exit text and is then removed
-		// by the write as a non-evidence tombstone; undo must remove that tombstone.
+		// Capture both directional faces even when absent. Autorecord creates a
+		// two-way passage by default; undo must restore both previous faces. A rare
+		// one-way passage is an explicit user edit after the room is recorded.
 		for _, face := range []struct {
 			cell EdgeCell
 			dir  string
@@ -140,8 +140,8 @@ func (s *Store) autorecordRoomWithSnapshotTx(tx *gorm.DB, mapSetID int64, in Aut
 		// (or an older exact corridor) while doing so. Refuse before the room
 		// upsert, so the operation remains fully atomic and the caller can enter
 		// the existing conflict/reconciliation path instead. Exact replay was
-		// handled above, so its own corridor/tombstone is intentionally allowed
-		// to remain a storage-level no-op.
+		// handled above, so its own corridor pair is intentionally allowed to
+		// remain a storage-level no-op.
 		for _, face := range before.Faces {
 			if face.Existed && !autorecordFaceReplaceable(face.Edge) {
 				return fmt.Errorf("autorecord would overwrite an authoritative %s %s face", face.Edge.Source, face.Dir)
@@ -166,44 +166,41 @@ func (s *Store) autorecordRoomWithSnapshotTx(tx *gorm.DB, mapSetID int64, in Aut
 			return e
 		}
 
-		// Replace any derived source face with the exact recorded corridor. The
-		// observed target's reverse exit is evidence about text, not evidence that
-		// the player has already walked back, so own that reverse face with a
-		// reconciled blocked tombstone when derivation produced one.
-		if e = tx.Where("map_set_id=? AND kind IN ? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=?",
-			mapSetID, []string{EdgeKindGrid, EdgeKindCorridor}, in.Source.Zone, in.Source.X, in.Source.Y, in.Source.L, in.Dir).Delete(&MapEdge{}).Error; e != nil {
-			return e
-		}
+		// Replace both derived faces with the exact two-way recorded passage. The
+		// reverse command is the canonical English direction accepted by the mapper's
+		// routing contract. Directionality is opt-in in the edge editor, not inferred
+		// merely because the player has not walked back yet.
 		reverseDir := oppositeDir[in.Dir]
-		var reverse MapEdge
-		re := tx.Where("map_set_id=? AND kind=? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=?",
-			mapSetID, EdgeKindGrid, in.Target.Zone, in.Target.X, in.Target.Y, in.Target.L, reverseDir).First(&reverse).Error
-		if re != nil && re != gorm.ErrRecordNotFound {
-			return re
-		}
-		if re == nil && reverse.Passable {
-			if e = tx.Delete(&MapEdge{}, reverse.ID).Error; e != nil {
-				return e
-			}
-			blocked := reverse
-			blocked.ID = 0
-			blocked.Source = EdgeSourceReconciled
-			blocked.Passable = false
-			blocked.Command = ""
-			blocked.EdgeAttrs = EdgeAttrs{Weight: 1}
-			if e = tx.Create(&blocked).Error; e != nil {
+		for _, face := range []struct {
+			cell EdgeCell
+			dir  string
+		}{
+			{in.Source, in.Dir},
+			{in.Target, reverseDir},
+		} {
+			if e = tx.Where("map_set_id=? AND kind IN ? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=?",
+				mapSetID, []string{EdgeKindGrid, EdgeKindCorridor}, face.cell.Zone, face.cell.X, face.cell.Y, face.cell.L, face.dir).Delete(&MapEdge{}).Error; e != nil {
 				return e
 			}
 		}
 
-		z, x, y, l := in.Target.Zone, in.Target.X, in.Target.Y, in.Target.L
-		row := MapEdge{
-			MapSetID: mapSetID, Kind: EdgeKindCorridor, Source: EdgeSourceAutorecord,
-			Passable: true, FromZone: in.Source.Zone, FromX: in.Source.X, FromY: in.Source.Y, FromL: in.Source.L,
-			Dir: in.Dir, ToZone: &z, ToX: &x, ToY: &y, ToL: &l, Command: in.Command,
-			EdgeAttrs: EdgeAttrs{Weight: 1},
+		toZone, toX, toY, toL := in.Target.Zone, in.Target.X, in.Target.Y, in.Target.L
+		fromZone, fromX, fromY, fromL := in.Source.Zone, in.Source.X, in.Source.Y, in.Source.L
+		rows := []MapEdge{
+			{
+				MapSetID: mapSetID, Kind: EdgeKindCorridor, Source: EdgeSourceAutorecord,
+				Passable: true, FromZone: fromZone, FromX: fromX, FromY: fromY, FromL: fromL,
+				Dir: in.Dir, ToZone: &toZone, ToX: &toX, ToY: &toY, ToL: &toL, Command: in.Command,
+				EdgeAttrs: EdgeAttrs{Weight: 1},
+			},
+			{
+				MapSetID: mapSetID, Kind: EdgeKindCorridor, Source: EdgeSourceAutorecord,
+				Passable: true, FromZone: toZone, FromX: toX, FromY: toY, FromL: toL,
+				Dir: reverseDir, ToZone: &fromZone, ToX: &fromX, ToY: &fromY, ToL: &fromL, Command: strings.ToLower(reverseDir),
+				EdgeAttrs: EdgeAttrs{Weight: 1},
+			},
 		}
-		if e = tx.Create(&row).Error; e != nil {
+		if e = tx.Create(&rows).Error; e != nil {
 			return e
 		}
 		found = true

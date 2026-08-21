@@ -9,7 +9,9 @@ import (
 )
 
 func autorecordInputForTest() AutorecordInput {
-	hint, desc, exits := "Unseeded room", "freshly observed", "N"
+	// The reported exits intentionally omit the way back. Recording still creates
+	// a two-way passage by default; a rare one-way passage is an explicit edge edit.
+	hint, desc, exits := "Unseeded room", "freshly observed", "E"
 	return AutorecordInput{
 		Source:        EdgeCell{Zone: "Z", X: 0, Y: 0, L: 0},
 		Target:        EdgeCell{Zone: "Z", X: 1, Y: 0, L: 0},
@@ -21,7 +23,7 @@ func autorecordInputForTest() AutorecordInput {
 	}
 }
 
-func TestAutorecordRoomIsAtomicDirectedIdempotentAndUndoable(t *testing.T) {
+func TestAutorecordRoomIsAtomicBidirectionalIdempotentAndUndoable(t *testing.T) {
 	store := newMapperTestStore(t)
 	frozen, err := store.CreateMapSet(MapSetInput{Rooms: []Room{{Zone: "Z", X: 0, Y: 0, L: 0, Hint: "Start", Desc: "start", EDirs: `["S"]`, Doors: `[]`}}})
 	if err != nil {
@@ -55,12 +57,12 @@ func TestAutorecordRoomIsAtomicDirectedIdempotentAndUndoable(t *testing.T) {
 	if !forward.Passable || forward.Command != "s" {
 		t.Fatalf("forward=%+v", forward)
 	}
-	var reversePassable int64
-	if err := store.DB().Model(&MapEdge{}).Where("map_set_id=? AND kind IN ? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=? AND passable=1", id, []string{EdgeKindGrid, EdgeKindCorridor}, "Z", 1, 0, 0, "N").Count(&reversePassable).Error; err != nil {
+	var reverse MapEdge
+	if err := store.DB().Where("map_set_id=? AND kind=? AND source=? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND dir=? AND passable=1", id, EdgeKindCorridor, EdgeSourceAutorecord, "Z", 1, 0, 0, "N").First(&reverse).Error; err != nil {
 		t.Fatal(err)
 	}
-	if reversePassable != 0 {
-		t.Fatalf("autorecord invented reverse passable edge count=%d", reversePassable)
+	if reverse.Command != "n" || reverse.ToZone == nil || *reverse.ToZone != "Z" || reverse.ToX == nil || *reverse.ToX != 0 || reverse.ToY == nil || *reverse.ToY != 0 || reverse.ToL == nil || *reverse.ToL != 0 {
+		t.Fatalf("reverse=%+v, want canonical two-way passage back to source", reverse)
 	}
 
 	second, found, err := store.ApplyTopologyOp(id, op)
@@ -215,7 +217,7 @@ func TestAutorecordRejectsOversizedRoomBlock(t *testing.T) {
 	}
 }
 
-func TestAutorecordStorageConcurrentReplayHasOneRoomAndEdge(t *testing.T) {
+func TestAutorecordStorageConcurrentReplayHasOneRoomAndEdgePair(t *testing.T) {
 	store := newMapperTestStore(t)
 	frozen, err := store.CreateMapSet(MapSetInput{Rooms: []Room{{Zone: "Z", X: 0, Y: 0, L: 0, Hint: "Start", Desc: "start", EDirs: `["S"]`, Doors: `[]`}}})
 	if err != nil {
@@ -253,7 +255,7 @@ func TestAutorecordStorageConcurrentReplayHasOneRoomAndEdge(t *testing.T) {
 	if err := store.DB().Model(&MapEdge{}).Where("map_set_id=? AND kind=? AND source=?", id, EdgeKindCorridor, EdgeSourceAutorecord).Count(&edges).Error; err != nil {
 		t.Fatal(err)
 	}
-	if rooms != 1 || edges != 1 {
+	if rooms != 1 || edges != 2 {
 		t.Fatalf("concurrent result rooms=%d edges=%d", rooms, edges)
 	}
 }

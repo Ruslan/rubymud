@@ -100,7 +100,7 @@ test("reconciles the live five-room loop and survives restart", async ({ browser
   await context.close();
 });
 
-test("creates one provisional room and directed edge from a real unseeded move", async ({ page }) => {
+test("creates one provisional room and a two-way passage from a real unseeded move", async ({ page }) => {
   stack = await LiveStack.start({ autorecord: true });
   await installMapLayout(page);
   await page.goto(`${stack.baseURL}/?session_id=${stack.seed.session_id}`);
@@ -134,9 +134,26 @@ test("creates one provisional room and directed edge from a real unseeded move",
     kind: "corridor", source: "autorecord", passable: 1, dir: "E", command: "E",
     to_zone: "Five Room Loop", to_x: 0, to_y: 1, to_l: 0,
   }]);
-  expect(stack.query(
-    `SELECT 1 AS present FROM map_edges WHERE map_set_id=${stack.seed.map_set_id} AND from_zone='Five Room Loop' AND from_x=0 AND from_y=1 AND from_l=0 AND dir='W' AND passable=1`,
-  )).toHaveLength(0);
+  expect(stack.query<Record<string, unknown>>(
+    `SELECT kind,source,passable,dir,command,to_zone,to_x,to_y,to_l FROM map_edges WHERE map_set_id=${stack.seed.map_set_id} AND from_zone='Five Room Loop' AND from_x=0 AND from_y=1 AND from_l=0 AND dir='W'`,
+  )).toEqual([{
+    kind: "corridor", source: "autorecord", passable: 1, dir: "W", command: "w",
+    to_zone: "Five Room Loop", to_x: 0, to_y: 0, to_l: 0,
+  }]);
+
+  // The user's live regression: the first recorded step defaults to a two-way
+  // passage, so walking back and entering the same observed room again stays
+  // green and does not create another room or edge pair.
+  await sendAndExpectRoom(page, "W", "Loop Room 1");
+  await expect(page.locator(".map-pane__confidence")).toHaveAttribute("title", /Confidence: green/);
+  await sendAndExpectRoom(page, "E", "Loop Room 2");
+  await expect(page.locator(".map-pane__confidence")).toHaveAttribute("title", /Confidence: green/);
+  expect(stack.query<{ n: number }>(
+    `SELECT count(*) AS n FROM rooms WHERE map_set_id=${stack.seed.map_set_id}`,
+  )).toEqual([{ n: 2 }]);
+  expect(stack.query<{ n: number }>(
+    `SELECT count(*) AS n FROM map_edges WHERE map_set_id=${stack.seed.map_set_id} AND source='autorecord'`,
+  )).toEqual([{ n: 2 }]);
 });
 
 async function installMapLayout(page: Page): Promise<void> {

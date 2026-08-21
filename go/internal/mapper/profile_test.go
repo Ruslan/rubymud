@@ -372,6 +372,31 @@ func TestStripModes(t *testing.T) {
 	}
 }
 
+func TestRMUDDescriptionStripsLiveMinimapColumn(t *testing.T) {
+	acc := NewAccumulator(BuiltinRMUD())
+	lines := []string{
+		"Еле заметная тропинка",
+		".....................      Карниз становится все уже, и уже вряд ли два",
+		"..................... человека иогли бы разойтись на нем. А впереди какие-то",
+		"..................... зловещие развалины преградили дорогу...",
+		"[ Exits: E W ]",
+	}
+	var got RoomEvent
+	var ok bool
+	for _, line := range lines {
+		if ev, emitted := acc.Feed(line); emitted {
+			got, ok = ev, true
+		}
+	}
+	if !ok {
+		t.Fatal("live RMUD room block was not emitted")
+	}
+	want := "Карниз становится все уже, и уже вряд ли два человека иогли бы разойтись на нем. А впереди какие-то зловещие развалины преградили дорогу..."
+	if got.Hint != "Еле заметная тропинка" || got.Desc != want || got.Exits != "E W" {
+		t.Fatalf("room event=%+v, want cleaned description %q", got, want)
+	}
+}
+
 // fixed_width must cut on RUNE column, not byte offset.
 func TestStripFixedWidthIsRuneColumn(t *testing.T) {
 	p := MustCompile(func() ProfileSpec {

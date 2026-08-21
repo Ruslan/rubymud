@@ -71,7 +71,7 @@ func TestRESTRoomInhabitantsLazyCRUDOnFrozenMapSet(t *testing.T) {
 	defer ts.Close()
 
 	setID, err := s.store.CreateMapSet(storage.MapSetInput{
-		Name: "frozen", Rooms: []storage.Room{{Zone: "Alpha", X: 1, Y: 2, L: 0, Hint: "Forge"}},
+		Name: "frozen", Rooms: []storage.Room{{Zone: "Alpha", X: 1, Y: 2, L: 0, Hint: "Forge", Desc: "A soot-darkened forge.", Exits: "E W"}},
 	})
 	if err != nil {
 		t.Fatalf("CreateMapSet: %v", err)
@@ -91,6 +91,9 @@ func TestRESTRoomInhabitantsLazyCRUDOnFrozenMapSet(t *testing.T) {
 	var emptyPayload roomInhabitantListResponse
 	if resp.StatusCode != http.StatusOK || json.Unmarshal(data, &emptyPayload) != nil || len(emptyPayload.Items) != 0 || emptyPayload.Truncated {
 		t.Fatalf("empty list: status=%d body=%s", resp.StatusCode, data)
+	}
+	if emptyPayload.Room.Hint != "Forge" || emptyPayload.Room.Desc != "A soot-darkened forge." || emptyPayload.Room.Exits != "E W" {
+		t.Fatalf("knowledge room text=%+v body=%s", emptyPayload.Room, data)
 	}
 
 	create := func(name, kind string, resident bool) storage.RoomInhabitantView {

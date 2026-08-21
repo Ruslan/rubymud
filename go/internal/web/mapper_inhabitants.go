@@ -39,6 +39,7 @@ type inhabitantCatalogResponse struct {
 
 type roomInhabitantListResponse struct {
 	Items      []storage.RoomInhabitantView `json:"items"`
+	Room       storage.MapRoomKnowledge     `json:"room"`
 	Truncated  bool                         `json:"truncated"`
 	NextCursor string                       `json:"next_cursor,omitempty"`
 }
@@ -196,6 +197,11 @@ func (s *Server) listRoomInhabitants(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "map set not found", http.StatusNotFound)
 		return
 	}
+	room, _, err := s.store.GetMapRoomKnowledge(mapSetID, cell)
+	if err != nil {
+		http.Error(w, "room storage failed", http.StatusInternalServerError)
+		return
+	}
 	limit := storage.InhabitantListDefaultLimit
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		limit, err = strconv.Atoi(raw)
@@ -228,7 +234,7 @@ func (s *Server) listRoomInhabitants(w http.ResponseWriter, r *http.Request) {
 		}
 		nextCursor = encodeRoomInhabitantCursor(last)
 	}
-	writeJSON(w, roomInhabitantListResponse{Items: rows, Truncated: truncated, NextCursor: nextCursor})
+	writeJSON(w, roomInhabitantListResponse{Items: rows, Room: room, Truncated: truncated, NextCursor: nextCursor})
 }
 
 func (s *Server) listInhabitantCatalog(w http.ResponseWriter, r *http.Request) {

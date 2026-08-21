@@ -43,7 +43,7 @@ describe("map pane compact toolbar", () => {
       if (url.includes("map-live-room")) return Promise.resolve(json({ seen: false }));
       if (url.includes("/rooms/search")) {
         return Promise.resolve(json(url.includes("remote")
-          ? [{ z: "B", h: "Remote Atrium", x: 7, y: 9, l: 2 }]
+          ? [{ z: "B", h: "Remote Atrium", desc: "A narrow ledge above the ruins.", x: 7, y: 9, l: 2 }]
           : [{ z: "A", h: "Atrium", x: 0, y: 0, l: 0 }]));
       }
       if (url.includes("/zones")) return Promise.resolve(json([{ zone: "A", room_count: 2 }, { zone: "B", room_count: 1 }]));
@@ -108,6 +108,8 @@ describe("map pane compact toolbar", () => {
       const button = pane.root.querySelector<HTMLButtonElement>(".map-pane__search-results button");
       expect(button?.textContent).toContain("Remote Atrium");
       expect(button?.textContent).toContain("B");
+      expect(button?.textContent).toContain("A narrow ledge above the ruins.");
+      expect(button?.textContent).toContain("7,9,2");
       return button!;
     }, { timeout: 1000 });
     result.click();

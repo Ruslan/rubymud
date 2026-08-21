@@ -43,6 +43,12 @@ export interface KnowledgeRoom {
   name: string;
 }
 
+interface RoomKnowledgeDetails {
+  hint: string;
+  desc: string;
+  exits: string;
+}
+
 const textLimit = 2048;
 const nameLimit = 256;
 const roomPageLimit = 20;
@@ -104,6 +110,10 @@ export class RoomKnowledgeDialog {
   private listLoading = false;
   private list: HTMLElement | null = null;
   private message: HTMLElement | null = null;
+  private roomDetails: RoomKnowledgeDetails | null = null;
+  private details: HTMLElement | null = null;
+  private descriptionValue: HTMLElement | null = null;
+  private exitsValue: HTMLElement | null = null;
   private addButton: HTMLButtonElement | null = null;
 	private placeExistingButton: HTMLButtonElement | null = null;
   private retryButton: HTMLButtonElement | null = null;
@@ -133,6 +143,7 @@ export class RoomKnowledgeDialog {
     // Updating those nodes in place preserves unsaved controls, pending writes,
     // the current catalog query, and focus while avoiding mixed-language copy.
     this.translateMarked();
+    this.renderRoomDetails();
     return true;
   }
 
@@ -204,6 +215,16 @@ export class RoomKnowledgeDialog {
     roomLine.className = "map-knowledge-dialog__room";
     if (!room.name) roomLine.dataset.i18nRoomFallback = 'true';
     this.copy(roomLine, 'roomLine', { room: room.name, zone: room.zone, x: room.x, y: room.y, l: room.l });
+    this.details = document.createElement("dl");
+    this.details.className = "map-knowledge-dialog__details";
+    this.details.hidden = true;
+    const descriptionLabel = document.createElement("dt");
+    this.copy(descriptionLabel, 'description');
+    this.descriptionValue = document.createElement("dd");
+    const exitsLabel = document.createElement("dt");
+    this.copy(exitsLabel, 'exits');
+    this.exitsValue = document.createElement("dd");
+    this.details.append(descriptionLabel, this.descriptionValue, exitsLabel, this.exitsValue);
     const tabs = document.createElement("div");
     tabs.className = "map-knowledge-dialog__tabs";
     tabs.setAttribute("role", "tablist");
@@ -261,7 +282,7 @@ export class RoomKnowledgeDialog {
     close.addEventListener("click", () => this.close());
     actions.append(this.addButton, this.placeExistingButton, this.retryButton, close);
     panel.append(this.message, this.list, pageNavigation, actions);
-    dialog.append(title, roomLine, tabs, panel);
+    dialog.append(title, roomLine, this.details, tabs, panel);
 
     backdrop.addEventListener("mousedown", (event) => {
       if (event.target === backdrop) this.close();
@@ -318,6 +339,10 @@ export class RoomKnowledgeDialog {
     this.rows = [];
     this.list = null;
     this.message = null;
+    this.roomDetails = null;
+    this.details = null;
+    this.descriptionValue = null;
+    this.exitsValue = null;
     this.addButton = null;
 	this.placeExistingButton = null;
     this.retryButton = null;
@@ -396,6 +421,7 @@ export class RoomKnowledgeDialog {
       if (!response.ok) throw new Error(await response.text());
       const payload = await response.json() as RoomInhabitant[] | {
         items?: RoomInhabitant[];
+        room?: RoomKnowledgeDetails;
         truncated?: boolean;
         next_cursor?: string;
       };
@@ -405,6 +431,10 @@ export class RoomKnowledgeDialog {
       // upgraded, but it is never emitted by the current server.
       const envelope = !Array.isArray(payload) && payload && typeof payload === "object" ? payload : null;
       const items = Array.isArray(payload) ? payload : Array.isArray(envelope?.items) ? envelope.items : [];
+      if (envelope?.room && typeof envelope.room === 'object') {
+        this.roomDetails = envelope.room;
+        this.renderRoomDetails();
+      }
       // Keep one server page in the DOM. Previous/next page cursors make every
       // placement reachable without turning a pathological room into an
       // ever-growing card list.
@@ -462,6 +492,15 @@ export class RoomKnowledgeDialog {
       : await this.load(false, this.listPage, true);
     if (result === 'failed') this.retryButton?.focus();
     else if (result === 'loaded') this.focusList();
+  }
+
+  private renderRoomDetails(): void {
+    if (!this.details || !this.descriptionValue || !this.exitsValue || !this.roomDetails) return;
+    const desc = this.roomDetails.desc.trim();
+    const exits = this.roomDetails.exits.trim();
+    this.descriptionValue.textContent = desc || this.i18n.t('noDescription');
+    this.exitsValue.textContent = exits || this.i18n.t('noExits');
+    this.details.hidden = false;
   }
 
   private isCurrent(room: KnowledgeRoom, generation: number, controller: AbortController): boolean {

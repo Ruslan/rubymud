@@ -52,12 +52,12 @@ preview перед Apply и сохраняется при stale error. Frozen-se
 игрока и одного персонажа: на активном
 редактируемом наборе green anchor + полный live room + один принятый transport
 move + один полный room event в пустой predicted cell создают ровно одну
-provisional room и один directed `corridor` (`source=autorecord`). Запись идёт
+provisional room и двустороннюю пару `corridor` (`source=autorecord`). Запись идёт
 через однослотовый async handoff и существующий topology transaction,
 journal/revision/undo; parser/VM не ждут SQLite. До зелёного подтверждения новой
 клетки следующий шаг выключает OBS и не ставится в очередь. Replay становится no-op,
-occupied mismatch остаётся conflict, reverse edge без фактического обратного
-шага не создаётся, а stop/map-switch/reconnect и второй преждевременный шаг инвалидируют
+occupied mismatch остаётся conflict, а односторонность задаётся только явной
+правкой свойств прохода. Stop/map-switch/reconnect и второй преждевременный шаг инвалидируют
 отложенные jobs. `verification_state`, batch и origin сохраняются на комнате;
 UI OBS прямо просит дождаться зелёной клетки. Межсессионного fanout и pipeline
 записей намеренно нет. Полный loop closure,
@@ -232,9 +232,10 @@ namespace.
 
 ### Сервер без room ID
 
-Fingerprint из нормализованных `hint + desc + exits` используется только для:
+Fingerprint из нормализованных `hint + очищенный desc + exits` используется для:
 
-- подтверждения ожидаемой комнаты, если совпала именно она;
+- подтверждения ожидаемой комнаты и выбора между одинаково названными соседними
+  комнатами с разными описаниями;
 - ранжирования существующих кандидатов в диалоге конфликта;
 - показа различий пользователю.
 
@@ -539,8 +540,9 @@ Continuous toggle нельзя показывать до завершения с
 
 ### Срез A. Data/runtime foundations
 
-1. Сначала storage/runtime тесты exact directed corridor: `5 -> 1`, без `5 -> 2`
-   и reverse; path/tracker отправляют одну команду и используют exact endpoint.
+1. Сначала storage/runtime тесты exact corridor: `5 -> 1`, без ложного `5 -> 2`;
+   reconciliation relink остаётся направленным, а обычная запись новой комнаты
+   создаёт двустороннюю пару. Path/tracker отправляют одну команду и используют exact endpoint.
 2. Добавить corridor face invariant, migration preflight и защиту от competing
    grid/corridor; re-materialization не стирает authoritative corridor.
 3. Добавить `room_layouts`, fork/delete/zone move/rename semantics, renderer и
@@ -568,8 +570,9 @@ Continuous toggle нельзя показывать до завершения с
    выбирает существующую `1`.
 2. Добавить preview/apply exact relink с explicit layout choice; solver пока не
    обязателен.
-3. Проверить два Apply одного token, concurrent topology write, frozen fork,
-   one compound revision/journal entry и отсутствие reverse edge.
+3. Проверить два Apply одного token, concurrent topology write, frozen fork и
+   one compound revision/journal entry. Направленный reconciliation не должен
+   автоматически создавать reverse; это отдельный случай от обычной записи комнаты.
 4. После commit обновить index текущей сессии; anchor
    остаётся session-owned по контракту выше.
 
@@ -622,7 +625,8 @@ Continuous toggle нельзя показывать до завершения с
 ### Topology
 
 - точный `5 -> 1` заменяет ложное ожидание `5 -> 2`;
-- reverse `1 -> 5` отсутствует без evidence;
+- новая autorecorded room получает passable reverse по умолчанию; explicit
+  one-way edge edit удаляет/блокирует только выбранную сторону;
 - route проходит corridor одной командой;
 - tracker использует exact endpoint, а не logical coordinate delta;
 - seam/portal и corridor остаются разными типами;

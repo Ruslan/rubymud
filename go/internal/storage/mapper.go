@@ -612,14 +612,15 @@ type SlimCrossZoneGrid struct {
 type MapRoomSearchResult struct {
 	Zone string `json:"z"`
 	Hint string `json:"h"`
+	Desc string `json:"desc,omitempty"`
 	X    int    `json:"x"`
 	Y    int    `json:"y"`
 	L    int    `json:"l"`
 }
 
-// SearchMapRooms scans only the five columns needed by the map search. SQLite's
-// built-in lower() is ASCII-only, so matching is folded in Go for room names in
-// any script. The current zone is returned first without excluding other zones.
+// SearchMapRooms matches normalized room names and cleaned descriptions.
+// SQLite's built-in lower() is ASCII-only, so matching is folded in Go for any
+// script. Only the bounded hits leave storage; the current zone is returned first.
 func (s *Store) SearchMapRooms(mapSetID int64, query, preferredZone string, limit int) ([]MapRoomSearchResult, error) {
 	needle := strings.ToLower(norm.NFC.String(strings.TrimSpace(query)))
 	if needle == "" || limit <= 0 {
@@ -629,7 +630,7 @@ func (s *Store) SearchMapRooms(mapSetID int64, query, preferredZone string, limi
 		limit = 100
 	}
 
-	rows, err := s.db.Raw(`SELECT zone, hint, x, y, l
+	rows, err := s.db.Raw(`SELECT zone, hint, desc, x, y, l
 		FROM rooms
 		WHERE map_set_id = ? AND hint <> ''
 		ORDER BY id`, mapSetID).Rows()
@@ -642,10 +643,10 @@ func (s *Store) SearchMapRooms(mapSetID int64, query, preferredZone string, limi
 	other := make([]MapRoomSearchResult, 0, limit)
 	for rows.Next() {
 		var hit MapRoomSearchResult
-		if err := rows.Scan(&hit.Zone, &hit.Hint, &hit.X, &hit.Y, &hit.L); err != nil {
+		if err := rows.Scan(&hit.Zone, &hit.Hint, &hit.Desc, &hit.X, &hit.Y, &hit.L); err != nil {
 			return nil, err
 		}
-		haystack := strings.ToLower(norm.NFC.String(hit.Hint))
+		haystack := strings.ToLower(norm.NFC.String(hit.Hint + "\n" + hit.Desc))
 		if !strings.Contains(haystack, needle) {
 			continue
 		}
@@ -669,6 +670,33 @@ func (s *Store) SearchMapRooms(mapSetID int64, query, preferredZone string, limi
 	}
 	results = append(results, other...)
 	return results, nil
+}
+
+// MapRoomKnowledge is the full persisted room text loaded lazily by Knowledge.
+// It stays out of the hot slim-zone payload.
+type MapRoomKnowledge struct {
+	Hint  string `json:"hint"`
+	Desc  string `json:"desc"`
+	Exits string `json:"exits"`
+}
+
+func (s *Store) GetMapRoomKnowledge(mapSetID int64, cell EdgeCell) (MapRoomKnowledge, bool, error) {
+	zone, err := NormalizeZoneName(cell.Zone)
+	if err != nil {
+		return MapRoomKnowledge{}, false, err
+	}
+	var room Room
+	err = s.db.Select("hint", "desc", "exits").Where(
+		"map_set_id=? AND zone=? AND x=? AND y=? AND l=?",
+		mapSetID, zone, cell.X, cell.Y, cell.L,
+	).Take(&room).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return MapRoomKnowledge{}, false, nil
+	}
+	if err != nil {
+		return MapRoomKnowledge{}, false, err
+	}
+	return MapRoomKnowledge{Hint: room.Hint, Desc: room.Desc, Exits: room.Exits}, true, nil
 }
 
 // SlimEdgeAttr is one face's attribute set on the wire, with the defaults omitted
