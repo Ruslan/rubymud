@@ -370,6 +370,45 @@ func TestMapRecordingStartRequiresGreenAndFullRoom(t *testing.T) {
 	}
 }
 
+// Reproduces a live RMUD step without a torch. The room was reached, but its
+// identity was not observable. OBS must stop without opening reconciliation or
+// writing guessed content, while the tracker consumes the physical step at
+// yellow confidence so walking back can recover normally.
+func TestMapRecordingObscuredLandingStopsWithoutConflict(t *testing.T) {
+	s := recordingHarness()
+	if _, err := s.StartMapRecording(); err != nil {
+		t.Fatal(err)
+	}
+	s.observeOutgoingMove("s", "input")
+	for _, line := range []string{
+		"301ж 109б 12375791о 1374м Выходы:СЮ>",
+		"Здесь кромешная тьма.",
+		"[ Exits: N ]",
+	} {
+		s.observeIncomingLine(line, line)
+	}
+
+	state := s.MapRecordingState()
+	if state.Mode != MapRecordingOff || state.Conflict != nil || state.Pending != 0 || state.Reason != "room obscured; restore visibility and restart OBS" {
+		t.Fatalf("obscured landing state=%+v", state)
+	}
+	pos := s.mapTracker.Position()
+	if !pos.Valid || pos.Coord != (mapper.Coord{Zone: "Z", X: 1}) || pos.Confidence != mapper.Yellow || pos.EventDescribesCell {
+		t.Fatalf("obscured landing position=%+v", pos)
+	}
+
+	// The player can immediately walk back. A normal visible room block consumes
+	// that reverse step and restores an exact green anchor without reconciliation.
+	s.observeOutgoingMove("n", "input")
+	for _, line := range []string{"Start", ".[ ].....      start", "[ Exits: S ]"} {
+		s.observeIncomingLine(line, line)
+	}
+	pos = s.mapTracker.Position()
+	if !pos.Valid || pos.Coord != (mapper.Coord{Zone: "Z"}) || pos.Confidence != mapper.Green || !pos.EventDescribesCell {
+		t.Fatalf("visible return did not recover position: %+v", pos)
+	}
+}
+
 // Regression reproduction for the user-visible OBS failure: the observation
 // foundation consumed the movement and left the dead-reckoned cell empty. A
 // completed room event in that cell must now enqueue the first autorecord write.

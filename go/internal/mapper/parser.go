@@ -13,9 +13,10 @@ package mapper
 // header (hint), best-effort description prose (left ASCII-minimap columns
 // stripped), and the exits with door markers preserved (e.g. "(N) E S W").
 type RoomEvent struct {
-	Hint  string `json:"hint"`
-	Desc  string `json:"desc"`
-	Exits string `json:"exits"` // canonical "[ Exits: ... ]" inner tokens, e.g. "(N) E S W" or "none"
+	Hint     string `json:"hint"`
+	Desc     string `json:"desc"`
+	Exits    string `json:"exits"` // canonical "[ Exits: ... ]" inner tokens, e.g. "(N) E S W" or "none"
+	Obscured bool   `json:"obscured,omitempty"`
 }
 
 // ParseExits normalizes a raw exits line (already ANSI/CR-stripped) into the

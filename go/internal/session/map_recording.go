@@ -645,6 +645,13 @@ func (s *Session) observeMapRecordingRoomLockedForAutorecord(ev mapper.RoomEvent
 		s.stopMapRecordingLocked("room event too large")
 		return false, nil
 	}
+	if ev.Obscured {
+		// The physical step is still reconciled by the tracker below, but there is
+		// no trustworthy room identity to compare or persist. Stop this deliberately
+		// single-step recorder and let the player return with visibility.
+		s.stopMapRecordingLocked("room obscured; restore visibility and restart OBS")
+		return false, nil
+	}
 	complete := mapRecordingRoomComplete(ev)
 	pipe := strings.TrimSpace(ev.Hint) == "" && strings.TrimSpace(ev.Exits) != ""
 	if !complete && !pipe {

@@ -365,6 +365,8 @@ func mapperRecordingRuntimeReason(reason string) (appi18n.Key, map[string]any, s
 		return appi18n.MapperRecordingLifecycleChanged, nil, ""
 	case "movement confirmation timed out":
 		return appi18n.MapperRecordingPendingTimeout, nil, ""
+	case "room obscured; restore visibility and restart OBS":
+		return appi18n.MapperRecordingObscured, nil, ""
 	default:
 		return appi18n.MapperRecordingStopped, map[string]any{"detail": reason}, reason
 	}
@@ -411,6 +413,10 @@ func mapperPositionReason(reason string) (appi18n.Key, map[string]any, string) {
 		return appi18n.MapperPositionIndexRebuilt, nil, ""
 	case "anchored to unmapped cell":
 		return appi18n.MapperPositionAnchoredUnmapped, nil, ""
+	case "room obscured; restore visibility":
+		return appi18n.MapperPositionObscured, nil, ""
+	case "room obscured; position unknown until visibility is restored":
+		return appi18n.MapperPositionObscuredUnknown, nil, ""
 	default:
 		return appi18n.MapperPositionGeneric, map[string]any{"detail": reason}, reason
 	}

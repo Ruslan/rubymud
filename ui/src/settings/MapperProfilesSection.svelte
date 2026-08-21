@@ -262,6 +262,21 @@
         {/each}
       </div>
 
+      <h4 class="group-title">{i18n.t('obscuredHeading')}</h4>
+      <p class="section-note">{i18n.t('obscuredHelp')}</p>
+      <div class="form-row">
+        <label class="field wide">
+          {i18n.t('obscuredLabel')}
+          <textarea
+            rows="3"
+            bind:value={mapperForm.obscured_lines}
+            on:blur={validateMapperProfileDraft}
+            placeholder={i18n.t('obscuredPlaceholder')}
+            aria-label={i18n.t('obscuredAria')}
+          ></textarea>
+        </label>
+      </div>
+
       <h4 class="group-title">{i18n.t('strip')}</h4>
       <div class="form-row">
         <label class="field">

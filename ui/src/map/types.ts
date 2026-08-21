@@ -170,6 +170,9 @@ export interface RoomScan {
 export interface MapRecordingState {
   mode: "off" | "armed" | "recording" | "conflict";
   reason?: string;
+  reason_code?: string;
+  reason_args?: Record<string, unknown>;
+  reason_detail?: string;
   pending: number;
   revision: number;
   conflict?: {
@@ -180,5 +183,8 @@ export interface MapRecordingState {
     expected_room: { hint: string; desc: string; exits: string };
     observed: { hint: string; desc: string; exits: string };
     reason: string;
+    reason_code?: string;
+    reason_args?: Record<string, unknown>;
+    reason_detail?: string;
   };
 }

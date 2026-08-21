@@ -567,7 +567,7 @@ func (s *Session) observeIncomingLine(plainText, raw string) {
 	// already hold — no allocation, no extra work on the common (non-exits) line,
 	// which returns above without reaching here.
 	s.lastRoom = ev
-	s.lastRoomOK = true
+	s.lastRoomOK = !ev.Obscured
 
 	// Room event to clients (UI current-room signal).
 	toBroadcast = append(toBroadcast, ServerMsg{

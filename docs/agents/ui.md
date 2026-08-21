@@ -61,6 +61,20 @@ arrows. This layer is canvas-only presentation: it must never enter `SlimRoom`,
 hit-testing, routing, selection, or map persistence. The raw server hint is
 displayed without translation.
 
+## Obscured Mapper Rooms
+
+A declarative room format may list exact `obscured_lines`: server phrases that
+replace the room name and description when the player cannot see. A completed
+block carrying one of these lines is movement evidence, not room identity. The
+tracker consumes the step at yellow confidence, room recording stops without a
+topology write or reconciliation conflict, and the next visible reverse step can
+restore green normally. The Room Formats editor manages the markers one exact
+line per row. Do not broaden them into regexes or feed them into fingerprints.
+
+The reconciliation dialog keeps Cancel/Escape as a non-mutating close, and also
+offers an explicit “Discard observation and stop OBS” action. It uses the normal
+recording-stop endpoint; a failed stop leaves the immutable conflict visible.
+
 ## Mapper Room Knowledge
 
 The cell menu action `Knowledge…` opens a room-scoped dialog. Its `Inhabitants` tab

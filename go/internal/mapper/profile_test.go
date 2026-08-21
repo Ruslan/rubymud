@@ -607,6 +607,9 @@ func TestCompileRejectsBadSpecs(t *testing.T) {
 		// or it lies dormant and explodes when someone turns the stop on.
 		{"bad prompt regex, stop not enabled", func(s *ProfileSpec) { s.Prompt = `(` }, "prompt pattern"},
 		{"zero max lines", func(s *ProfileSpec) { s.Block.MaxLines = 0 }, "max_lines must be > 0"},
+		{"empty obscured marker", func(s *ProfileSpec) { s.ObscuredLines = []string{" "} }, "must not be empty"},
+		{"multiline obscured marker", func(s *ProfileSpec) { s.ObscuredLines = []string{"dark\nroom"} }, "exactly one line"},
+		{"duplicate obscured marker", func(s *ProfileSpec) { s.ObscuredLines = []string{"dark", "dark"} }, "duplicate obscured-room marker"},
 		{"no stops at all", func(s *ProfileSpec) { s.Block.Stops = nil }, "no stop conditions"},
 		{"unknown strip mode", func(s *ProfileSpec) { s.Strip.Mode = "shave" }, "unknown strip mode"},
 		{"min_run without n", func(s *ProfileSpec) { s.Strip.Mode = StripMinRun }, "MinRun >= 1"},
@@ -723,6 +726,7 @@ func TestSpecIsDeepCopy(t *testing.T) {
 		t.Fatal("builtin has no stops")
 	}
 	s.Block.Stops[0] = StopMaxLines
+	s.ObscuredLines[0] = "corrupted"
 	s.Block.MaxLines = 999
 
 	if got := BuiltinRMUD().Spec().Block.Stops[0]; got != StopBlank {
@@ -731,12 +735,19 @@ func TestSpecIsDeepCopy(t *testing.T) {
 	if got := BuiltinRMUD().MaxLines(); got != 32 {
 		t.Errorf("builtin max lines = %d, want 32", got)
 	}
+	if got := BuiltinRMUD().Spec().ObscuredLines[0]; got != "Здесь кромешная тьма." {
+		t.Errorf("mutating a Spec() copy corrupted obscured marker: %q", got)
+	}
 	// Compile must likewise not retain the caller's slice.
 	spec := RMUDSpec()
 	p := MustCompile(spec)
 	spec.Block.Stops[0] = StopMaxLines
+	spec.ObscuredLines[0] = "corrupted"
 	if got := p.Spec().Block.Stops[0]; got != StopBlank {
 		t.Errorf("mutating the spec after Compile changed the profile: stops[0] = %q", got)
+	}
+	if got := p.Spec().ObscuredLines[0]; got != "Здесь кромешная тьма." {
+		t.Errorf("mutating input after Compile changed obscured marker: %q", got)
 	}
 }
 

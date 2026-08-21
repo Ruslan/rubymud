@@ -90,6 +90,7 @@ func TestMapRecordingRuntimeReasonsLocalizeStateAndConflict(t *testing.T) {
 		"room event too large",
 		"map topology changed while autorecord was pending", "autorecord lifecycle changed",
 		"movement confirmation timed out",
+		"room obscured; restore visibility and restart OBS",
 	}
 	for _, reason := range reasons {
 		state := session.MapRecordingState{Mode: session.MapRecordingOff, Reason: reason, Conflict: &session.MapRecordingConflictSnapshot{Reason: reason}}

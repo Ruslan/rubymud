@@ -18,6 +18,7 @@ const rmudSpec: MapperSpec = {
   block: { stops: ['blank', 'max_lines'], max_lines: 32 },
   strip: { mode: 'greedy', glyphs: '[]*^v.|_- ' },
   header: { rule: 'last_before_stripped', column_run: 2 },
+  obscured_lines: ['Здесь кромешная тьма.'],
 };
 
 // Every shape the editor has to survive a load-then-save on. Testing only the
@@ -125,6 +126,15 @@ describe('mapper profile form <-> spec', () => {
 
     const disabled = emptyMapperProfileForm();
     expect(formToSpec(disabled).scan).toBeUndefined();
+  });
+
+  it('round-trips exact obscured-room lines and omits an empty list', () => {
+    const form = specToForm(rmudSpec);
+    expect(form.obscured_lines).toBe('Здесь кромешная тьма.');
+    form.obscured_lines = ' Здесь кромешная тьма. \n You cannot see anything. ';
+    expect(formToSpec(form).obscured_lines).toEqual(['Здесь кромешная тьма.', 'You cannot see anything.']);
+    form.obscured_lines = ' \n ';
+    expect(formToSpec(form).obscured_lines).toBeUndefined();
   });
 
   it('round-trips and independently copies alternative exits rules', () => {

@@ -169,6 +169,48 @@ func TestParserExitsGrammar(t *testing.T) {
 	}
 }
 
+// RMUD prints this exact replacement for the whole room body when the player
+// cannot see. The prompt immediately before it belongs to the previous room;
+// treating that prompt as the new title creates a false OBS conflict.
+func TestBuiltinRMUDObscuredRoomDoesNotInventTitleOrDescription(t *testing.T) {
+	acc := NewAccumulator(BuiltinRMUD())
+	var got RoomEvent
+	var ok bool
+	for _, line := range []string{
+		"301ж 109б 12375791о 1374м Выходы:СЮ>",
+		"Здесь кромешная тьма.",
+		"[ Exits: N E S W ]",
+	} {
+		if ev, emitted := acc.Feed(line); emitted {
+			got, ok = ev, true
+		}
+	}
+	if !ok {
+		t.Fatal("dark room did not emit movement evidence")
+	}
+	if got.Hint != "" || got.Desc != "" || got.Exits != "N E S W" || !got.Obscured {
+		t.Fatalf("obscured room was parsed as visible content: %+v", got)
+	}
+}
+
+func TestBuiltinRMUDObscuredPhraseInEarlierOutputDoesNotHideVisibleRoom(t *testing.T) {
+	acc := NewAccumulator(BuiltinRMUD())
+	var got RoomEvent
+	for _, line := range []string{
+		"Здесь кромешная тьма.",
+		"Освещённая комната",
+		".[ ].....      Теперь всё видно.",
+		"[ Exits: S ]",
+	} {
+		if ev, ok := acc.Feed(line); ok {
+			got = ev
+		}
+	}
+	if got.Obscured || got.Hint != "Освещённая комната" || got.Desc != "Теперь всё видно." {
+		t.Fatalf("earlier marker suppressed visible room: %+v", got)
+	}
+}
+
 func TestParserANSIAndCRStripping(t *testing.T) {
 	// The accumulator consumes ALREADY-stripped lines (processLine strips once and
 	// hands plainText in). So we pre-strip each line with fixtureStrip — mirroring

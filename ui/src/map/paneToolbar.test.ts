@@ -195,6 +195,27 @@ describe("map pane compact toolbar", () => {
     dialog.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true,cancelable:true}));expect(pane.root.querySelector('[aria-label="Resolve mapper conflict"]')).toBeNull();expect(document.activeElement?.textContent).toBe("OBS!");
   });
 
+  it("can discard an observation and stop OBS from the conflict dialog", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("A"));
+    const conflict = { id: 91, move: { command: "north", direction: "N", source: "input", from: { zone:"A",x:1,y:0,l:1 }, expected: { zone:"A",x:0,y:0,l:0 } }, expected:{zone:"A",x:0,y:0,l:0}, expected_hint:"Expected", expected_room:{hint:"Expected",desc:"visible",exits:"S"}, observed:{hint:"prompt",desc:"dark",exits:"N S"}, reason:"mismatch" };
+    pane.onMapRecordingState({mode:"conflict",pending:0,revision:30,conflict});
+    const dialog=pane.root.querySelector<HTMLDialogElement>('[aria-label="Resolve mapper conflict"]')!;
+    const discard=[...dialog.querySelectorAll<HTMLButtonElement>("button")].find(button=>button.textContent==="Discard observation and stop OBS");
+    expect(discard).toBeDefined();
+    fetchMock.mockResolvedValueOnce(json({stopped:true,state:{mode:"off",pending:0,revision:31,reason:"stopped by user"}}));
+    discard!.click();
+    await vi.waitFor(()=>expect(pane.root.querySelector('[aria-label="Resolve mapper conflict"]')).toBeNull());
+    expect(fetchMock.mock.calls.some(([url])=>String(url).endsWith('/map-recording-stop'))).toBe(true);
+    expect(pane.root.querySelector<HTMLButtonElement>('.map-pane__recording-toggle')?.textContent).toBe('OBS');
+  });
+
+  it("shows why OBS stopped when the room is obscured", () => {
+    pane.onMapRecordingState({mode:"recording",pending:1,revision:40});
+    pane.onMapRecordingState({mode:"off",pending:0,revision:41,reason:"Room is dark — restore visibility.",reason_code:"mapper.recording.room_obscured"});
+    expect(pane.root.textContent).toContain("Room is dark — restore visibility.");
+    expect(pane.root.querySelector<HTMLButtonElement>('.map-pane__recording-toggle')?.textContent).toBe('OBS');
+  });
+
   it("loads the expected cross-zone room before offering reconciliation targets", async () => {
     await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("A"));
     const conflict = {

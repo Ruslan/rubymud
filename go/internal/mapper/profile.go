@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode/utf8"
 )
 
 // ---------------------------------------------------------------------------
@@ -205,6 +206,11 @@ type ProfileSpec struct {
 	Strip  StripSpec  `json:"strip"`
 	Header HeaderSpec `json:"header"`
 	Scan   *ScanSpec  `json:"scan,omitempty"`
+	// ObscuredLines are exact, server-authored replacements for a room's visible
+	// name and description (for example RMUD's darkness message). Matching one
+	// makes the completed exits block movement evidence only: it must never be
+	// fingerprinted or written as room identity.
+	ObscuredLines []string `json:"obscured_lines,omitempty"`
 	// DoorOpen is the command template a ROUTE sends to open a door it has no
 	// per-edge opening command for. Two optional placeholders stand for the hop's
 	// direction — "{dir}" the Russian word ("откр две {dir}" on RMUD), "{dir_en}"
@@ -251,6 +257,7 @@ func (s ProfileSpec) clone() ProfileSpec {
 		scan.Directions = append([]ScanDirectionSpec(nil), s.Scan.Directions...)
 		out.Scan = &scan
 	}
+	out.ObscuredLines = append([]string(nil), s.ObscuredLines...)
 	return out
 }
 
@@ -285,6 +292,7 @@ type Profile struct {
 	stopBlank  bool
 	stopPrompt bool
 	scan       *ScanConfig
+	obscured   []string
 }
 
 // ScanConfig is the validated, bounded scan contract exposed to the session.
@@ -434,6 +442,31 @@ func Compile(spec ProfileSpec) (Profile, error) {
 	}
 	if spec.Block.MaxLines <= 0 {
 		return fail("block max_lines must be > 0, got %d", spec.Block.MaxLines)
+	}
+
+	// Exact phrases only. This is intentionally not regex-driven: an obscured
+	// room is a safety boundary, so a broad user expression must not suppress
+	// ordinary room identity. The small cap keeps the exits-time scan bounded.
+	if len(spec.ObscuredLines) > 16 {
+		return fail("at most 16 obscured-room lines are allowed")
+	}
+	seenObscured := make(map[string]bool, len(spec.ObscuredLines))
+	for _, configured := range spec.ObscuredLines {
+		line := strings.TrimSpace(configured)
+		if line == "" {
+			return fail("obscured-room lines must not be empty")
+		}
+		if strings.ContainsAny(line, "\r\n\x00") {
+			return fail("obscured-room marker %q must be exactly one line", line)
+		}
+		if utf8.RuneCountInString(line) > 512 {
+			return fail("obscured-room marker is longer than 512 characters")
+		}
+		if seenObscured[line] {
+			return fail("duplicate obscured-room marker %q", line)
+		}
+		seenObscured[line] = true
+		p.obscured = append(p.obscured, line)
 	}
 
 	// --- optional scan probe ---
@@ -643,6 +676,7 @@ func RMUDSpec() ProfileSpec {
 				{Dir: "D", Prefix: "Внизу:"},
 			},
 		},
+		ObscuredLines: []string{"Здесь кромешная тьма."},
 		// RMUD's own door verb. It lives HERE and nowhere else — see the field's
 		// comment for why a global constant was the wrong home. The direction word is
 		// an optional argument to `откр две` on RMUD, and mandatory when a room holds
@@ -794,6 +828,18 @@ func (p *Profile) isBlockStop(line string) bool {
 	}
 	if p.stopPrompt && p.promptRE != nil && p.promptRE.MatchString(line) {
 		return true
+	}
+	return false
+}
+
+// IsObscured reports an exact configured visibility-loss line. It runs only
+// while reconstructing a completed exits block, never on the per-line hot path.
+func (p *Profile) IsObscured(line string) bool {
+	line = strings.TrimSpace(line)
+	for _, marker := range p.obscured {
+		if line == marker {
+			return true
+		}
 	}
 	return false
 }

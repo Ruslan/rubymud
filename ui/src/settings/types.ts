@@ -211,6 +211,8 @@ export interface MapperSpec {
   strip: MapperSpecStrip;
   header: MapperSpecHeader;
   scan?: MapperSpecScan;
+  /** Exact server lines that mean the room exists but cannot currently be seen. */
+  obscured_lines?: string[];
   // The command a computed ROUTE sends to open a door it has no per-edge command
   // for, "{dir}" / "{dir_en}" standing for the hop's direction. Like the scan
   // probe above, it is here because the format

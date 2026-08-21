@@ -62,6 +62,8 @@ export interface MapperProfileForm {
   scan_prefix_w: string;
   scan_prefix_u: string;
   scan_prefix_d: string;
+  // Exact visibility-loss markers, one server line per textarea line.
+  obscured_lines: string;
 }
 
 // Fallbacks for fields a spec may omit. They are the builtin's values, so a form
@@ -110,6 +112,7 @@ export function emptyMapperProfileForm(): MapperProfileForm {
     scan_prefix_w: '',
     scan_prefix_u: '',
     scan_prefix_d: '',
+    obscured_lines: '',
   };
 }
 
@@ -149,6 +152,7 @@ export function specToForm(spec: MapperSpec | undefined, name = ''): MapperProfi
     scan_prefix_w: scanPrefixes.get('W') ?? '',
     scan_prefix_u: scanPrefixes.get('U') ?? '',
     scan_prefix_d: scanPrefixes.get('D') ?? '',
+    obscured_lines: (spec.obscured_lines ?? []).join('\n'),
   };
 }
 
@@ -209,6 +213,11 @@ export function formToSpec(form: MapperProfileForm): MapperSpec {
         .map(([dir, prefix]) => ({ dir, prefix })),
     };
   }
+  const obscuredLines = form.obscured_lines
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line !== '');
+  if (obscuredLines.length > 0) spec.obscured_lines = obscuredLines;
   return spec;
 }
 

@@ -81,6 +81,7 @@ describe('MapperProfilesSection', () => {
     form.door_open = 'open door {dir_en}';
     form.scan_command = 'scan';
     form.scan_prefix_u = 'Наверху:';
+    form.obscured_lines = 'Здесь кромешная тьма.';
     target = document.createElement('div');
     document.body.append(target);
     component = mount(MapperProfilesSection, {
@@ -102,6 +103,7 @@ describe('MapperProfilesSection', () => {
     expect(target.querySelector<HTMLInputElement>('[aria-label="Команда открытия двери"]')?.value).toBe('open door {dir_en}');
     expect(target.querySelector<HTMLInputElement>('[aria-label="Команда обзора окрестностей"]')?.value).toBe('scan');
     expect(target.querySelector<HTMLInputElement>('[aria-label="Префикс обзора U"]')?.value).toBe('Наверху:');
+    expect(target.querySelector<HTMLTextAreaElement>('[aria-label="Строки невидимой комнаты"]')?.value).toBe('Здесь кромешная тьма.');
   });
 
   it.each([

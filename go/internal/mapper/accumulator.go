@@ -194,6 +194,12 @@ func (a *Accumulator) reconstruct(inner string) (RoomEvent, bool) {
 	for l, r := 0, len(block)-1; l < r; l, r = l+1, r-1 {
 		block[l], block[r] = block[r], block[l]
 	}
+	// A visibility-loss replacement is the final server line before exits. Only
+	// inspect that position: the same text in older chatter must not suppress a
+	// later, fully visible room block.
+	if a.profile.IsObscured(block[len(block)-1].stripped) {
+		return RoomEvent{Exits: inner, Obscured: true}, true
+	}
 
 	hint, bodyStart, found := a.profile.selectHeader(block)
 	if !found {

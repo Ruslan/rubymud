@@ -64,6 +64,7 @@ const (
 	MapperRecordingTopologyChanged     Key = "mapper.recording.topology_changed"
 	MapperRecordingLifecycleChanged    Key = "mapper.recording.lifecycle_changed"
 	MapperRecordingPendingTimeout      Key = "mapper.recording.pending_timeout"
+	MapperRecordingObscured            Key = "mapper.recording.room_obscured"
 	MapperRecordingStopped             Key = "mapper.recording.stopped"
 	MapperRoomNotFound                 Key = "mapper.room_not_found"
 	MapperInvalidBody                  Key = "mapper.invalid_body"
@@ -138,6 +139,8 @@ const (
 	MapperPositionNoPositionYet        Key = "mapper.position.no_position_yet"
 	MapperPositionIndexRebuilt         Key = "mapper.position.index_rebuilt"
 	MapperPositionAnchoredUnmapped     Key = "mapper.position.anchored_unmapped"
+	MapperPositionObscured             Key = "mapper.position.room_obscured"
+	MapperPositionObscuredUnknown      Key = "mapper.position.room_obscured_unknown"
 	MapperPositionGeneric              Key = "mapper.position.status"
 	MapperInvalidSessionID             Key = "mapper.invalid_session_id"
 	MapperTrailingData                 Key = "mapper.trailing_data"
@@ -192,6 +195,7 @@ var catalogs = map[Locale]map[Key]string{
 		MapperRecordingTopologyChanged:     "map topology changed while autorecord was pending",
 		MapperRecordingLifecycleChanged:    "autorecord lifecycle changed",
 		MapperRecordingPendingTimeout:      "movement confirmation timed out",
+		MapperRecordingObscured:            "room obscured; restore visibility and restart OBS",
 		MapperRecordingStopped:             "{detail}",
 		MapperRoomNotFound:                 "room not found in the active map set",
 		MapperInvalidBody:                  "invalid body: {detail}",
@@ -266,6 +270,8 @@ var catalogs = map[Locale]map[Key]string{
 		MapperPositionNoPositionYet:        "no position yet",
 		MapperPositionIndexRebuilt:         "index rebuilt — position reset",
 		MapperPositionAnchoredUnmapped:     "anchored to unmapped cell",
+		MapperPositionObscured:             "room obscured; restore visibility",
+		MapperPositionObscuredUnknown:      "room obscured; position unknown until visibility is restored",
 		MapperPositionGeneric:              "{detail}",
 		MapperInvalidSessionID:             "invalid session id",
 		MapperTrailingData:                 "trailing data",
@@ -318,6 +324,7 @@ var catalogs = map[Locale]map[Key]string{
 		MapperRecordingTopologyChanged:     "запись карты остановлена: топология набора карт изменилась",
 		MapperRecordingLifecycleChanged:    "запись карты остановлена: состояние сессии изменилось",
 		MapperRecordingPendingTimeout:      "запись карты остановлена: подтверждение перемещения не получено вовремя",
+		MapperRecordingObscured:            "запись карты остановлена: комната не видна — восстановите освещение и снова включите НАБЛ",
 		MapperRecordingStopped:             "запись карты остановлена: {detail}",
 		MapperRoomNotFound:                 "комната не найдена в активном наборе карт",
 		MapperInvalidBody:                  "неверное тело запроса: {detail}",
@@ -392,6 +399,8 @@ var catalogs = map[Locale]map[Key]string{
 		MapperPositionNoPositionYet:        "позиция ещё не определена",
 		MapperPositionIndexRebuilt:         "индекс карты перестроен — позиция сброшена",
 		MapperPositionAnchoredUnmapped:     "позиция привязана к клетке вне карты",
+		MapperPositionObscured:             "комната не видна — восстановите освещение",
+		MapperPositionObscuredUnknown:      "комната не видна — позиция неизвестна до восстановления освещения",
 		MapperPositionGeneric:              "состояние позиции изменилось: {detail}",
 		MapperInvalidSessionID:             "неверный идентификатор сессии",
 		MapperTrailingData:                 "лишние данные после JSON",

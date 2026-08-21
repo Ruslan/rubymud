@@ -345,20 +345,28 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 		}
 	}
 
-	// 4) Pipe corridor / no hint: never flip to red for lack of a hint. Hold
-	//    yellow on dead-reckoning if we have a position; else stay wherever.
+	// 4) Pipe corridor / obscured room / no hint: never flip to red for lack of
+	//    visible identity. Hold yellow on dead-reckoning if we have a position;
+	//    else stay wherever. Obscured is distinct from a structural pipe so the
+	//    UI can tell the player to restore visibility rather than edit topology.
 	if ev.Hint == "" {
+		reason := "pipe corridor (no hint to reconcile)"
+		unknownReason := "pipe corridor, position unknown"
+		if ev.Obscured {
+			reason = "room obscured; restore visibility"
+			unknownReason = "room obscured; position unknown until visibility is restored"
+		}
 		if t.pos.Valid {
 			// Advance dead-reckoning through the pipe if a head is pending.
 			if len(t.pending) > 0 {
 				if pred, ok := t.predict(t.pos.Coord, t.pending[0]); ok {
-					t.pos = Position{Valid: true, Coord: pred, Confidence: Yellow, Reason: "pipe corridor (no hint to reconcile)"}
+					t.pos = Position{Valid: true, Coord: pred, Confidence: Yellow, Reason: reason}
 					t.pending = t.pending[1:]
 					return
 				}
 			}
 			t.pos.Confidence = Yellow
-			t.pos.Reason = "pipe corridor (no hint to reconcile)"
+			t.pos.Reason = reason
 			// This branch MUTATES t.pos in place rather than replacing it, so the
 			// previous event's flag must be cleared explicitly: a hint-less event
 			// describes no cell.
@@ -366,7 +374,7 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 			return
 		}
 		// No position and a pipe: stay yellow-unknown, do not go red.
-		t.pos = Position{Valid: false, Confidence: Yellow, Reason: "pipe corridor, position unknown"}
+		t.pos = Position{Valid: false, Confidence: Yellow, Reason: unknownReason}
 		return
 	}
 
