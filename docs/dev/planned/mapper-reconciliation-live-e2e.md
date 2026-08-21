@@ -72,6 +72,12 @@ presentation passage `4–5`. Logical coordinates не меняются; дли�
 OBS должен создать room `2` как provisional и записать двустороннюю пару
 autorecord corridor; one-way остаётся явным свойством прохода.
 
+Третий isolated stack повторяет реальный фрагмент `Хилло` из runtime SQLite:
+`Вдоль оврага --W--> Лесистое предгорье`, причем целевая комната не печатает и
+физически не принимает обратный `E`. Playwright проверяет рваный half-passage на
+canvas, временный derived reverse route, ручное снятие только обратной грани в
+edge editor, недоступность обратного маршрута и штатную обработку MUD refusal.
+
 ## Компоненты
 
 ### Five-room MUD emulator

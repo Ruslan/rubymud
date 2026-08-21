@@ -18,6 +18,7 @@ export type LiveStackOptions = {
   autorecord?: boolean;
   darkRoom?: number;
   roomBoundary?: boolean;
+  oneWayHillo?: boolean;
 };
 
 export class LiveStack {
@@ -52,6 +53,7 @@ export class LiveStack {
       "--listen", "127.0.0.1:0", "--trace", tracePath,
       ...(options.darkRoom ? ["--dark-room", String(options.darkRoom)] : []),
       ...(options.roomBoundary ? ["--room-boundary"] : []),
+      ...(options.oneWayHillo ? ["--one-way-hillo"] : []),
     ], { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
     emulator.stderr!.pipe(createWriteStream(join(artifactsDir, "emulator.log")));
     const ready = await readJSONLine(emulator, 10_000) as { ready: boolean; host: string; port: number };
@@ -68,6 +70,7 @@ export class LiveStack {
         "--mud-host", ready.host, "--mud-port", String(ready.port),
       ];
       if (options.autorecord) seedArgs.push("--autorecord");
+      if (options.oneWayHillo) seedArgs.push("--one-way-hillo");
       const output = execFileSync(join(repoRoot, "bin", "e2e-mapper-fixture"), seedArgs, { cwd: repoRoot, encoding: "utf8", timeout: 15_000 });
       seed = JSON.parse(output) as SeedResult;
     } catch (error) {

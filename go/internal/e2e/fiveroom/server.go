@@ -52,6 +52,7 @@ type Server struct {
 type Options struct {
 	DarkRoom     int
 	RoomBoundary bool
+	OneWayHillo  bool
 }
 
 func Listen(addr, tracePath string) (*Server, error) {
@@ -121,7 +122,7 @@ func (s *Server) handleConnection(conn net.Conn, connectionID uint64) {
 		_ = conn.Close()
 	}()
 
-	world := NewWorld()
+	world := NewWorldWithOptions(WorldOptions{OneWayHillo: s.options.OneWayHillo})
 	lit := s.options.DarkRoom == 0
 	if err := s.writeObservedRoom(conn, world.Current(), lit); err != nil {
 		return

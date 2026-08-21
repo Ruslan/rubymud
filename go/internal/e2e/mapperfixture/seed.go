@@ -8,17 +8,19 @@ import (
 	"path/filepath"
 	"strings"
 
+	"rubymud/go/internal/e2e/fiveroom"
 	"rubymud/go/internal/storage"
 )
 
 const Zone = "Five Room Loop"
 
 type Options struct {
-	RunDir     string
-	DBPath     string
-	MUDHost    string
-	MUDPort    int
-	Autorecord bool
+	RunDir      string
+	DBPath      string
+	MUDHost     string
+	MUDPort     int
+	Autorecord  bool
+	OneWayHillo bool
 }
 
 type Result struct {
@@ -73,7 +75,10 @@ func Seed(opts Options) (Result, error) {
 	allRooms := fiveRooms()
 	rooms := allRooms
 	archive := "e2e-five-room-loop"
-	if opts.Autorecord {
+	if opts.OneWayHillo {
+		rooms = hilloRooms()
+		archive = "e2e-hillo-one-way"
+	} else if opts.Autorecord {
 		// Keep the physical world unchanged but seed only the confirmed anchor.
 		// The first E movement therefore lands in a real, complete room that is
 		// deliberately absent from the active map set.
@@ -98,16 +103,24 @@ func Seed(opts Options) (Result, error) {
 		return Result{}, fmt.Errorf("activate fixture map: %w", err)
 	}
 
+	resultRooms := map[int]storage.EdgeCell{
+		1: {Zone: Zone, X: 0, Y: 0, L: 0},
+		2: {Zone: Zone, X: 0, Y: 1, L: 0},
+		3: {Zone: Zone, X: 0, Y: 2, L: 0},
+		4: {Zone: Zone, X: 1, Y: 2, L: 0},
+		5: {Zone: Zone, X: 1, Y: 1, L: 0},
+	}
+	if opts.OneWayHillo {
+		resultRooms = map[int]storage.EdgeCell{
+			1: {Zone: fiveroom.HilloZone, X: 0, Y: 0, L: 0},
+			2: {Zone: fiveroom.HilloZone, X: 0, Y: -1, L: 0},
+		}
+	}
+
 	return Result{
 		SessionID: session.ID,
 		MapSetID:  mapSetID,
-		Rooms: map[int]storage.EdgeCell{
-			1: {Zone: Zone, X: 0, Y: 0, L: 0},
-			2: {Zone: Zone, X: 0, Y: 1, L: 0},
-			3: {Zone: Zone, X: 0, Y: 2, L: 0},
-			4: {Zone: Zone, X: 1, Y: 2, L: 0},
-			5: {Zone: Zone, X: 1, Y: 1, L: 0},
-		},
+		Rooms:     resultRooms,
 	}, nil
 }
 
@@ -121,9 +134,20 @@ func fiveRooms() []storage.Room {
 	}
 }
 
+func hilloRooms() []storage.Room {
+	return []storage.Room{
+		roomInZone(fiveroom.HilloZone, 1, 0, 0, fiveroom.HilloSourceHint, fiveroom.HilloSourceDesc, fiveroom.HilloSourceExits, []string{"N", "W"}, (1<<0)|(1<<3)),
+		roomInZone(fiveroom.HilloZone, 2, 0, -1, fiveroom.HilloTargetHint, fiveroom.HilloTargetDesc, fiveroom.HilloTargetExits, []string{"N", "S", "W"}, (1<<0)|(1<<1)|(1<<3)),
+	}
+}
+
 func room(tag, x, y int, hint, desc, exits string, edirs []string, ch int) storage.Room {
+	return roomInZone(Zone, tag, x, y, hint, desc, exits, edirs, ch)
+}
+
+func roomInZone(zone string, tag, x, y int, hint, desc, exits string, edirs []string, ch int) storage.Room {
 	return storage.Room{
-		Zone: Zone, X: x, Y: y, L: 0,
+		Zone: zone, X: x, Y: y, L: 0,
 		Tag: &tag, Hint: hint, Desc: desc, Exits: exits,
 		EDirs: mustJSONStrings(edirs), Doors: "[]", Ch: ch,
 	}

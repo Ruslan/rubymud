@@ -38,3 +38,27 @@ func TestRoomsExposeDistinctRMUDBlocks(t *testing.T) {
 		seen[room.Hint+"\x00"+room.Desc+"\x00"+room.Exits] = true
 	}
 }
+
+func TestWorldCanReplayHilloOneWayPassage(t *testing.T) {
+	w := NewWorldWithOptions(WorldOptions{OneWayHillo: true})
+
+	if room := w.Current(); room.Hint != "Вдоль оврага" || room.Exits != "N W" {
+		t.Fatalf("start room = %+v", room)
+	}
+	if got := w.ScanLines(); len(got) != 1 || got[0] != "На западе: Лесистое предгорье." {
+		t.Fatalf("start scan = %#v", got)
+	}
+
+	room, moved := w.Apply("W")
+	if !moved || room.ID != 2 {
+		t.Fatalf("W = room %d moved=%v, want room 2/true", room.ID, moved)
+	}
+	if room.Hint != "Лесистое предгорье" || room.Exits != "N S W" {
+		t.Fatalf("target room = %+v", room)
+	}
+
+	room, moved = w.Apply("E")
+	if moved || room.ID != 2 {
+		t.Fatalf("E = room %d moved=%v, want room 2/false", room.ID, moved)
+	}
+}

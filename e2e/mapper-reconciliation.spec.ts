@@ -2,18 +2,17 @@ import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { expect, test, type Page } from "@playwright/test";
 
-import { LiveStack } from "./live-stack";
+import { LiveStack, type LiveStackOptions } from "./live-stack";
 
 let stack: LiveStack;
-let primaryStack: LiveStack;
+const allStacks: LiveStack[] = [];
 let failed = false;
 
-test.beforeAll(async () => { stack = await LiveStack.start(); primaryStack = stack; });
+test.beforeAll(async () => { stack = await startStack(); });
 test.afterEach(async ({}, testInfo) => { if (testInfo.status !== testInfo.expectedStatus) failed = true; });
 test.afterAll(async () => {
   const preserve = failed || process.env.KEEP_E2E_ARTIFACTS === "1";
-  const candidates = stack === primaryStack ? [primaryStack] : [primaryStack, stack];
-  for (const candidate of candidates) {
+  for (const candidate of allStacks) {
     const target = await candidate.cleanup(preserve);
     if (target) console.log(`E2E artifacts: ${target}`);
   }
@@ -101,7 +100,7 @@ test("reconciles the live five-room loop and survives restart", async ({ browser
 });
 
 test("handles darkness, then creates one provisional room and a two-way passage", async ({ page }) => {
-  stack = await LiveStack.start({ autorecord: true, darkRoom: 2, roomBoundary: true });
+  stack = await startStack({ autorecord: true, darkRoom: 2, roomBoundary: true });
   await installMapLayout(page);
   await page.goto(`${stack.baseURL}/?session_id=${stack.seed.session_id}`);
   await connectAnchorAndArm(page);
@@ -195,6 +194,96 @@ test("handles darkness, then creates one provisional room and a two-way passage"
   )).toEqual([{ n: 2 }]);
 });
 
+test("shows the Hillo one-way passage and lets the player block only its reverse face", async ({ page }) => {
+  stack = await startStack({ oneWayHillo: true });
+  await installMapLayout(page);
+  await page.goto(`${stack.baseURL}/?session_id=${stack.seed.session_id}`);
+  await connectAnchorAndArm(page, "Вдоль оврага");
+
+  // Captured from data/mudhost.db on 2026-08-21: the source advertises W while
+  // the adjacent target advertises N/S/W and deliberately has no reverse E.
+  expect(stack.query<{ hint: string; exits: string }>(
+    `SELECT hint,exits FROM rooms WHERE map_set_id=${stack.seed.map_set_id} ORDER BY y DESC`,
+  )).toEqual([
+    { hint: "Вдоль оврага", exits: "N W" },
+    { hint: "Лесистое предгорье", exits: "N S W" },
+  ]);
+  expect(stack.query<Record<string, unknown>>(
+    `SELECT source,passable,to_x,to_y FROM map_edges WHERE map_set_id=${stack.seed.map_set_id} AND from_zone='Хилло' AND from_x=0 AND from_y=-1 AND dir='E'`,
+  )).toEqual([{ source: "parsed", passable: 1, to_x: 0, to_y: 0 }]);
+
+  // Room text owns the ordinary stubs, so the physical mismatch must look torn:
+  // the known W half is painted and the absent E half stays transparent.
+  await expect.poll(async () => {
+    const pixels = await westOneWayPixels(page);
+    return pixels.source > 10 && pixels.missing === 0;
+  }).toBe(true);
+  await page.locator(".map-pane").screenshot({ path: join(stack.artifactsDir, "hillo-one-way-before-mark.png") });
+
+  await sendAndExpectRoom(page, "W", "Лесистое предгорье");
+  await expect(page.locator(".map-pane__confidence")).toHaveAttribute("title", /Confidence: green/);
+  expectTraceMove("W", 1, 2, true);
+
+  const token = await page.evaluate(() => (window as Window & { API_TOKEN?: string }).API_TOKEN ?? "");
+  const headers = { "X-Session-Token": token };
+  const routeBefore = await page.request.post(
+    `${stack.baseURL}/api/sessions/${stack.seed.session_id}/map-path`,
+    { headers, data: { to: stack.seed.rooms["1"] } },
+  );
+  expect(routeBefore.ok()).toBeTruthy();
+  expect(await routeBefore.json()).toEqual(expect.objectContaining({ reachable: true, directions: ["e"] }));
+
+  // The edge editor exposes both directed facts. Unchecking only the target's E
+  // face records the rare exception without damaging the valid W traversal.
+  const canvas = page.locator(".map-pane__canvas");
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+  await canvas.click({ position: { x: box!.width / 2 + 20, y: box!.height / 2 } });
+  const menu = page.locator(".map-edge-menu");
+  await expect(menu).toBeVisible();
+  const reverse = menu.locator(".map-edge-menu__side", {
+    hasText: "from 'Лесистое предгорье' to 'Вдоль оврага' (east)",
+  });
+  await expect(reverse).toBeVisible();
+  const reversePassage = reverse.getByRole("checkbox", { name: "passage exists" });
+  await expect(reversePassage).toBeChecked();
+  // The write intentionally closes the popup on change; click rather than
+  // uncheck so Playwright does not keep waiting on the now-detached checkbox.
+  await reversePassage.click();
+  await expect(menu).toBeHidden();
+
+  await expect.poll(() => stack.query<Record<string, unknown>>(
+    `SELECT source,passable,to_x,to_y FROM map_edges WHERE map_set_id=${stack.seed.map_set_id} AND from_zone='Хилло' AND from_x=0 AND from_y=-1 AND dir='E'`,
+  )).toEqual([{ source: "manual", passable: 0, to_x: 0, to_y: 0 }]);
+  expect(stack.query<Record<string, unknown>>(
+    `SELECT source,passable,to_x,to_y FROM map_edges WHERE map_set_id=${stack.seed.map_set_id} AND from_zone='Хилло' AND from_x=0 AND from_y=0 AND dir='W'`,
+  )).toEqual([{ source: "parsed", passable: 1, to_x: 0, to_y: -1 }]);
+
+  await expect.poll(async () => {
+    const response = await page.request.post(
+      `${stack.baseURL}/api/sessions/${stack.seed.session_id}/map-path`,
+      { headers, data: { to: stack.seed.rooms["1"] } },
+    );
+    return await response.json() as { reachable: boolean };
+  }).toEqual(expect.objectContaining({ reachable: false }));
+
+  // The fake MUD is the physical authority too: trying the absent E step is
+  // refused, and the refusal cancels the pending tracker move without losing
+  // the confirmed target room.
+  await page.locator("#input").fill("E");
+  await page.locator("#input").press("Enter");
+  await expect.poll(() => traceHasMove("E", 2, 2, false)).toBe(true);
+  await expect(page.locator(".map-pane__confidence")).toHaveAttribute("title", /Confidence: green/);
+  await expect(page.getByRole("dialog", { name: "Resolve mapper conflict" })).toHaveCount(0);
+  await page.locator(".map-pane").screenshot({ path: join(stack.artifactsDir, "hillo-one-way-blocked.png") });
+});
+
+async function startStack(options: LiveStackOptions = {}): Promise<LiveStack> {
+  const started = await LiveStack.start(options);
+  allStacks.push(started);
+  return started;
+}
+
 async function installMapLayout(page: Page): Promise<void> {
   await page.context().addInitScript(mapLayoutInit);
 }
@@ -225,6 +314,41 @@ async function eastFrontierOpaquePixels(page: Page): Promise<number> {
   });
 }
 
+async function westOneWayPixels(page: Page): Promise<{ source: number; missing: number }> {
+  return page.locator(".map-pane__canvas").evaluate((canvas: HTMLCanvasElement) => {
+    const ctx = canvas.getContext("2d");
+    if (!ctx || canvas.clientWidth === 0 || canvas.clientHeight === 0) return { source: 0, missing: -1 };
+    const sx = canvas.width / canvas.clientWidth;
+    const sy = canvas.height / canvas.clientHeight;
+    const cy = canvas.clientHeight / 2;
+    const count = (left: number, right: number): number => {
+      const x = Math.floor((canvas.clientWidth / 2 + left) * sx);
+      const y = Math.floor((cy - 2) * sy);
+      const width = Math.max(1, Math.floor((right - left) * sx));
+      const height = Math.max(1, Math.floor(4 * sy));
+      const data = ctx.getImageData(x, y, width, height).data;
+      let opaque = 0;
+      for (let i = 3; i < data.length; i += 4) if (data[i] > 0) opaque++;
+      return opaque;
+    };
+    // A small zone starts at the renderer's 40px pitch cap. Room centres are
+    // therefore 40px apart: the source stub ends at -20 and the target square
+    // begins at -30, leaving the absent reverse half in between.
+    return { source: count(-18, -12), missing: count(-28, -22) };
+  });
+}
+
+function expectTraceMove(command: string, from: number, to: number, moved: boolean): void {
+  expect(traceHasMove(command, from, to, moved)).toBe(true);
+}
+
+function traceHasMove(command: string, from: number, to: number, moved: boolean): boolean {
+  const rows = readFileSync(stack.tracePath, "utf8").trim().split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { command: string; from: number; to: number; moved: boolean });
+  return rows.some((row) => row.command === command && row.from === from && row.to === to && row.moved === moved);
+}
+
 function mapLayoutInit(): void {
   localStorage.setItem("pane-layout", JSON.stringify({
     columns: [{
@@ -236,7 +360,7 @@ function mapLayoutInit(): void {
   }));
 }
 
-async function connectAnchorAndArm(page: Page): Promise<void> {
+async function connectAnchorAndArm(page: Page, expectedRoom = "Loop Room 1"): Promise<void> {
   const session = stack.seed.session_id;
   await expect(page.locator("#connection-status")).toHaveText("disconnected");
   await page.locator("#connection-status").click();
@@ -247,7 +371,7 @@ async function connectAnchorAndArm(page: Page): Promise<void> {
     const response = await page.request.get(`${stack.baseURL}/api/sessions/${session}/map-live-room`, { headers });
     const body = await response.json();
     return body.seen ? body.hint : "";
-  }).toBe("Loop Room 1");
+  }).toBe(expectedRoom);
   const room = stack.seed.rooms["1"];
   const anchor = await page.request.post(`${stack.baseURL}/api/sessions/${session}/map-anchor`, { data: room, headers });
   expect(anchor.ok()).toBeTruthy();

@@ -18,12 +18,14 @@ func main() {
 	mudHost := flag.String("mud-host", "127.0.0.1", "test MUD loopback host")
 	mudPort := flag.Int("mud-port", 0, "test MUD port")
 	autorecord := flag.Bool("autorecord", false, "seed only the anchor room for the continuous autorecord E2E")
+	oneWayHillo := flag.Bool("one-way-hillo", false, "seed the one-way Hillo room pair")
 	flag.Parse()
 	if *runDir == "" || *dbPath == "" {
 		fatal(fmt.Errorf("--run-dir and --db are required"))
 	}
 	result, err := mapperfixture.Seed(mapperfixture.Options{
-		RunDir: *runDir, DBPath: *dbPath, MUDHost: *mudHost, MUDPort: *mudPort, Autorecord: *autorecord,
+		RunDir: *runDir, DBPath: *dbPath, MUDHost: *mudHost, MUDPort: *mudPort,
+		Autorecord: *autorecord, OneWayHillo: *oneWayHillo,
 	})
 	if err != nil {
 		fatal(err)

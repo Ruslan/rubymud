@@ -2,6 +2,7 @@ package mapperfixture
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"rubymud/go/internal/storage"
@@ -62,4 +63,56 @@ func TestSeedRejectsDatabaseOutsideRunDirectory(t *testing.T) {
 	if _, err := Seed(Options{RunDir: runDir, DBPath: outside, MUDHost: "127.0.0.1", MUDPort: 1}); err == nil {
 		t.Fatal("Seed accepted a database outside run directory")
 	}
+}
+
+func TestSeedReplaysHilloOneWayRoomTextButKeepsDerivedReverseUntilMarked(t *testing.T) {
+	runDir := t.TempDir()
+	result, err := Seed(Options{
+		RunDir: runDir, DBPath: filepath.Join(runDir, "mudhost.db"),
+		MUDHost: "127.0.0.1", MUDPort: 40123, OneWayHillo: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(filepath.Join(runDir, "mudhost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	rooms, err := store.ListRooms(result.MapSetID)
+	if err != nil || len(rooms) != 2 {
+		t.Fatalf("rooms=%d err=%v, want 2", len(rooms), err)
+	}
+	if rooms[0].Hint != "Лесистое предгорье" && rooms[1].Hint != "Лесистое предгорье" {
+		t.Fatalf("Hillo target missing: %+v", rooms)
+	}
+	if target := roomByHint(t, rooms, "Лесистое предгорье"); target.Exits != "N S W" || strings.Contains(target.EDirs, `"E"`) {
+		t.Fatalf("target exits = %q/%s, want N S W without E", target.Exits, target.EDirs)
+	}
+
+	edges, err := store.ListMapEdges(result.MapSetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantFrom := result.Rooms[2]
+	wantTo := result.Rooms[1]
+	for _, edge := range edges {
+		to, hasTo := edge.To()
+		if edge.From() == wantFrom && edge.Dir == "E" && hasTo && to == wantTo && edge.Passable {
+			return
+		}
+	}
+	t.Fatal("derived reverse E face missing before the player marks the rare one-way passage")
+}
+
+func roomByHint(t *testing.T, rooms []storage.Room, hint string) storage.Room {
+	t.Helper()
+	for _, room := range rooms {
+		if room.Hint == hint {
+			return room
+		}
+	}
+	t.Fatalf("room %q missing", hint)
+	return storage.Room{}
 }
