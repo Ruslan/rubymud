@@ -51,6 +51,10 @@ type ServerMsg struct {
 	// authoritatively — this is UX, not the gate).
 	EventDescribesCell bool               `json:"event_describes_cell,omitempty"`
 	MapRecording       *MapRecordingState `json:"map_recording,omitempty"`
+	// Ephemeral, profile-parsed surroundings for the current confirmed frontier.
+	// These are display hints only: they are never persisted or used as identity.
+	RoomScan                  []RoomScanHint `json:"room_scan,omitempty"`
+	RoomScanRecordingRevision uint64         `json:"room_scan_recording_revision,omitempty"`
 
 	// Room-format status (Type:"mapper_profile"), broadcast whenever the session
 	// (re)builds its detector.
@@ -100,6 +104,11 @@ type ServerMsg struct {
 	// Instance-wide UI locale notification. This changes presentation only; it
 	// never reloads the VM, parser, tracker, or transport.
 	AppLanguage string `json:"app_language,omitempty"`
+}
+
+type RoomScanHint struct {
+	Dir  string `json:"dir"`
+	Hint string `json:"hint"`
 }
 
 type SettingsChangedJSON struct {

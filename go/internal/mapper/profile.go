@@ -179,6 +179,22 @@ type HeaderSpec struct {
 	ANSIStart string `json:"ansi_start,omitempty"`
 }
 
+// ScanDirectionSpec identifies one server-authored line in the response to a
+// mapper probe. Dir is a canonical mapper direction; Prefix is compared after
+// trimming the incoming line's surrounding whitespace.
+type ScanDirectionSpec struct {
+	Dir    string `json:"dir"`
+	Prefix string `json:"prefix"`
+}
+
+// ScanSpec is optional. When present, map recording may send Command once for a
+// confirmed frontier room and collect only the bounded direction lines below.
+// The captured text is ephemeral UI context, never room identity or map data.
+type ScanSpec struct {
+	Command    string              `json:"command"`
+	Directions []ScanDirectionSpec `json:"directions"`
+}
+
 // ProfileSpec is the pure-data description of one server's room format. It is
 // the persistable/editable form; call Compile to get a usable Profile.
 type ProfileSpec struct {
@@ -188,27 +204,27 @@ type ProfileSpec struct {
 	Prompt string     `json:"prompt,omitempty"` // consulted by StopPrompt; always validated when set
 	Strip  StripSpec  `json:"strip"`
 	Header HeaderSpec `json:"header"`
+	Scan   *ScanSpec  `json:"scan,omitempty"`
 	// DoorOpen is the command template a ROUTE sends to open a door it has no
 	// per-edge opening command for. Two optional placeholders stand for the hop's
 	// direction — "{dir}" the Russian word ("откр две {dir}" on RMUD), "{dir_en}"
 	// the canonical english letter ("open door {dir_en}") — so the argument is not
 	// forced into one language; a verb that takes no argument uses neither.
 	//
-	// IT IS THE FIRST OUTPUT-SHAPED RULE IN THIS SPEC, and that is deliberate. It
+	// IT IS AN OUTPUT-SHAPED RULE IN THIS SPEC, and that is deliberate. It
 	// was a package-level constant for exactly one commit, which meant an English
 	// Diku got "откр две north" in its walk. The mistake is the same class the
 	// detector was rescued from: a property of ONE mud baked into shared code (the
-	// minimap glyph set, before it became StripSpec.Glyphs). It is not an i18n
-	// string either — i18n is the language we speak TO THE USER, while this is a
+	// minimap glyph set, before it became StripSpec.Glyphs). Scan is the other
+	// server exchange: unlike this route fallback it has a bounded response parser.
+	// Neither is an i18n string — i18n is the language we speak TO THE USER, while this is a
 	// command we send TO THE SERVER, decided by which mud is on the other end and
 	// not by the user's interface language. A player with an English UI on RMUD must
 	// still send "откр две".
 	//
 	// The room-format profile is the only place in the schema that says "this is how
 	// THIS mud talks", it is already per-session and already editable in settings, so
-	// this lives here despite the rest of the spec describing INPUT. If a second
-	// output rule ever appears, the honest move is a named sub-struct (an `Out`
-	// section) rather than another global.
+	// this lives here despite the rest of the spec mostly describing INPUT.
 	//
 	// EMPTY MEANS "DO NOT SEND ANYTHING". Only the builtin rmud profile ships a
 	// value; every other profile — builtin, contributed or user — leaves it blank,
@@ -218,8 +234,8 @@ type ProfileSpec struct {
 	DoorOpen string `json:"door_open,omitempty"`
 }
 
-// clone returns a deep copy of the spec: the only reference-typed member is
-// Block.Stops, which must not be shared or a caller mutating the slice it got
+// clone returns a deep copy of the spec. Its slices must not be shared or a
+// caller mutating the value it got
 // from Spec() would rewrite the profile it came from — including the
 // package-level builtin, process-wide and permanently.
 func (s ProfileSpec) clone() ProfileSpec {
@@ -230,6 +246,11 @@ func (s ProfileSpec) clone() ProfileSpec {
 	if s.Block.Stops != nil {
 		out.Block.Stops = append([]BlockStop(nil), s.Block.Stops...)
 	}
+	if s.Scan != nil {
+		scan := *s.Scan
+		scan.Directions = append([]ScanDirectionSpec(nil), s.Scan.Directions...)
+		out.Scan = &scan
+	}
 	return out
 }
 
@@ -237,13 +258,12 @@ func (s ProfileSpec) clone() ProfileSpec {
 // and glyph lookup tables.
 //
 // Copying a Profile is safe: the compiled members (regexes, glyph tables) are
-// immutable and shared by design, and the one reference-typed spec member,
-// Block.Stops, is never mutated internally and is deep-copied both into Compile
-// and out of Spec().
+// immutable and shared by design, and reference-typed spec members are never
+// mutated internally and are deep-copied both into Compile and out of Spec().
 //
-// Profile is a ~340-byte value (the spec strings plus the 128-byte glyph
-// table), so the rule appliers below take a POINTER receiver — a value receiver
-// copies the whole struct on every call, which is measurable on the per-line
+// Profile is a non-trivial value (the spec strings plus the 128-byte glyph
+// table and optional scan rules), so the rule appliers below take a POINTER
+// receiver — a value receiver copies the whole struct on every call, which is measurable on the per-line
 // path. Only the trivial accessors (Spec, Name, MaxLines) use value receivers,
 // so BuiltinRMUD().Name() still compiles.
 //
@@ -264,6 +284,37 @@ type Profile struct {
 
 	stopBlank  bool
 	stopPrompt bool
+	scan       *ScanConfig
+}
+
+// ScanConfig is the validated, bounded scan contract exposed to the session.
+// The prompt regexp stays private; callers use Boundary rather than compiling
+// or evaluating server-owned patterns themselves.
+type ScanConfig struct {
+	Command    string
+	Directions []ScanDirectionSpec
+	MaxLines   int
+	StopBlank  bool
+	promptRE   *regexp.Regexp
+}
+
+// Match recognizes one configured scan line. It never treats unprefixed MUD
+// output as scan data, so interleaved NPC chatter is harmless.
+func (s ScanConfig) Match(line string) (dir, hint string, ok bool) {
+	line = strings.TrimSpace(line)
+	for _, rule := range s.Directions {
+		if strings.HasPrefix(line, rule.Prefix) {
+			return rule.Dir, strings.TrimSpace(strings.TrimPrefix(line, rule.Prefix)), true
+		}
+	}
+	return "", "", false
+}
+
+// Boundary reports a configured prompt boundary. Blank-line termination is
+// kept explicit in StopBlank because the capture only accepts a blank after at
+// least one direction match.
+func (s ScanConfig) Boundary(line string) bool {
+	return s.promptRE != nil && s.promptRE.MatchString(strings.TrimSpace(line))
 }
 
 type compiledExitsRule struct {
@@ -282,6 +333,17 @@ func (p Profile) Name() string { return p.spec.Name }
 // DoorOpen is the profile's door-opening command template, or "" when this mud's
 // format does not describe one (in which case a route sends no opening command).
 func (p Profile) DoorOpen() string { return p.spec.DoorOpen }
+
+// Scan returns a detached scan config. False means the profile deliberately
+// disables mapper-driven probing.
+func (p Profile) Scan() (ScanConfig, bool) {
+	if p.scan == nil {
+		return ScanConfig{}, false
+	}
+	out := *p.scan
+	out.Directions = append([]ScanDirectionSpec(nil), p.scan.Directions...)
+	return out, true
+}
 
 // MaxLines is the configured block/ring bound, as specified.
 func (p Profile) MaxLines() int { return p.spec.Block.MaxLines }
@@ -372,6 +434,56 @@ func Compile(spec ProfileSpec) (Profile, error) {
 	}
 	if spec.Block.MaxLines <= 0 {
 		return fail("block max_lines must be > 0, got %d", spec.Block.MaxLines)
+	}
+
+	// --- optional scan probe ---
+	if spec.Scan != nil {
+		command := strings.TrimSpace(spec.Scan.Command)
+		if command == "" {
+			return fail("scan command must not be empty")
+		}
+		if strings.ContainsAny(command, "\r\n\x00") {
+			return fail("scan command must be exactly one line")
+		}
+		if _, movement := MoveDir(command); movement {
+			return fail("scan command %q is a movement command", command)
+		}
+		if len(spec.Scan.Directions) == 0 || len(spec.Scan.Directions) > 6 {
+			return fail("scan needs between 1 and 6 direction prefixes")
+		}
+		seenDir := make(map[string]bool, len(spec.Scan.Directions))
+		seenPrefix := make(map[string]bool, len(spec.Scan.Directions))
+		rules := make([]ScanDirectionSpec, 0, len(spec.Scan.Directions))
+		for _, rule := range spec.Scan.Directions {
+			dir := strings.ToUpper(strings.TrimSpace(rule.Dir))
+			prefix := strings.TrimSpace(rule.Prefix)
+			switch dir {
+			case "N", "E", "S", "W", "U", "D":
+			default:
+				return fail("scan direction %q is not one of N/E/S/W/U/D", rule.Dir)
+			}
+			if seenDir[dir] {
+				return fail("duplicate scan direction %q", dir)
+			}
+			if prefix == "" {
+				return fail("scan prefix for %s must not be empty", dir)
+			}
+			if seenPrefix[prefix] {
+				return fail("duplicate scan prefix %q", prefix)
+			}
+			for other := range seenPrefix {
+				if strings.HasPrefix(prefix, other) || strings.HasPrefix(other, prefix) {
+					return fail("scan prefixes %q and %q overlap", other, prefix)
+				}
+			}
+			seenDir[dir], seenPrefix[prefix] = true, true
+			rules = append(rules, ScanDirectionSpec{Dir: dir, Prefix: prefix})
+		}
+		var scanPromptRE *regexp.Regexp
+		if p.stopPrompt {
+			scanPromptRE = p.promptRE
+		}
+		p.scan = &ScanConfig{Command: command, Directions: rules, MaxLines: spec.Block.MaxLines, StopBlank: p.stopBlank, promptRE: scanPromptRE}
 	}
 
 	// --- strip ---
@@ -519,6 +631,17 @@ func RMUDSpec() ProfileSpec {
 		Header: HeaderSpec{
 			Rule:      HeaderLastBeforeStripped,
 			ColumnRun: 2,
+		},
+		Scan: &ScanSpec{
+			Command: "scan",
+			Directions: []ScanDirectionSpec{
+				{Dir: "N", Prefix: "На севере:"},
+				{Dir: "E", Prefix: "На востоке:"},
+				{Dir: "S", Prefix: "На юге:"},
+				{Dir: "W", Prefix: "На западе:"},
+				{Dir: "U", Prefix: "Наверху:"},
+				{Dir: "D", Prefix: "Внизу:"},
+			},
 		},
 		// RMUD's own door verb. It lives HERE and nowhere else — see the field's
 		// comment for why a global constant was the wrong home. The direction word is

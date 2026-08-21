@@ -490,6 +490,15 @@ func (s *Session) observeIncomingLine(plainText, raw string) {
 	recordingConflict := false
 
 	s.mapMu.Lock()
+	scanMsg, scanLine := s.consumeMapScanLineLocked(plainText)
+	if scanMsg != nil {
+		toBroadcast = append(toBroadcast, *scanMsg)
+	}
+	if scanLine {
+		s.mapMu.Unlock()
+		s.broadcastAll(toBroadcast)
+		return
+	}
 
 	// Movement refusal: head-cancel the queue, no position move. Cheap substring
 	// check; only meaningful when a tracker exists.
@@ -517,6 +526,7 @@ func (s *Session) observeIncomingLine(plainText, raw string) {
 	// that is exactly the loop this flag exists to stop.
 	if s.mapDetectorDisabled {
 		s.mapMu.Unlock()
+		s.broadcastAll(toBroadcast)
 		return
 	}
 	if s.mapDetector == nil {
@@ -525,6 +535,7 @@ func (s *Session) observeIncomingLine(plainText, raw string) {
 			s.mapDetectorDisabled = true
 			s.syncDoorOpenLocked()
 			s.mapMu.Unlock()
+			s.broadcastAll(toBroadcast)
 			return
 		}
 		s.mapDetector = def.det
@@ -541,11 +552,13 @@ func (s *Session) observeIncomingLine(plainText, raw string) {
 		// because the recovery takes mapProfileMu and the lock order is
 		// mapProfileMu -> mapMu.
 		s.mapMu.Unlock()
+		s.broadcastAll(toBroadcast)
 		s.recoverFromDetectorPanic(panicked)
 		return
 	}
 	if !ok {
 		s.mapMu.Unlock()
+		s.broadcastAll(toBroadcast)
 		return
 	}
 
@@ -590,6 +603,7 @@ func (s *Session) observeIncomingLine(plainText, raw string) {
 	}
 
 	s.broadcastAll(toBroadcast)
+	s.scheduleMapScan()
 	if walkPosition != nil {
 		releaseWalkIOGate()
 		if recordingConflict {

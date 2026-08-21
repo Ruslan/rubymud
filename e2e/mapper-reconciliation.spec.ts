@@ -106,6 +106,31 @@ test("creates one provisional room and a two-way passage from a real unseeded mo
   await page.goto(`${stack.baseURL}/?session_id=${stack.seed.session_id}`);
   await connectAnchorAndArm(page);
 
+  await expect.poll(() => {
+    const raw = readFileSync(stack.tracePath, "utf8").trim();
+    return raw ? raw.split("\n").map((line) => JSON.parse(line) as { command: string }).filter((row) => row.command === "scan").length : 0;
+  }).toBe(1);
+  // The scan is UI-only: it must neither pre-create Room 2 nor turn the unknown
+  // half-room into a graph node. The live canvas nevertheless paints beyond the
+  // ordinary exit stub/player ring on the east side.
+  expect(stack.query<{ n: number }>(
+    `SELECT count(*) AS n FROM rooms WHERE map_set_id=${stack.seed.map_set_id}`,
+  )).toEqual([{ n: 1 }]);
+  await expect.poll(() => page.locator(".map-pane__canvas").evaluate((canvas: HTMLCanvasElement) => {
+    const ctx = canvas.getContext("2d");
+    if (!ctx || canvas.clientWidth === 0 || canvas.clientHeight === 0) return 0;
+    const sx = canvas.width / canvas.clientWidth, sy = canvas.height / canvas.clientHeight;
+    const x = Math.floor((canvas.clientWidth / 2 + 24) * sx);
+    const y = Math.floor((canvas.clientHeight / 2 - 22) * sy);
+    const width = Math.max(1, Math.floor(150 * sx));
+    const height = Math.max(1, Math.floor(44 * sy));
+    const data = ctx.getImageData(x, y, Math.min(width, canvas.width - x), Math.min(height, canvas.height - y)).data;
+    let opaque = 0;
+    for (let i = 3; i < data.length; i += 4) if (data[i] > 0) opaque++;
+    return opaque;
+  })).toBeGreaterThan(10);
+  await page.locator(".map-pane").screenshot({ path: join(stack.artifactsDir, "autorecord-scan-frontier.png") });
+
   expect(stack.query<{ n: number }>(
     `SELECT count(*) AS n FROM rooms WHERE map_set_id=${stack.seed.map_set_id}`,
   )).toEqual([{ n: 1 }]);

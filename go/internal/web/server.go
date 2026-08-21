@@ -2989,6 +2989,11 @@ func (s *Server) sendRestoreState(sess *session.Session, writeJSON func(session.
 			return err
 		}
 	}
+	if scan, ok := sess.RoomScanSnapshot(); ok {
+		if err := writeJSONMeasured(scan); err != nil {
+			return err
+		}
+	}
 	recording := sess.MapRecordingState()
 	if err := writeJSONMeasured(session.ServerMsg{Type: "map_recording_state", MapRecording: &recording}); err != nil {
 		return err

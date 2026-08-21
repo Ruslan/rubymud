@@ -79,6 +79,8 @@ describe('MapperProfilesSection', () => {
     const form = emptyMapperProfileForm();
     form.pattern = '^\\[ Exits:\\s*(.*?)\\s*\\]$';
     form.door_open = 'open door {dir_en}';
+    form.scan_command = 'scan';
+    form.scan_prefix_u = 'Наверху:';
     target = document.createElement('div');
     document.body.append(target);
     component = mount(MapperProfilesSection, {
@@ -98,6 +100,8 @@ describe('MapperProfilesSection', () => {
     expect(target.querySelector<HTMLInputElement>('[name="not-present"]')).toBeNull();
     expect(target.querySelector<HTMLInputElement>('[aria-label="Шаблон выходов"]')?.value).toBe(form.pattern);
     expect(target.querySelector<HTMLInputElement>('[aria-label="Команда открытия двери"]')?.value).toBe('open door {dir_en}');
+    expect(target.querySelector<HTMLInputElement>('[aria-label="Команда обзора окрестностей"]')?.value).toBe('scan');
+    expect(target.querySelector<HTMLInputElement>('[aria-label="Префикс обзора U"]')?.value).toBe('Наверху:');
   });
 
   it.each([

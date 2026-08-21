@@ -159,6 +159,12 @@ type Session struct {
 	// must publish the transaction that already won rather than hide its result.
 	mapAutorecordAfterCurrentCheck func()
 	mapAutorecordAfterCommit       func()
+	mapScanSequence                uint64
+	mapScanLast                    mapScanKey
+	mapScanLastOK                  bool
+	mapScanCapture                 *mapScanCapture
+	mapScanTimer                   *time.Timer
+	mapScanSnapshot                *ServerMsg
 
 	// mapWalk is a server-owned, confirmation-paced route. It deliberately has a
 	// separate lock from mapMu: path/tracker reads stay short and no network write

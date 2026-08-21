@@ -105,6 +105,28 @@ describe('mapper profile form <-> spec', () => {
     expect(formToSpec(form).block.stops).toEqual(['prompt']);
   });
 
+  it('round-trips an optional six-direction server scan and omits it when disabled', () => {
+    const spec: MapperSpec = {
+      ...rmudSpec,
+      scan: {
+        command: 'scan',
+        directions: [
+          { dir: 'N', prefix: 'На севере:' }, { dir: 'E', prefix: 'На востоке:' },
+          { dir: 'S', prefix: 'На юге:' }, { dir: 'W', prefix: 'На западе:' },
+          { dir: 'U', prefix: 'Наверху:' }, { dir: 'D', prefix: 'Внизу:' },
+        ],
+      },
+    };
+    const form = specToForm(spec);
+    expect(form.scan_command).toBe('scan');
+    expect(form.scan_prefix_u).toBe('Наверху:');
+    expect(form.scan_prefix_d).toBe('Внизу:');
+    expect(formToSpec(form)).toEqual(spec);
+
+    const disabled = emptyMapperProfileForm();
+    expect(formToSpec(disabled).scan).toBeUndefined();
+  });
+
   it('round-trips and independently copies alternative exits rules', () => {
     const source = roundTripCases[2].spec;
     const form = specToForm(source);

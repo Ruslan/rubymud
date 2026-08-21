@@ -122,6 +122,16 @@ func (s *Server) handleConnection(conn net.Conn, connectionID uint64) {
 			continue
 		}
 		from := world.Current().ID
+		if strings.EqualFold(command, "scan") {
+			entry := TraceEntry{Sequence: s.nextSequence.Add(1), ConnectionID: connectionID, From: from, Command: command, To: from, Moved: false}
+			if err := s.appendTrace(entry); err != nil {
+				return
+			}
+			if err := writeScanBlock(conn, world.ScanLines()); err != nil {
+				return
+			}
+			continue
+		}
 		room, moved := world.Apply(command)
 		entry := TraceEntry{
 			Sequence: s.nextSequence.Add(1), ConnectionID: connectionID,
@@ -140,6 +150,19 @@ func (s *Server) handleConnection(conn net.Conn, connectionID uint64) {
 			return
 		}
 	}
+}
+
+func writeScanBlock(conn net.Conn, lines []string) error {
+	if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
+		return err
+	}
+	for _, line := range lines {
+		if _, err := io.WriteString(conn, line+"\r\n"); err != nil {
+			return err
+		}
+	}
+	_, err := io.WriteString(conn, "\r\n")
+	return err
 }
 
 func (s *Server) appendTrace(entry TraceEntry) error {

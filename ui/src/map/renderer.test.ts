@@ -408,6 +408,31 @@ describe("MapRenderer candidate (ghost) cell", () => {
   });
 });
 
+describe("MapRenderer scanned frontier", () => {
+  it("extends beyond the player ring and draws only the near half of an unknown room", () => {
+    const cv = makeCanvas();
+    const ctx = cv.getContext("2d")!;
+    const moveTo = vi.spyOn(ctx, "moveTo");
+    const lineTo = vi.spyOn(ctx, "lineTo");
+    const fillText = vi.spyOn(ctx, "fillText");
+    const r = new MapRenderer(cv);
+    r.setZone("Z", [slim({ h: "Перед развалинами", e: ["E"] })]);
+    r.setMarker({ x: 0, y: 0, l: 0, color: "#54e888" });
+    r.setFrontier({ zone: "Z", x: 0, y: 0, l: 0, hints: [{ dir: "E", hint: "Еле заметная тропинка." }] });
+    r.centerOn(0, 0, 0);
+    (r as unknown as { view: { s: number; ox: number; oy: number } }).view = { s: 1, ox: 300, oy: 200 };
+    (r as unknown as { paint(): void }).paint();
+
+    // CELL=30 and ROOM half=7.5 at scale 1: the corridor reaches the near face
+    // at x=322.5, beyond the marker ring at x=313.5. The half-room ends at its
+    // centre x=330; a full-cell outline would draw the unknown far face x=337.5.
+    expect(lineTo.mock.calls.some(([x]) => x === 322.5)).toBe(true);
+    expect([...moveTo.mock.calls, ...lineTo.mock.calls].some(([x]) => Number(x) > 330)).toBe(false);
+    expect(fillText.mock.calls.some(([text]) => String(text).includes("Еле заметная"))).toBe(true);
+    expect(r.pick(330, 200)).toBeNull();
+  });
+});
+
 // The EDGE EDITOR's click target: the boundary between two grid-adjacent rooms.
 // Two hard requirements live here — it must exist even where nothing is drawn
 // (marking a passage that does not exist yet is the point), and it must never

@@ -42,6 +42,15 @@
   // through them whatever the strip mode, so hiding (and blanking) them there
   // silently turns every room name into the movement preamble above it.
   $: glyphsDriveHeader = mapperForm.header_rule === 'last_before_stripped';
+  const scanPrefixFields = [
+    ['N', 'scan_prefix_n'], ['E', 'scan_prefix_e'], ['S', 'scan_prefix_s'],
+    ['W', 'scan_prefix_w'], ['U', 'scan_prefix_u'], ['D', 'scan_prefix_d'],
+  ] as const;
+
+  function setScanPrefix(field: typeof scanPrefixFields[number][1], value: string) {
+    mapperForm[field] = value;
+    mapperForm = mapperForm;
+  }
 
   // Bindings mutate the draft directly, so this is the one place that notices
   // every field transition and invalidates replay samples from the previous
@@ -230,6 +239,27 @@
             <code>open door &#123;dir_en&#125;</code> {i18n.t('doorHelpE')}</small
           >
         </label>
+      </div>
+
+      <h4 class="group-title">{i18n.t('scanHeading')}</h4>
+      <p class="section-note">{i18n.t('scanHelp')}</p>
+      <div class="form-row scan-fields">
+        <label class="field wide">
+          {i18n.t('scanCommandLabel')}
+          <input type="text" bind:value={mapperForm.scan_command} on:blur={validateMapperProfileDraft} placeholder={i18n.t('scanCommandPlaceholder')} aria-label={i18n.t('scanCommandAria')} />
+        </label>
+        {#each scanPrefixFields as [dir, field]}
+          <label class="field">
+            {i18n.t('scanPrefixLabel', { dir })}
+            <input
+              type="text"
+              value={mapperForm[field]}
+              on:input={(event) => setScanPrefix(field, (event.currentTarget as HTMLInputElement).value)}
+              on:blur={validateMapperProfileDraft}
+              aria-label={i18n.t('scanPrefixAria', { dir })}
+            />
+          </label>
+        {/each}
       </div>
 
       <h4 class="group-title">{i18n.t('strip')}</h4>
@@ -455,6 +485,21 @@
     text-transform: uppercase;
     letter-spacing: 0.06em;
     color: #8b949e;
+  }
+  .section-note {
+    margin: 2px 0 8px;
+    color: #8b949e;
+    font-size: 12px;
+  }
+  .scan-fields {
+    align-items: end;
+    flex-wrap: wrap;
+  }
+  .scan-fields .field {
+    flex: 1 1 150px;
+  }
+  .scan-fields .field.wide {
+    flex-basis: 100%;
   }
   .replay-controls {
     align-items: end;

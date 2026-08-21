@@ -4,7 +4,16 @@ Use this when you need to understand how configuration rules (aliases, triggers,
 
 ## Not to be confused with: mapper profiles (room formats)
 
-`mapper_profiles` is a **different entity** that merely shares the word. It describes one server's ROOM TEXT FORMAT for the mapper (exits regex, block boundaries, left-column strip, header rule) and is **not layered**: a session selects exactly one via `sessions.mapper_format`, the same deliberate exception the mapper's `active_map_set_id` makes. The rationale is identical — a room format is a property of the MUD you are connected to, not of the user's alias/trigger stack, so there is nothing sensible to merge across layers. See `go/internal/mapper/profile.go` and `docs/agents/sqlite.md`.
+`mapper_profiles` is a **different entity** that merely shares the word. It describes one server's ROOM TEXT FORMAT for the mapper (exits regex, block boundaries, left-column strip, header rule, and optional server-specific scan command/prefixes) and is **not layered**: a session selects exactly one via `sessions.mapper_format`, the same deliberate exception the mapper's `active_map_set_id` makes. The rationale is identical — a room format is a property of the MUD you are connected to, not of the user's alias/trigger stack, so there is nothing sensible to merge across layers. See `go/internal/mapper/profile.go` and `docs/agents/sqlite.md`.
+
+The optional mapper `scan` contract is intentionally narrow. During active
+single-step recording, a confirmed frontier room may send the configured command
+once per visit and capture only the configured `N/E/S/W/U/D` line prefixes,
+bounded by the format's existing block limit/boundaries and a short timeout.
+Results are ephemeral UI hints: they are never persisted and never participate
+in room fingerprints or reconciliation. The bounded response is isolated from
+the room detector; any later game command cancels publication and the remaining
+response is discarded through its boundary. A missing `scan` object disables the feature.
 
 Everything below is about the layered configuration profiles only.
 

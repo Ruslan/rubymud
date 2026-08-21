@@ -43,7 +43,7 @@ func (s *Session) sendTriggerCommand(cmd string, entryID int64, buffer string) e
 		return s.commitManualMapMove(cmd, dir, "trigger")
 	}
 	payload := []byte(cmd + "\n")
-	n, err := s.conn.Write(payload)
+	n, err := s.writeCommandPayload(payload)
 	if err == nil && n != len(payload) {
 		err = io.ErrShortWrite
 	}
@@ -71,7 +71,7 @@ func (s *Session) SendCommandWithTrace(command string, source string) ([]string,
 
 	// Special case: empty enter from user input sends just a newline
 	if command == "" && source == "input" {
-		_, err := s.conn.Write([]byte("\n"))
+		_, err := s.writeCommandPayload([]byte("\n"))
 		return nil, err
 	}
 
@@ -167,7 +167,7 @@ func (s *Session) SendCommandWithTrace(command string, source string) ([]string,
 			continue
 		}
 		payload := []byte(cmd + "\n")
-		n, err := s.conn.Write(payload)
+		n, err := s.writeCommandPayload(payload)
 		if err == nil && n != len(payload) {
 			err = io.ErrShortWrite
 		}
@@ -188,6 +188,18 @@ func (s *Session) SendCommandWithTrace(command string, source string) ([]string,
 		s.BroadcastVariables()
 	}
 	return canonicalCommands, nil
+}
+
+// writeCommandPayload serializes every ordinary game command with mapper-owned
+// scan and route writes. The scan capture is canceled before the later command
+// reaches the wire, so a sequential MUD's scan response can only be discarded
+// through its own boundary and cannot consume the later command's response.
+// Telnet negotiation bytes deliberately do not use this command protocol.
+func (s *Session) writeCommandPayload(payload []byte) (int, error) {
+	s.mapWalkIOMu.Lock()
+	defer s.mapWalkIOMu.Unlock()
+	s.cancelMapScanForOutbound()
+	return s.conn.Write(payload)
 }
 
 // reserveManualMapMove claims the physical-hop slot before any history or UI
@@ -236,6 +248,7 @@ func (s *Session) reserveManualMapMove() error {
 // publication guarantee as map-walk dispatch.
 func (s *Session) commitManualMapMove(cmd, dir, source string) error {
 	s.mapWalkIOMu.Lock()
+	s.cancelMapScanForOutbound()
 	n, err := s.conn.Write([]byte(cmd + "\n"))
 	if err == nil && n != len(cmd)+1 {
 		err = io.ErrShortWrite

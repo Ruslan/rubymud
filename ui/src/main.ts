@@ -795,6 +795,18 @@ function attachSocketHandlers(target: WebSocket) {
       });
     }
 
+    if (message.type === "room_scan") {
+      renderer.handleRoomScan({
+        mapSetID: message.map_set_id ?? 0,
+        recordingRevision: message.room_scan_recording_revision ?? 0,
+        zone: message.zone ?? "",
+        x: message.room_x ?? 0,
+        y: message.room_y ?? 0,
+        l: message.room_l ?? 0,
+        hints: message.room_scan ?? [],
+      });
+    }
+
     if (message.type === "map_recording_state" && message.map_recording) {
       renderer.handleMapRecording(message.map_recording);
     }

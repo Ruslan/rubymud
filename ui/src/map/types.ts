@@ -157,6 +157,16 @@ export interface LiveRoom {
   exits: string;
 }
 
+export interface RoomScan {
+  mapSetID: number;
+  recordingRevision: number;
+  zone: string;
+  x: number;
+  y: number;
+  l: number;
+  hints: Array<{ dir: string; hint: string }>;
+}
+
 export interface MapRecordingState {
   mode: "off" | "armed" | "recording" | "conflict";
   reason?: string;

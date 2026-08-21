@@ -140,6 +140,66 @@ describe('renderer mapper event delivery', () => {
     expect(onRoomPosition.mock.calls[0]?.[0].x).toBe(99);
   });
 
+  it('delivers scan hints only for the current coordinate and clears them on movement', async () => {
+    const onRoomScan = vi.spyOn(MapPaneController.prototype, 'onRoomScan');
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    await vi.waitFor(() => expect(document.querySelector('.map-pane__zone')).not.toBeNull());
+    renderer.handleRoomPosition({ valid: true, zone: 'A', x: 0, y: 0, l: 0, confidence: 'green', pendingMoves: 0, eventDescribesCell: true });
+    await Promise.resolve();
+    onRoomScan.mockClear();
+
+    const scan = { mapSetID: 1, recordingRevision: 1, zone: 'A', x: 0, y: 0, l: 0, hints: [{ dir: 'E', hint: 'Unknown path.' }] };
+    renderer.handleRoomScan(scan);
+    expect(onRoomScan).toHaveBeenLastCalledWith(scan);
+
+    renderer.handleRoomPosition({ valid: true, zone: 'B', x: 0, y: 0, l: 0, confidence: 'green', pendingMoves: 0 });
+    expect(onRoomScan).toHaveBeenLastCalledWith(null);
+
+    renderer.handleRoomPosition({ valid: true, zone: 'A', x: 0, y: 0, l: 0, confidence: 'green', pendingMoves: 0, eventDescribesCell: true });
+    renderer.handleMapRecording({ mode: 'off', pending: 0, revision: 2 });
+    onRoomScan.mockClear();
+    renderer.handleRoomScan(scan);
+    expect(onRoomScan).not.toHaveBeenCalled();
+  });
+
+  it('clears scan hints when exact green evidence becomes assumed at the same coordinate', async () => {
+    const onRoomScan = vi.spyOn(MapPaneController.prototype, 'onRoomScan');
+    const renderer = createTestRenderer();
+    renderer.loadLayout();
+    await vi.waitFor(() => expect(document.querySelector('.map-pane__zone')).not.toBeNull());
+    renderer.handleRoomPosition({
+      valid: true, zone: 'A', x: 0, y: 0, l: 0, confidence: 'green', pendingMoves: 0,
+      eventDescribesCell: true,
+    });
+    await Promise.resolve();
+    const scan = { mapSetID: 1, recordingRevision: 1, zone: 'A', x: 0, y: 0, l: 0, hints: [{ dir: 'E', hint: 'Unknown path.' }] };
+    renderer.handleRoomScan(scan);
+    onRoomScan.mockClear();
+
+    renderer.handleRoomPosition({
+      valid: true, zone: 'A', x: 0, y: 0, l: 0, confidence: 'yellow', pendingMoves: 0,
+      eventDescribesCell: false,
+    });
+    expect(onRoomScan).toHaveBeenLastCalledWith(null);
+    onRoomScan.mockClear();
+    renderer.handleRoomScan(scan);
+    expect(onRoomScan).not.toHaveBeenCalled();
+  });
+
+  it('replays a cached scan after position when a map pane is mounted later', async () => {
+    const renderer = createTestRenderer();
+    renderer.handleRoomPosition({ valid: true, zone: 'A', x: 0, y: 0, l: 0, confidence: 'green', pendingMoves: 0, eventDescribesCell: true });
+    const scan = { mapSetID: 1, recordingRevision: 1, zone: 'A', x: 0, y: 0, l: 0, hints: [{ dir: 'E', hint: 'Unknown path.' }] };
+    renderer.handleRoomScan(scan);
+    const onRoomScan = vi.spyOn(MapPaneController.prototype, 'onRoomScan');
+
+    renderer.loadLayout();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(onRoomScan).toHaveBeenCalledWith(scan);
+  });
+
   it('does not revive a pre-locale position reason from a pending mapper event', async () => {
     const renderer = createTestRenderer();
     renderer.loadLayout();

@@ -27,6 +27,16 @@ func TestServerSendsRMUDBlocksIgnoresTelnetAndTracesCommands(t *testing.T) {
 	if got := readBlock(t, reader); !strings.Contains(got, "Loop Room 1") || !strings.Contains(got, "[ Exits: E ]") {
 		t.Fatalf("initial block = %q", got)
 	}
+	if _, err := conn.Write([]byte("scan\r\n")); err != nil {
+		t.Fatal(err)
+	}
+	scan, err := reader.ReadString('\n')
+	if err != nil || !strings.Contains(scan, "На востоке: Loop Room 2.") {
+		t.Fatalf("scan = %q err=%v", scan, err)
+	}
+	if blank, err := reader.ReadString('\n'); err != nil || strings.TrimSpace(blank) != "" {
+		t.Fatalf("scan boundary = %q err=%v", blank, err)
+	}
 
 	if _, err := conn.Write(append([]byte{255, 253, 86}, []byte("E\r\n")...)); err != nil {
 		t.Fatal(err)
@@ -53,14 +63,14 @@ func TestServerSendsRMUDBlocksIgnoresTelnetAndTracesCommands(t *testing.T) {
 		t.Fatal(err)
 	}
 	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if len(lines) != 2 {
+	if len(lines) != 3 {
 		t.Fatalf("trace lines=%d: %s", len(lines), data)
 	}
 	var first TraceEntry
 	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
 		t.Fatal(err)
 	}
-	if first.From != 1 || first.To != 2 || first.Command != "E" || !first.Moved {
+	if first.From != 1 || first.To != 1 || first.Command != "scan" || first.Moved {
 		t.Fatalf("first trace = %+v", first)
 	}
 }

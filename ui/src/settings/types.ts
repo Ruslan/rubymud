@@ -196,6 +196,13 @@ export interface MapperSpecHeader {
   ansi_start?: string;
 }
 
+export type MapperScanDirection = 'N' | 'E' | 'S' | 'W' | 'U' | 'D';
+
+export interface MapperSpecScan {
+  command: string;
+  directions: Array<{ dir: MapperScanDirection; prefix: string }>;
+}
+
 export interface MapperSpec {
   name: string;
   exits: MapperSpecExits;
@@ -203,9 +210,10 @@ export interface MapperSpec {
   prompt?: string;
   strip: MapperSpecStrip;
   header: MapperSpecHeader;
+  scan?: MapperSpecScan;
   // The command a computed ROUTE sends to open a door it has no per-edge command
-  // for, "{dir}" / "{dir_en}" standing for the hop's direction. The only OUTPUT
-  // rule in an otherwise input-describing spec, and it is here because the format
+  // for, "{dir}" / "{dir_en}" standing for the hop's direction. Like the scan
+  // probe above, it is here because the format
   // is the one thing in the schema that says "this is how THIS mud talks" — it is
   // not an interface string, so it does not belong to the UI language.
   door_open?: string;

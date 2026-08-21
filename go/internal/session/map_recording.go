@@ -244,6 +244,7 @@ func (s *Session) StartMapRecording() (MapRecordingState, error) {
 	s.mapRecordingPending = s.mapRecordingPending[:0]
 	s.mapRecordingEpoch++
 	s.mapRecordingRevision++
+	go s.scheduleMapScan()
 	return s.mapRecordingStateLocked(), nil
 }
 
@@ -316,6 +317,8 @@ func (s *Session) stopMapRecordingLocked(reason string) {
 	s.mapRecordingPending = s.mapRecordingPending[:0]
 	s.mapRecordingWrites = 0
 	s.mapReconcilePreview = nil
+	s.cancelMapScanCaptureLocked()
+	s.mapScanSnapshot = nil
 	if changed {
 		// Invalidate the write already handed to its goroutine. It may finish a
 		// transaction that won the race before this stop, but it must never publish
@@ -543,9 +546,15 @@ func (s *Session) applyMapReconciliationLocked(conflictID uint64, token string) 
 }
 
 func (s *Session) recordAcceptedMapMoveLocked(command, dir, source string, authoritativeExpected *mapper.Coord) {
+	s.cancelMapScanCaptureLocked()
+	s.mapScanSnapshot = nil
 	if s.mapTracker == nil || (s.mapRecordingMode != MapRecordingArmed && s.mapRecordingMode != MapRecordingRecording) {
 		return
 	}
+	// Dedupe scan per VISIT, not per coordinate for the whole OBS run. A loop may
+	// return to a frontier after visiting only fully mapped rooms; in that case
+	// mapScanLast would otherwise still name this cell and suppress the new scan.
+	s.mapScanLastOK = false
 	pos := s.mapTracker.Position()
 	if !pos.Valid || pos.Confidence == mapper.Red {
 		s.stopMapRecordingLocked("position lost")
@@ -883,6 +892,7 @@ func (s *Session) completeMapAutorecord(job mapAutorecordJob, setID int64) {
 	}
 	s.broadcastRoomsChanged(setID)
 	s.broadcastMsg(mapRecordingMsg(state))
+	s.scheduleMapScan()
 }
 
 func boundedMapText(v string, max int) string {

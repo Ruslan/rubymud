@@ -55,6 +55,7 @@ import type {
   MapRecordingState,
   MapRoomSearchResult,
   PlayerPosition,
+  RoomScan,
   SlimRoom,
   SlimCrossZoneGrid,
   SeamTarget,
@@ -241,6 +242,7 @@ export class MapPaneController {
   private zoneCache = new Map<string, SlimRoom[]>();
   private currentZone = "";
   private lastPosition: PlayerPosition | null = null;
+  private roomScan: RoomScan | null = null;
   // The live room block (the `room` WS message) — what «Записать комнату» writes.
   private liveRoom: LiveRoom | null = null;
   // When a sticky status message was set (0 = none). See setStatus.
@@ -1305,6 +1307,10 @@ export class MapPaneController {
   // the position is valid, the marker + (if following) the view.
   async onRoomPosition(pos: PlayerPosition): Promise<void> {
     const prior = this.lastPosition;
+    if (this.roomScan && (!pos.valid || pos.confidence !== 'green' || !pos.eventDescribesCell || pos.zone !== this.roomScan.zone || pos.x !== this.roomScan.x || pos.y !== this.roomScan.y || pos.l !== this.roomScan.l)) {
+      this.roomScan = null;
+      this.renderer.setFrontier(null);
+    }
     const repeatedCoord = prior?.valid && pos.valid &&
       prior.zone === pos.zone && prior.x === pos.x && prior.y === pos.y && prior.l === pos.l;
     this.positionRequest?.abort();
@@ -1334,6 +1340,19 @@ export class MapPaneController {
     }
   }
 
+  onRoomScan(scan: RoomScan | null): void {
+    if (scan == null) {
+      this.roomScan = null;
+      this.renderer.setFrontier(null);
+      return;
+    }
+    const pos = this.lastPosition;
+    if (!pos?.valid || pos.confidence !== 'green' || !pos.eventDescribesCell || pos.zone !== scan.zone || pos.x !== scan.x || pos.y !== scan.y || pos.l !== scan.l) return;
+    if (this.mapSetID != null && scan.mapSetID > 0 && scan.mapSetID !== this.mapSetID) return;
+    this.roomScan = scan;
+    this.renderer.setFrontier({ zone: scan.zone, x: scan.x, y: scan.y, l: scan.l, hints: scan.hints });
+  }
+
   // Tell the pane which door-opening command this session's ROOM FORMAT supplies,
   // from the `mapper_profile` message. It changes what the edge editor PROMISES a
   // route will send, so a pane already showing the editor is closed rather than left
@@ -1356,6 +1375,7 @@ export class MapPaneController {
     if (state.revision < this.recordingState.revision) return;
     this.recordingState = state;
     this.renderRecordingControl(state);
+    if (state.mode === "off") this.onRoomScan(null);
     if (state.mode === "conflict" && state.conflict) {
       const staleDialog = this.reconciliationDialog &&
         (this.reconciliationDialogRevision !== state.revision ||

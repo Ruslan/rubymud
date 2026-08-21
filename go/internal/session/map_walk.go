@@ -537,6 +537,7 @@ func (s *Session) dispatchMapWalk(id uint64) (MapWalkState, bool) {
 		return MapWalkState{}, false
 	}
 	s.mapWalkMu.Unlock()
+	s.cancelMapScanForOutbound()
 
 	sent, err := s.writeMapWalkCommands(id, openCommands)
 	if err != nil {

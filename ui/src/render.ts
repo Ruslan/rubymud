@@ -11,7 +11,7 @@ import type {
 } from "./types";
 import { fetchWithToken } from "./dom";
 import { MapPaneController, MAP_BUFFER, type MapWalkState } from "./map/pane";
-import type { LiveRoom, MapRecordingState, PlayerPosition } from "./map/types";
+import type { LiveRoom, MapRecordingState, PlayerPosition, RoomScan } from "./map/types";
 import { createMapperI18n } from './map/i18n';
 import { readBootLocale, supportedLocale, type Locale } from './i18n';
 
@@ -143,6 +143,7 @@ export function createRenderer({
   // broadcast (same reason lastMapPosition is cached).
   let lastLiveRoom: LiveRoom | null = null;
   let lastMapRecording: MapRecordingState | null = null;
+  let lastRoomScan: RoomScan | null = null;
   // The session's room-format door-opening template (mapper.ProfileSpec.DoorOpen),
   // "" until the `mapper_profile` message says otherwise — which is also the right
   // value for a format that describes no door verb.
@@ -562,6 +563,15 @@ export function createRenderer({
           controller.onRoomEvent(lastLiveRoom);
         }
         if (lastMapRecording) controller.onMapRecordingState(lastMapRecording);
+        if (lastRoomScan) {
+          const scan = lastRoomScan;
+          // Position replay is microtask-coalesced. Deliver the dependent scan
+          // one microtask later so a newly mounted controller has accepted its
+          // coordinate before it validates the scan's fence.
+          queueMicrotask(() => {
+            if (mapControllers.get(node.id) === controller && lastRoomScan === scan) controller.onRoomScan(scan);
+          });
+        }
         controller.setDoorOpenTemplate(lastDoorOpen);
         if (lastMapWalk) {
           controller.onMapWalk(lastMapWalk);
@@ -2292,6 +2302,10 @@ export function createRenderer({
   // Deliver a live tracker position (room_position WS broadcast) to every map
   // pane. Cached so a map pane mounted after the broadcast still follows.
   function handleRoomPosition(pos: PlayerPosition) {
+    if (lastRoomScan && (!pos.valid || pos.confidence !== 'green' || !pos.eventDescribesCell || pos.zone !== lastRoomScan.zone || pos.x !== lastRoomScan.x || pos.y !== lastRoomScan.y || pos.l !== lastRoomScan.l)) {
+      lastRoomScan = null;
+      mapControllers.forEach((controller) => controller.onRoomScan(null));
+    }
     lastMapPosition = pos;
     mapControllers.forEach((controller, id) => scheduleMapPosition(id, controller, pos));
   }
@@ -2303,9 +2317,17 @@ export function createRenderer({
     notifyMapControllers((controller) => controller.onRoomEvent(live));
   }
 
+  function handleRoomScan(scan: RoomScan) {
+    if (!lastMapPosition?.valid || lastMapPosition.confidence !== 'green' || !lastMapPosition.eventDescribesCell || lastMapPosition.zone !== scan.zone || lastMapPosition.x !== scan.x || lastMapPosition.y !== scan.y || lastMapPosition.l !== scan.l) return;
+    if (lastMapRecording && (scan.recordingRevision < lastMapRecording.revision || (scan.recordingRevision === lastMapRecording.revision && lastMapRecording.mode === "off"))) return;
+    lastRoomScan = scan;
+    mapControllers.forEach((controller) => controller.onRoomScan(scan));
+  }
+
   function handleMapRecording(state: MapRecordingState) {
     if (lastMapRecording && state.revision < lastMapRecording.revision) return;
     lastMapRecording = state;
+    if (state.mode === "off") lastRoomScan = null;
     notifyMapControllers((controller) => controller.onMapRecordingState(state));
   }
 
@@ -2315,6 +2337,7 @@ export function createRenderer({
   function resetMapRecordingRevision() {
     const reset: MapRecordingState = { mode: "off", pending: 0, revision: 0 };
     lastMapRecording = reset;
+    lastRoomScan = null;
     notifyMapControllers((controller) => controller.resetMapRecordingState(reset));
   }
 
@@ -2369,6 +2392,8 @@ export function createRenderer({
   // ago. Panes keep their own copy until their next `room` broadcast.
   function clearLiveRoom() {
     lastLiveRoom = null;
+    lastRoomScan = null;
+    mapControllers.forEach((controller) => controller.onRoomScan(null));
   }
 
   // Tell every map pane the active map set changed (or maps were re-imported)
@@ -2430,6 +2455,7 @@ export function createRenderer({
     refreshAnsiTheme,
     handleRoomPosition,
     handleRoomEvent,
+    handleRoomScan,
     handleMapRecording,
 	resetMapRecordingRevision,
     handleRoomKnowledgeChanged,

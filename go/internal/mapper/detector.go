@@ -232,6 +232,22 @@ func DetectorDoorOpen(det RoomDetector) string {
 	return ""
 }
 
+// ScanProvider is an OPTIONAL capability of a room detector. Declarative room
+// formats use it to describe a bounded, server-specific surroundings probe.
+// Contributed detectors and legacy profiles simply leave scanning disabled.
+type ScanProvider interface {
+	ScanConfig() (ScanConfig, bool)
+}
+
+// DetectorScan asks a detector for its scan contract without making that
+// capability mandatory for third-party RoomDetector implementations.
+func DetectorScan(det RoomDetector) (ScanConfig, bool) {
+	if d, ok := det.(ScanProvider); ok {
+		return d.ScanConfig()
+	}
+	return ScanConfig{}, false
+}
+
 // ---------------------------------------------------------------------------
 // Conformance fixtures.
 //

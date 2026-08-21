@@ -49,6 +49,18 @@ Blocked contacts and contacts whose exact zone or room no longer exists are not
 treated as successful jumps. Async jumps use the pane load generation guard so
 a late response cannot replace a newer zone selection.
 
+## Mapper Scan Frontier
+
+During active room recording the server may emit an ephemeral `room_scan` for
+the exact confirmed position. `MapPaneController` accepts it only for the active
+map set and a `valid + green + eventDescribesCell` current coordinate; movement,
+confidence loss, recording stop, reconnect reset, and stale coordinates clear
+it. `MapRenderer` draws cardinal results as an extended corridor ending in only
+the near half of an unknown room outline, and vertical `U/D` results as compact
+arrows. This layer is canvas-only presentation: it must never enter `SlimRoom`,
+hit-testing, routing, selection, or map persistence. The raw server hint is
+displayed without translation.
+
 ## Mapper Room Knowledge
 
 The cell menu action `Knowledge…` opens a room-scoped dialog. Its `Inhabitants` tab

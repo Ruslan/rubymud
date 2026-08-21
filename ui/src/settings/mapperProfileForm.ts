@@ -53,8 +53,15 @@ export interface MapperProfileForm {
   header_rule: MapperHeaderRule;
   column_run: number;
   ansi_start: string;
-  // how a route opens a door on this mud (the spec's one output rule)
+  // how a route opens a door on this mud
   door_open: string;
+  scan_command: string;
+  scan_prefix_n: string;
+  scan_prefix_e: string;
+  scan_prefix_s: string;
+  scan_prefix_w: string;
+  scan_prefix_u: string;
+  scan_prefix_d: string;
 }
 
 // Fallbacks for fields a spec may omit. They are the builtin's values, so a form
@@ -96,6 +103,13 @@ export function emptyMapperProfileForm(): MapperProfileForm {
     // Empty by default, on purpose: a new format describes no door verb until its
     // author says otherwise, and that is the answer that is never wrong.
     door_open: '',
+    scan_command: '',
+    scan_prefix_n: '',
+    scan_prefix_e: '',
+    scan_prefix_s: '',
+    scan_prefix_w: '',
+    scan_prefix_u: '',
+    scan_prefix_d: '',
   };
 }
 
@@ -108,6 +122,7 @@ export function specToForm(spec: MapperSpec | undefined, name = ''): MapperProfi
   const form = emptyMapperProfileForm();
   if (!spec) return { ...form, name };
   const stops = spec.block?.stops || [];
+  const scanPrefixes = new Map((spec.scan?.directions ?? []).map((rule) => [rule.dir, rule.prefix]));
   return {
     name: name || spec.name || '',
     guard: spec.exits?.guard ?? '',
@@ -127,6 +142,13 @@ export function specToForm(spec: MapperSpec | undefined, name = ''): MapperProfi
     column_run: num(spec.header?.column_run, DEFAULT_COLUMN_RUN),
     ansi_start: spec.header?.ansi_start ?? '',
     door_open: spec.door_open ?? '',
+    scan_command: spec.scan?.command ?? '',
+    scan_prefix_n: scanPrefixes.get('N') ?? '',
+    scan_prefix_e: scanPrefixes.get('E') ?? '',
+    scan_prefix_s: scanPrefixes.get('S') ?? '',
+    scan_prefix_w: scanPrefixes.get('W') ?? '',
+    scan_prefix_u: scanPrefixes.get('U') ?? '',
+    scan_prefix_d: scanPrefixes.get('D') ?? '',
   };
 }
 
@@ -175,6 +197,18 @@ export function formToSpec(form: MapperProfileForm): MapperSpec {
   // is not "open with nothing", it is "this format does not describe doors", which
   // is what every format but RMUD's says.
   if (form.door_open) spec.door_open = form.door_open;
+  const scanDirections = [
+    ['N', form.scan_prefix_n], ['E', form.scan_prefix_e], ['S', form.scan_prefix_s],
+    ['W', form.scan_prefix_w], ['U', form.scan_prefix_u], ['D', form.scan_prefix_d],
+  ] as const;
+  if (form.scan_command || scanDirections.some(([, prefix]) => prefix)) {
+    spec.scan = {
+      command: form.scan_command,
+      directions: scanDirections
+        .filter(([, prefix]) => prefix !== '')
+        .map(([dir, prefix]) => ({ dir, prefix })),
+    };
+  }
   return spec;
 }
 

@@ -48,3 +48,20 @@ func (w *World) Apply(command string) (Room, bool) {
 	w.current = next
 	return w.Current(), true
 }
+
+// ScanLines returns the RMUD-shaped surroundings response for the current room.
+// It is presentation truth from the fake MUD, not mapper/storage data.
+func (w *World) ScanLines() []string {
+	prefix := map[string]string{
+		"N": "На севере:", "E": "На востоке:", "S": "На юге:",
+		"W": "На западе:", "U": "Наверху:", "D": "Внизу:",
+	}
+	dirs := []string{"N", "E", "S", "W", "U", "D"}
+	lines := make([]string, 0, len(transitions[w.current]))
+	for _, dir := range dirs {
+		if target, ok := transitions[w.current][dir]; ok {
+			lines = append(lines, prefix[dir]+" "+rooms[target].Hint+".")
+		}
+	}
+	return lines
+}

@@ -97,6 +97,8 @@ export interface ServerMessage {
   room_x?: number;
   room_y?: number;
   room_l?: number;
+  room_scan?: Array<{ dir: string; hint: string }>;
+  room_scan_recording_revision?: number;
   map_recording?: {
     mode: "off" | "armed" | "recording" | "conflict";
     reason?: string;

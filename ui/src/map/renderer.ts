@@ -101,6 +101,21 @@ export interface GhostCell {
   label?: string;
 }
 
+export interface FrontierHint {
+  dir: string;
+  hint: string;
+}
+
+// Ephemeral scan result for the confirmed current room. It is deliberately not
+// a SlimRoom: it has no identity, click target, route node, or persistence.
+export interface ScannedFrontier {
+  zone: string;
+  x: number;
+  y: number;
+  l: number;
+  hints: FrontierHint[];
+}
+
 export type RoomClickHandler = (room: SlimRoom) => void;
 
 export type ZoneCoord = { x: number; y: number; l: number };
@@ -118,6 +133,7 @@ export class MapRenderer {
   private view: View = { s: 1, ox: 0, oy: 0 };
   private marker: Marker | null = null;
   private ghost: GhostCell | null = null;
+  private frontier: ScannedFrontier | null = null;
   // Selection is intentionally canvas-owned. Even an 8k-room operation keeps
   // one Set and one O(visible rooms) paint pass, never a DOM node per room.
   private selectionMode = false;
@@ -231,6 +247,7 @@ export class MapRenderer {
     this.level = 0;
     this.marker = null;
     this.ghost = null;
+    this.frontier = null;
     this.clearSelection(false);
     this.view = { s: 1, ox: 0, oy: 0 };
     this.render();
@@ -294,6 +311,12 @@ export class MapRenderer {
 
   currentGhost(): GhostCell | null {
     return this.ghost;
+  }
+
+  setFrontier(frontier: ScannedFrontier | null): void {
+    if (sameFrontier(this.frontier, frontier)) return;
+    this.frontier = frontier;
+    this.render();
   }
 
   // Center the view on a game coord and (optionally) switch floors, used by both
@@ -421,6 +444,7 @@ export class MapRenderer {
     }
     if (this.rooms.length === 0) {
       // Nothing to draw for rooms — but the player marker still must paint.
+      this.paintScannedFrontier(S, half, AL);
       this.paintMarker(S, half, AL);
       return;
     }
@@ -582,7 +606,71 @@ export class MapRenderer {
       }
     }
 
+    this.paintScannedFrontier(S, half, AL);
     this.paintMarker(S, half, AL);
+  }
+
+  private paintScannedFrontier(S: number, half: number, AL: number): void {
+    const frontier = this.frontier;
+    if (!frontier || frontier.zone !== this.zoneName) return;
+    const room = this.findRoom(frontier.x, frontier.y, frontier.l);
+    const level = room ? displayLevel(room) : frontier.l;
+    if (level !== AL) return;
+    const anchor = room ?? ({ x: frontier.x, y: frontier.y } as SlimRoom);
+    const cx = screenX(anchor) * CELL * S + this.view.ox;
+    const cy = screenY(anchor) * CELL * S + this.view.oy;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.strokeStyle = "rgba(84,232,136,.9)";
+    ctx.fillStyle = COL.ink;
+    ctx.lineWidth = Math.max(1.5, 2.5 * S);
+    ctx.font = `${Math.max(9, Math.round(9 * S))}px monospace`;
+    ctx.textBaseline = "middle";
+    for (const item of frontier.hints) {
+      const v = DIR_SCREEN_VEC[item.dir];
+      if (!v) {
+        if (item.dir !== "U" && item.dir !== "D") continue;
+        const sign = item.dir === "U" ? -1 : 1;
+        const y = cy + sign * (half + 12 * S);
+        ctx.textAlign = "left";
+        ctx.fillText(`${item.dir === "U" ? "↑" : "↓"} ? ${shortScanHint(item.hint)}`, cx + half + 3 * S, y);
+        continue;
+      }
+      const [vx, vy] = v;
+      const px = -vy, py = vx;
+      const targetX = cx + vx * CELL * S;
+      const targetY = cy + vy * CELL * S;
+      const nearX = targetX - vx * half;
+      const nearY = targetY - vy * half;
+
+      // Extend the ordinary stub past the marker ring to the near face of the
+      // unknown cell. Then draw only the NEAR HALF of its outline: a full square
+      // would falsely claim that the mapper knows a room already exists there.
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(nearX, nearY);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(nearX + px * half, nearY + py * half);
+      ctx.lineTo(nearX - px * half, nearY - py * half);
+      ctx.lineTo(nearX - px * half + vx * half, nearY - py * half + vy * half);
+      ctx.moveTo(nearX + px * half, nearY + py * half);
+      ctx.lineTo(nearX + px * half + vx * half, nearY + py * half + vy * half);
+      ctx.stroke();
+
+      const label = `? ${shortScanHint(item.hint)}`;
+      if (vx > 0) {
+        ctx.textAlign = "left";
+        ctx.fillText(label, targetX + 3 * S, targetY);
+      } else if (vx < 0) {
+        ctx.textAlign = "right";
+        ctx.fillText(label, targetX - 3 * S, targetY);
+      } else {
+        ctx.textAlign = "center";
+        ctx.fillText(label, targetX, targetY + vy * (half + 8 * S));
+      }
+    }
+    ctx.restore();
   }
 
   private paintCrossZoneNotch(
@@ -1185,6 +1273,17 @@ function sameGhost(a: GhostCell | null, b: GhostCell | null): boolean {
     a.color === b.color &&
     a.label === b.label
   );
+}
+
+function sameFrontier(a: ScannedFrontier | null, b: ScannedFrontier | null): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.zone !== b.zone || a.x !== b.x || a.y !== b.y || a.l !== b.l || a.hints.length !== b.hints.length) return false;
+  return a.hints.every((hint, i) => hint.dir === b.hints[i]?.dir && hint.hint === b.hints[i]?.hint);
+}
+
+function shortScanHint(hint: string): string {
+  const text = hint.trim();
+  return text.length > 28 ? `${text.slice(0, 27)}…` : text;
 }
 
 export { EMOJI };

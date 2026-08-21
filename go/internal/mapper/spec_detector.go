@@ -79,6 +79,10 @@ func (d *SpecDetector) Profile() Profile { return d.acc.Profile() }
 // everything else about that mud.
 func (d *SpecDetector) DoorOpenTemplate() string { return d.acc.Profile().DoorOpen() }
 
+// ScanConfig implements ScanProvider using this declarative profile's optional
+// server probe contract.
+func (d *SpecDetector) ScanConfig() (ScanConfig, bool) { return d.acc.Profile().Scan() }
+
 // ConformanceCases / FillerLine implement Conformer.
 func (d *SpecDetector) ConformanceCases() []ConformanceCase { return d.cases }
 func (d *SpecDetector) FillerLine() Line                    { return d.filler }

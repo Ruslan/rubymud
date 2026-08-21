@@ -950,6 +950,93 @@ func TestProfileSpecJSONRoundTrip(t *testing.T) {
 	}
 }
 
+func TestRMUDScanConfigMatchesObservedSixDirections(t *testing.T) {
+	p, err := Compile(RMUDSpec())
+	if err != nil {
+		t.Fatal(err)
+	}
+	scan, ok := p.Scan()
+	if !ok {
+		t.Fatal("builtin RMUD scan is disabled")
+	}
+	if scan.Command != "scan" || scan.MaxLines != 32 || !scan.StopBlank {
+		t.Fatalf("scan config = %+v", scan)
+	}
+	want := map[string]string{
+		"N": "На севере:", "E": "На востоке:", "S": "На юге:",
+		"W": "На западе:", "U": "Наверху:", "D": "Внизу:",
+	}
+	for dir, line := range map[string]string{
+		"N": " На севере: Северная тропа.", "E": "На востоке: Дом.",
+		"S": "   На юге: Овраг.", "W": "На западе: Мост.",
+		"U": " Наверху: Таверна.", "D": "Внизу: слишком темно.",
+	} {
+		gotDir, hint, matched := scan.Match(line)
+		if !matched || gotDir != dir || hint == "" {
+			t.Errorf("Match(%q) = %q, %q, %v", line, gotDir, hint, matched)
+		}
+	}
+	for _, rule := range scan.Directions {
+		if want[rule.Dir] != rule.Prefix {
+			t.Errorf("direction %+v, want prefix %q", rule, want[rule.Dir])
+		}
+	}
+}
+
+func TestScanSpecValidationAndLegacyAbsence(t *testing.T) {
+	base := RMUDSpec()
+	base.Scan = nil
+	if _, err := Compile(base); err != nil {
+		t.Fatalf("legacy spec without scan must compile: %v", err)
+	}
+	blob, err := json.Marshal(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(blob), `"scan"`) {
+		t.Fatalf("disabled scan serialized: %s", blob)
+	}
+
+	for name, mutate := range map[string]func(*ProfileSpec){
+		"empty command":       func(s *ProfileSpec) { s.Scan.Command = " " },
+		"multiline command":   func(s *ProfileSpec) { s.Scan.Command = "scan\nnorth" },
+		"movement command":    func(s *ProfileSpec) { s.Scan.Command = "e" },
+		"bad direction":       func(s *ProfileSpec) { s.Scan.Directions[0].Dir = "NE" },
+		"duplicate direction": func(s *ProfileSpec) { s.Scan.Directions[1].Dir = s.Scan.Directions[0].Dir },
+		"empty prefix":        func(s *ProfileSpec) { s.Scan.Directions[0].Prefix = " " },
+		"duplicate prefix":    func(s *ProfileSpec) { s.Scan.Directions[1].Prefix = s.Scan.Directions[0].Prefix },
+		"overlapping prefix":  func(s *ProfileSpec) { s.Scan.Directions[1].Prefix = s.Scan.Directions[0].Prefix + " дальше" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s := RMUDSpec()
+			mutate(&s)
+			if _, err := Compile(s); err == nil {
+				t.Fatal("invalid scan spec compiled")
+			}
+		})
+	}
+
+	withPrompt := RMUDSpec()
+	withPrompt.Prompt = `^>$`
+	p, err := Compile(withPrompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scan, _ := p.Scan()
+	if scan.Boundary(">") {
+		t.Fatal("scan used prompt that was not enabled as a block stop")
+	}
+	withPrompt.Block.Stops = append(withPrompt.Block.Stops, StopPrompt)
+	p, err = Compile(withPrompt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scan, _ = p.Scan()
+	if !scan.Boundary(">") {
+		t.Fatal("scan ignored enabled prompt boundary")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // Hot path: a non-exits line must not allocate.
 // ---------------------------------------------------------------------------
