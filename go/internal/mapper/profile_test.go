@@ -973,6 +973,12 @@ func TestRMUDScanConfigMatchesObservedSixDirections(t *testing.T) {
 	if scan.Command != "scan" || scan.MaxLines != 32 || !scan.StopBlank {
 		t.Fatalf("scan config = %+v", scan)
 	}
+	if !scan.RoomBoundary("") || scan.RoomBoundary("301ж 100б Выходы:С>") {
+		t.Fatal("RMUD scan did not wait for its blank room boundary")
+	}
+	if !scan.HasRoomBoundary() {
+		t.Fatal("RMUD scan did not expose its room boundary")
+	}
 	want := map[string]string{
 		"N": "На севере:", "E": "На востоке:", "S": "На юге:",
 		"W": "На западе:", "U": "Наверху:", "D": "Внизу:",
@@ -1045,6 +1051,20 @@ func TestScanSpecValidationAndLegacyAbsence(t *testing.T) {
 	scan, _ = p.Scan()
 	if !scan.Boundary(">") {
 		t.Fatal("scan ignored enabled prompt boundary")
+	}
+	if scan.RoomBoundary("") || !scan.RoomBoundary(">") {
+		t.Fatal("prompt-enabled scan must wait through a preceding blank for the prompt")
+	}
+
+	maxOnly := RMUDSpec()
+	maxOnly.Block.Stops = []BlockStop{StopMaxLines}
+	p, err = Compile(maxOnly)
+	if err != nil {
+		t.Fatal(err)
+	}
+	scan, _ = p.Scan()
+	if scan.HasRoomBoundary() || scan.RoomBoundary("") {
+		t.Fatal("max-lines-only scan invented a stream boundary")
 	}
 }
 

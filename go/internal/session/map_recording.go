@@ -317,6 +317,7 @@ func (s *Session) stopMapRecordingLocked(reason string) {
 	s.mapRecordingPending = s.mapRecordingPending[:0]
 	s.mapRecordingWrites = 0
 	s.mapReconcilePreview = nil
+	s.mapScanAfterBoundary = nil
 	s.cancelMapScanCaptureLocked()
 	s.mapScanSnapshot = nil
 	if changed {
@@ -546,6 +547,7 @@ func (s *Session) applyMapReconciliationLocked(conflictID uint64, token string) 
 }
 
 func (s *Session) recordAcceptedMapMoveLocked(command, dir, source string, authoritativeExpected *mapper.Coord) {
+	s.mapScanAfterBoundary = nil
 	s.cancelMapScanCaptureLocked()
 	s.mapScanSnapshot = nil
 	if s.mapTracker == nil || (s.mapRecordingMode != MapRecordingArmed && s.mapRecordingMode != MapRecordingRecording) {

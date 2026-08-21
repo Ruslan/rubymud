@@ -61,6 +61,12 @@ arrows. This layer is canvas-only presentation: it must never enter `SlimRoom`,
 hit-testing, routing, selection, or map persistence. The raw server hint is
 displayed without translation.
 
+For a scan scheduled by a newly parsed room, the server reserves the probe on
+the exits event but writes the command only after that room format's trailing
+blank or prompt boundary. Otherwise RMUD's blank after `[ Exits: ... ]` can race
+the detached writer and be mistaken for an empty scan response. Scans started
+later from an already settled anchor do not need this boundary gate.
+
 ## Obscured Mapper Rooms
 
 A declarative room format may list exact `obscured_lines`: server phrases that

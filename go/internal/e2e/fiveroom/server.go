@@ -18,6 +18,7 @@ const (
 	maxCommandBytes = 256
 	readIdleTimeout = 30 * time.Second
 	writeTimeout    = 5 * time.Second
+	roomBoundaryLag = 20 * time.Millisecond
 )
 
 type TraceEntry struct {
@@ -49,7 +50,8 @@ type Server struct {
 // Options changes only fixture presentation. DarkRoom makes that room emit the
 // exact RMUD visibility-loss block until the same connection sends `torch`.
 type Options struct {
-	DarkRoom int
+	DarkRoom     int
+	RoomBoundary bool
 }
 
 func Listen(addr, tracePath string) (*Server, error) {
@@ -180,10 +182,22 @@ func (s *Server) writeObservedRoom(conn net.Conn, room Room, lit bool) error {
 		if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
 			return err
 		}
-		_, err := fmt.Fprintf(conn, "Здесь кромешная тьма.\r\n[ Exits: %s ]\r\n", room.Exits)
+		if _, err := fmt.Fprintf(conn, "Здесь кромешная тьма.\r\n[ Exits: %s ]\r\n", room.Exits); err != nil {
+			return err
+		}
+	} else if err := writeRoomBlock(conn, room); err != nil {
 		return err
 	}
-	return writeRoomBlock(conn, room)
+	if !s.options.RoomBoundary {
+		return nil
+	}
+	// Give mudhost's detached scan writer the same scheduling window observed on
+	// RMUD before the room's trailing blank arrives. Without this deterministic
+	// gap, loopback commonly delivers the whole fixture block in one read and
+	// hides the premature-capture regression that the live server exposes.
+	time.Sleep(roomBoundaryLag)
+	_, err := io.WriteString(conn, "\r\n")
+	return err
 }
 
 func writeScanBlock(conn net.Conn, lines []string) error {

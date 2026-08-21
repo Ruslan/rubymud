@@ -19,6 +19,7 @@ func main() {
 	listen := flag.String("listen", "127.0.0.1:0", "loopback listen address")
 	trace := flag.String("trace", "", "JSONL command trace path")
 	darkRoom := flag.Int("dark-room", 0, "room id hidden until the client sends torch")
+	roomBoundary := flag.Bool("room-boundary", false, "append the RMUD blank boundary after each room")
 	flag.Parse()
 	if *trace == "" {
 		fatal(fmt.Errorf("--trace is required"))
@@ -27,7 +28,7 @@ func main() {
 	if err != nil || (host != "127.0.0.1" && host != "localhost") {
 		fatal(fmt.Errorf("--listen must be loopback host:port"))
 	}
-	server, err := fiveroom.ListenWithOptions(*listen, *trace, fiveroom.Options{DarkRoom: *darkRoom})
+	server, err := fiveroom.ListenWithOptions(*listen, *trace, fiveroom.Options{DarkRoom: *darkRoom, RoomBoundary: *roomBoundary})
 	if err != nil {
 		fatal(err)
 	}

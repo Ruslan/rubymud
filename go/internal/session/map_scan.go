@@ -47,6 +47,40 @@ func (s *Session) scheduleMapScan() {
 	}()
 }
 
+// scheduleMapScanAfterRoomBoundary reserves the exact current-room probe but
+// does not write it until the detector's trailing room boundary has passed.
+// Room events are emitted on the exits line; RMUD sends a blank after that
+// line, which otherwise races the detached writer and looks like an empty scan
+// response. Start/reload paths whose room boundary is already in the past keep
+// using scheduleMapScan directly.
+func (s *Session) scheduleMapScanAfterRoomBoundary() {
+	s.mapMu.Lock()
+	job, ok := s.prepareMapScanLocked()
+	if ok && job.config.HasRoomBoundary() {
+		s.mapScanAfterBoundary = &job
+	}
+	s.mapMu.Unlock()
+	if ok && !job.config.HasRoomBoundary() {
+		go func() {
+			defer s.recoverGoroutine("mapper scan writer")
+			s.writeMapScan(job)
+		}()
+	}
+}
+
+func (s *Session) takeMapScanAfterRoomBoundaryLocked(line string) *mapScanJob {
+	job := s.mapScanAfterBoundary
+	if job == nil || !job.config.RoomBoundary(line) {
+		return nil
+	}
+	s.mapScanAfterBoundary = nil
+	if !s.mapScanJobCurrentLocked(*job) {
+		return nil
+	}
+	copy := *job
+	return &copy
+}
+
 func (s *Session) prepareMapScanLocked() (mapScanJob, bool) {
 	if s.mapRecordingMode != MapRecordingArmed && s.mapRecordingMode != MapRecordingRecording {
 		return mapScanJob{}, false
@@ -239,6 +273,7 @@ func (s *Session) cancelMapScanForOutbound() {
 	// Invalidate both an installed capture and a writer goroutine that has been
 	// scheduled but has not reached the transport gate yet.
 	s.mapScanSequence++
+	s.mapScanAfterBoundary = nil
 	s.cancelMapScanCaptureLocked()
 	s.mapMu.Unlock()
 }

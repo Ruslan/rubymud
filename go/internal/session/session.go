@@ -163,6 +163,7 @@ type Session struct {
 	mapScanLast                    mapScanKey
 	mapScanLastOK                  bool
 	mapScanCapture                 *mapScanCapture
+	mapScanAfterBoundary           *mapScanJob
 	mapScanTimer                   *time.Timer
 	mapScanSnapshot                *ServerMsg
 

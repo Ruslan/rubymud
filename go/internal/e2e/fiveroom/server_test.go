@@ -77,7 +77,7 @@ func TestServerSendsRMUDBlocksIgnoresTelnetAndTracesCommands(t *testing.T) {
 
 func TestServerDarkRoomBecomesVisibleAfterTorch(t *testing.T) {
 	tracePath := filepath.Join(t.TempDir(), "trace.jsonl")
-	server, err := ListenWithOptions("127.0.0.1:0", tracePath, Options{DarkRoom: 2})
+	server, err := ListenWithOptions("127.0.0.1:0", tracePath, Options{DarkRoom: 2, RoomBoundary: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,16 +89,16 @@ func TestServerDarkRoomBecomesVisibleAfterTorch(t *testing.T) {
 	}
 	defer conn.Close()
 	reader := bufio.NewReader(conn)
-	if got := readBlock(t, reader); !strings.Contains(got, "Loop Room 1") {
+	if got := readLines(t, reader, 4); !strings.Contains(got, "Loop Room 1") || !strings.HasSuffix(got, "\r\n\r\n") {
 		t.Fatalf("initial block = %q", got)
 	}
 
 	writeCommand(t, conn, "E")
-	if got := readLines(t, reader, 2); got != "Здесь кромешная тьма.\r\n[ Exits: E W ]\r\n" {
+	if got := readLines(t, reader, 3); got != "Здесь кромешная тьма.\r\n[ Exits: E W ]\r\n\r\n" {
 		t.Fatalf("dark room block = %q", got)
 	}
 	writeCommand(t, conn, "W")
-	if got := readBlock(t, reader); !strings.Contains(got, "Loop Room 1") {
+	if got := readLines(t, reader, 4); !strings.Contains(got, "Loop Room 1") {
 		t.Fatalf("return block = %q", got)
 	}
 
@@ -107,7 +107,7 @@ func TestServerDarkRoomBecomesVisibleAfterTorch(t *testing.T) {
 		t.Fatalf("torch acknowledgement = %q", got)
 	}
 	writeCommand(t, conn, "E")
-	if got := readBlock(t, reader); !strings.Contains(got, "Loop Room 2") || strings.Contains(got, "кромешная тьма") {
+	if got := readLines(t, reader, 4); !strings.Contains(got, "Loop Room 2") || strings.Contains(got, "кромешная тьма") {
 		t.Fatalf("lit room block = %q", got)
 	}
 }

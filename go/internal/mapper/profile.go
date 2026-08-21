@@ -325,6 +325,25 @@ func (s ScanConfig) Boundary(line string) bool {
 	return s.promptRE != nil && s.promptRE.MatchString(strings.TrimSpace(line))
 }
 
+// RoomBoundary reports the line after which a scan command may safely be
+// written for a newly observed room. A configured prompt wins over StopBlank:
+// formats that emit both commonly place a blank before the prompt, and writing
+// between those two lines would let the trailing prompt terminate the scan.
+func (s ScanConfig) RoomBoundary(line string) bool {
+	line = strings.TrimSpace(line)
+	if s.promptRE != nil {
+		return s.promptRE.MatchString(line)
+	}
+	return s.StopBlank && line == ""
+}
+
+// HasRoomBoundary reports whether this format exposes a stream boundary after
+// a room. Max-lines-only formats have no such line and must start scanning
+// immediately after the exits event.
+func (s ScanConfig) HasRoomBoundary() bool {
+	return s.StopBlank || s.promptRE != nil
+}
+
 type compiledExitsRule struct {
 	guard string
 	re    *regexp.Regexp

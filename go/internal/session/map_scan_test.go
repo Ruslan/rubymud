@@ -191,6 +191,51 @@ func TestMapRecordingAutoScanRunsAgainAfterLeavingAndReturning(t *testing.T) {
 	waitFor(t, func() bool { return conn.String() == "scan\nscan\n" })
 }
 
+func TestMapRecordingAutoScanStartsAfterReturnedRoomBoundary(t *testing.T) {
+	tagA, tagB := 1, 2
+	rooms := []storage.Room{
+		{Zone: "Z", X: 0, Y: 0, L: 0, Tag: &tagA, Hint: "A", Desc: "a", Exits: "E U", EDirs: `["E","U"]`, Doors: `[]`},
+		{Zone: "Z", X: 0, Y: 1, L: 0, Tag: &tagB, Hint: "B", Desc: "b", Exits: "W", EDirs: `["W"]`, Doors: `[]`},
+	}
+	s, conn, messages := scanHarness(t)
+	s.mapTracker = mapper.NewTracker(buildTestMapIndex(7, rooms))
+	s.mapTracker.Anchor(mapper.Coord{Zone: "Z"})
+	if _, err := s.StartMapRecording(); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { return conn.String() == "scan\n" })
+	s.observeIncomingLine("Наверху: initial.", "Наверху: initial.")
+	s.observeIncomingLine("", "")
+
+	feedRoom := func(command string, lines ...string) {
+		t.Helper()
+		s.observeOutgoingMove(command, "input")
+		for _, line := range lines {
+			s.observeIncomingLine(line, line)
+		}
+	}
+	feedRoom("e", "B", "b", "[ Exits: W ]", "")
+	feedRoom("w", "A", "a", "[ Exits: E U ]")
+	time.Sleep(10 * time.Millisecond)
+	if got := conn.String(); got != "scan\n" {
+		t.Fatalf("scan written before returned room boundary: %q", got)
+	}
+
+	// RMUD terminates the room block after the exits event. This blank belongs
+	// to the room, not to the scan command that was just scheduled.
+	s.observeIncomingLine("", "")
+	waitFor(t, func() bool { return conn.String() == "scan\nscan\n" })
+	s.observeIncomingLine("Наверху: returned frontier.", "Наверху: returned frontier.")
+	s.observeIncomingLine("", "")
+
+	for _, msg := range messages.snapshot() {
+		if msg.Type == "room_scan" && len(msg.RoomScan) == 1 && msg.RoomScan[0].Hint == "returned frontier." {
+			return
+		}
+	}
+	t.Fatalf("returned room scan was lost at its trailing boundary: %+v", messages.snapshot())
+}
+
 func TestMapRecordingAutoScanBlankResponseClosesCapture(t *testing.T) {
 	s, conn, messages := scanHarness(t)
 	if _, err := s.StartMapRecording(); err != nil {

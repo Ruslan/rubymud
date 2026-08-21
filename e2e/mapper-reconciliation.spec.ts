@@ -101,7 +101,7 @@ test("reconciles the live five-room loop and survives restart", async ({ browser
 });
 
 test("handles darkness, then creates one provisional room and a two-way passage", async ({ page }) => {
-  stack = await LiveStack.start({ autorecord: true, darkRoom: 2 });
+  stack = await LiveStack.start({ autorecord: true, darkRoom: 2, roomBoundary: true });
   await installMapLayout(page);
   await page.goto(`${stack.baseURL}/?session_id=${stack.seed.session_id}`);
   await connectAnchorAndArm(page);

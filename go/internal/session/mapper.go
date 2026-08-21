@@ -483,13 +483,23 @@ func (s *Session) observeIncomingLine(plainText, raw string) {
 			gateHeld = false
 		}
 	}
-	defer releaseWalkIOGate()
+	var scanAfterBoundary *mapScanJob
+	defer func() {
+		releaseWalkIOGate()
+		if scanAfterBoundary != nil {
+			go func(job mapScanJob) {
+				defer s.recoverGoroutine("mapper scan writer")
+				s.writeMapScan(job)
+			}(*scanAfterBoundary)
+		}
+	}()
 
 	var toBroadcast []ServerMsg
 	var walkPosition *mapper.Position
 	recordingConflict := false
 
 	s.mapMu.Lock()
+	scanAfterBoundary = s.takeMapScanAfterRoomBoundaryLocked(plainText)
 	scanMsg, scanLine := s.consumeMapScanLineLocked(plainText)
 	if scanMsg != nil {
 		toBroadcast = append(toBroadcast, *scanMsg)
@@ -603,7 +613,7 @@ func (s *Session) observeIncomingLine(plainText, raw string) {
 	}
 
 	s.broadcastAll(toBroadcast)
-	s.scheduleMapScan()
+	s.scheduleMapScanAfterRoomBoundary()
 	if walkPosition != nil {
 		releaseWalkIOGate()
 		if recordingConflict {

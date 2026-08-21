@@ -17,6 +17,7 @@ type SeedResult = {
 export type LiveStackOptions = {
   autorecord?: boolean;
   darkRoom?: number;
+  roomBoundary?: boolean;
 };
 
 export class LiveStack {
@@ -50,6 +51,7 @@ export class LiveStack {
     const emulator = spawn(join(repoRoot, "bin", "e2e-five-room-mud"), [
       "--listen", "127.0.0.1:0", "--trace", tracePath,
       ...(options.darkRoom ? ["--dark-room", String(options.darkRoom)] : []),
+      ...(options.roomBoundary ? ["--room-boundary"] : []),
     ], { cwd: repoRoot, stdio: ["ignore", "pipe", "pipe"] });
     emulator.stderr!.pipe(createWriteStream(join(artifactsDir, "emulator.log")));
     const ready = await readJSONLine(emulator, 10_000) as { ready: boolean; host: string; port: number };
