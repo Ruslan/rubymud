@@ -293,6 +293,11 @@ input. It returns unseen selected-buffer output before the command boundary,
 then output received in the wait window. More than 1000 unseen lines are
 represented by the most recent 200 plus a notice. Command responses are capped
 at 200 lines. A `buffer` filters this response but does not route the command.
+After each complete successful transport write, the canonical expanded command
+is also shown live in every browser attached to that MUD session and persists
+across reload. A failed write is neither broadcast nor persisted as a sent
+command. This compatibility presentation needs an existing visible output line
+as its anchor; before the first output line there is no browser command hint.
 
 ### `mud_get_variables`
 

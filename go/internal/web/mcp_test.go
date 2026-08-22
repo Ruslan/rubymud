@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -26,10 +27,14 @@ import (
 
 type mockConn struct {
 	net.Conn
-	buf bytes.Buffer
+	buf      bytes.Buffer
+	writeErr error
 }
 
 func (m *mockConn) Write(b []byte) (n int, err error) {
+	if m.writeErr != nil {
+		return 0, m.writeErr
+	}
 	return m.buf.Write(b)
 }
 
@@ -226,6 +231,104 @@ func TestMCPSendCommand(t *testing.T) {
 	isError := result["isError"].(bool)
 	if isError {
 		t.Errorf("expected no error, got error result: %v", result)
+	}
+}
+
+func TestMCPSendCommandBroadcastsSuccessfulHintToEveryBrowser(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	if _, err := sess.SendCommandWithTrace("#alias {agentlook} {look here}", "input"); err != nil {
+		t.Fatalf("define alias: %v", err)
+	}
+	entryID, err := s.store.AppendLogEntry(sess.SessionID(), "main", "prompt>", "prompt>")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var first, second []session.ServerMsg
+	sess.AttachClient("first", func(msg session.ServerMsg) error {
+		first = append(first, msg)
+		return nil
+	})
+	sess.AttachClient("second", func(msg session.ServerMsg) error {
+		second = append(second, msg)
+		return nil
+	})
+	ts := httptest.NewServer(http.HandlerFunc(s.handleMCP))
+	defer ts.Close()
+
+	rpc := mcpCall(t, ts, "", "mud_send_command", fmt.Sprintf(`{"session_id":%d,"command":"agentlook","sync":0}`, sess.SessionID()))
+	if rpc.Error != nil || mcpToolIsError(t, rpc) {
+		t.Fatalf("MCP command failed: %+v", rpc)
+	}
+	for name, messages := range map[string][]session.ServerMsg{"first": first, "second": second} {
+		var hints []session.ServerMsg
+		for _, msg := range messages {
+			if msg.Type == "command_hint" {
+				hints = append(hints, msg)
+			}
+		}
+		if len(hints) != 1 || hints[0].Command != "look here" || hints[0].EntryID != entryID || hints[0].Buffer != "main" {
+			t.Fatalf("%s browser hints=%+v, want one canonical live hint on entry %d", name, hints, entryID)
+		}
+	}
+	entries, err := s.store.LogEntriesForBuffer(sess.SessionID(), "main", 10)
+	var restored []string
+	for _, entry := range entries {
+		if entry.ID == entryID {
+			restored = entry.Commands
+		}
+	}
+	if err != nil || len(restored) != 1 || restored[0] != "look here" {
+		t.Fatalf("restored entries=%+v err=%v, want one persisted canonical hint", entries, err)
+	}
+}
+
+func TestMCPSendCommandDoesNotBroadcastFailedWrite(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	if _, err := s.store.AppendLogEntry(sess.SessionID(), "main", "prompt>", "prompt>"); err != nil {
+		t.Fatal(err)
+	}
+	setMcpUnexportedField(t, sess, "conn", &mockConn{writeErr: errors.New("write failed")})
+	var messages []session.ServerMsg
+	sess.AttachClient("observer", func(msg session.ServerMsg) error {
+		messages = append(messages, msg)
+		return nil
+	})
+	ts := httptest.NewServer(http.HandlerFunc(s.handleMCP))
+	defer ts.Close()
+
+	rpc := mcpCall(t, ts, "", "mud_send_command", fmt.Sprintf(`{"session_id":%d,"command":"look","sync":0}`, sess.SessionID()))
+	if rpc.Error != nil || !mcpToolIsError(t, rpc) {
+		t.Fatalf("failed write result=%+v, want tool error", rpc)
+	}
+	for _, msg := range messages {
+		if msg.Type == "command_hint" {
+			t.Fatalf("failed MCP write was shown as sent: %+v", msg)
+		}
+	}
+	entries, err := s.store.LogEntriesForBuffer(sess.SessionID(), "main", 10)
+	if err != nil || len(entries) != 1 || len(entries[0].Commands) != 0 {
+		t.Fatalf("failed MCP write persisted as sent: entries=%+v err=%v", entries, err)
+	}
+}
+
+func TestGenericCommandCannotOptIntoTrustedMCPHintBySourceString(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	if _, err := s.store.AppendLogEntry(sess.SessionID(), "main", "prompt>", "prompt>"); err != nil {
+		t.Fatal(err)
+	}
+	var messages []session.ServerMsg
+	sess.AttachClient("observer", func(msg session.ServerMsg) error {
+		messages = append(messages, msg)
+		return nil
+	})
+
+	if err := sess.SendCommand("look", "mcp"); err != nil {
+		t.Fatal(err)
+	}
+	for _, msg := range messages {
+		if msg.Type == "command_hint" {
+			t.Fatalf("generic source string acquired trusted MCP publication: %+v", msg)
+		}
 	}
 }
 

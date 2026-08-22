@@ -2,7 +2,7 @@
 
 ## Статус
 
-Карточка открыта. Последний аудит фактического кода выполнен **2026-08-15**.
+Карточка открыта. Последний аудит фактического кода выполнен **2026-08-22**.
 
 Первый trace-срез решает основной browser happy path, но система пока не даёт
 сквозную гарантию «показано ровно то, что действительно было принято transport
@@ -96,7 +96,9 @@ stream. TXT download намеренно остался без этого кон�
 - без текущего `LogEntry` pending hint и persistent anchor отсутствуют;
 - Settings backend возвращает/search-ит commands, но UI их не рисует;
 - trigger и map-walk имеют отдельные write paths; scheduler и MCP уже используют
-  основной `SendCommand` family, но не имеют полного origin/event контракта;
+  основной `SendCommand` family. MCP теперь имеет успешный post-write live hint
+  для всех браузеров и совпадающий restore overlay, но ещё не first-class event;
+  scheduler не имеет полного origin/event контракта;
 - HTML и TXT export имеют разные гарантии.
 
 Проверки аудита прошли:
@@ -120,7 +122,8 @@ cd ui && npm test -- --run render.test.ts
 | Команда без существующего log anchor | Теряется как hint |
 | Multi-client live parity | Не реализована |
 | Occurrence-level canonical storage | Не реализована |
-| Trigger/map-walk/MCP/timer parity | Не реализована |
+| MCP live/restore compatibility hint | Реализован после успешного write при наличии log anchor |
+| Trigger/map-walk/timer и first-class MCP event parity | Не реализована |
 | Restore/search/admin Logs parity | Частично |
 | HTML export legacy `command_hint` для input/key/button/scheduler/MCP | Реализован |
 | Trigger commands в restore/search/export | Не реализованы |

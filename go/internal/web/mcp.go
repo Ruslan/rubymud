@@ -1144,7 +1144,7 @@ func (s *Server) mcpCallTool(ctx context.Context, params json.RawMessage, mcpSes
 				return nil, err
 			}
 		}
-		if err := sess.SendCommand(command, "mcp"); err != nil {
+		if err := sess.SendMCPCommand(command); err != nil {
 			content = fmt.Sprintf("Error sending command: %v", err)
 			isError = true
 			break

@@ -533,33 +533,78 @@ func (s *Store) AppendCommandOverlay(entryID int64, command string) error {
 }
 
 func (s *Store) AppendCommandHintToLatestLogEntry(sessionID int64, command string) error {
-	command = strings.TrimSpace(command)
-	if command == "" {
-		return nil
-	}
+	_, _, err := s.AppendCommandHintToLatestLogEntryWithAnchor(sessionID, command)
+	return err
+}
 
+// CommandHintAnchor identifies the already-visible row updated by a legacy
+// command hint. The buffer is carried with the id so the live browser update
+// lands in the same pane as the durable overlay.
+type CommandHintAnchor struct {
+	EntryID int64
+	Buffer  string
+}
+
+// LatestCommandHintAnchor captures the pre-command presentation boundary
+// without writing an overlay. MCP uses this so a failed transport write cannot
+// leave a durable false "sent" hint behind.
+func (s *Store) LatestCommandHintAnchor(sessionID int64) (CommandHintAnchor, error) {
 	var lastEntry LogRecord
 	err := s.db.Where("session_id = ?", sessionID).Where(visibleLogEntrySQL).Order("created_at DESC, id DESC").First(&lastEntry).Error
 	if err == gorm.ErrRecordNotFound {
-		return nil
+		return CommandHintAnchor{}, nil
 	}
 	if err != nil {
-		return err
+		return CommandHintAnchor{}, err
 	}
+	buffer := lastEntry.WindowName
+	if buffer == "" {
+		buffer = "main"
+	}
+	return CommandHintAnchor{EntryID: lastEntry.ID, Buffer: buffer}, nil
+}
 
+// AppendCommandHintAtAnchor persists a canonical command on a boundary captured
+// before its transport write. It deliberately does not search for "latest"
+// again: fast MUD output may already have arrived after the command.
+func (s *Store) AppendCommandHintAtAnchor(anchor CommandHintAnchor, command string) error {
+	command = strings.TrimSpace(command)
+	if command == "" || anchor.EntryID <= 0 {
+		return nil
+	}
 	payload, err := json.Marshal(commandOverlayPayload{Command: command})
 	if err != nil {
 		return err
 	}
-
-	overlay := LogOverlay{
-		LogEntryID:  lastEntry.ID,
+	return s.db.Create(&LogOverlay{
+		LogEntryID:  anchor.EntryID,
 		OverlayType: "command_hint",
 		PayloadJSON: string(payload),
 		SourceType:  "client",
 		CreatedAt:   nowSQLiteTime(),
+	}).Error
+}
+
+// AppendCommandHintToLatestLogEntryWithAnchor persists the legacy command-hint
+// overlay and returns the exact visible row/buffer a live client must update.
+// A zero entry id is the established no-output-yet case: there is no durable
+// anchor, so callers must not invent a transient hint that disappears on reload.
+func (s *Store) AppendCommandHintToLatestLogEntryWithAnchor(sessionID int64, command string) (entryID int64, buffer string, err error) {
+	command = strings.TrimSpace(command)
+	if command == "" {
+		return 0, "", nil
 	}
-	return s.db.Create(&overlay).Error
+	anchor, err := s.LatestCommandHintAnchor(sessionID)
+	if err != nil {
+		return 0, "", err
+	}
+	if anchor.EntryID == 0 {
+		return 0, "", nil
+	}
+	if err := s.AppendCommandHintAtAnchor(anchor, command); err != nil {
+		return 0, "", err
+	}
+	return anchor.EntryID, anchor.Buffer, nil
 }
 
 func (s *Store) AppendButtonOverlay(logEntryID int64, label, command string) error {

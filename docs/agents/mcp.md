@@ -45,6 +45,13 @@ a handler-only compatibility alias for `mud_look_map`, not a `tools/list` item.
 - Text continuity is per MCP session, MUD session, and exact buffer. It is
   ephemeral, buffer-scoped, and advances only through visible output returned
   to the caller.
+- A successful `mud_send_command` publishes each canonical command (after alias
+  and VM expansion) as a live `command_hint` to every browser attached to the
+  MUD session. The durable overlay is written only after the transport accepts
+  the complete frame, against the visible pre-command log anchor, so reload and
+  live presentation agree and a failed write is never shown as sent. With no
+  visible log anchor yet, the existing legacy hint model has nowhere durable to
+  attach and intentionally emits no transient browser hint.
 - Omitted text `buffer` means `main`; it filters reads and command responses,
   never command routing.
 - Expected operational failures are text tool results with `isError: true`.

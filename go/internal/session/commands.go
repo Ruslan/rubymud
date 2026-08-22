@@ -63,6 +63,18 @@ func (s *Session) SendCommand(command string, source string) error {
 }
 
 func (s *Session) SendCommandWithTrace(command string, source string) ([]string, error) {
+	return s.sendCommandWithTrace(command, source, false)
+}
+
+// SendMCPCommand is the trusted MCP boundary. A browser-provided source string
+// must not opt into public MCP command hints, so the capability is an explicit
+// method call from the authenticated MCP handler rather than source == "mcp".
+func (s *Session) SendMCPCommand(command string) error {
+	_, err := s.sendCommandWithTrace(command, "mcp", true)
+	return err
+}
+
+func (s *Session) sendCommandWithTrace(command string, source string, publishMCP bool) ([]string, error) {
 	if source == "" {
 		source = "input"
 	}
@@ -150,20 +162,47 @@ func (s *Session) SendCommandWithTrace(command string, source string) ([]string,
 		if err := s.store.AppendHistoryEntry(s.sessionID, historyKind, cmd); err != nil {
 			log.Printf("append history entry failed: %v", err)
 		}
+		var hintEntryID int64
+		var hintBuffer string
 		// Skip command_hint overlays for connect-sourced (session-init/auto-login)
 		// commands so auto-login credentials stay out of command_hint overlays —
 		// and therefore out of the colored-HTML log export, which reads those
 		// overlays (see docs/dev/planned/html-log-export.md security note).
 		if source != "connect" {
-			if err := s.store.AppendCommandHintToLatestLogEntry(s.sessionID, cmd); err != nil {
-				log.Printf("append command hint failed: %v", err)
+			if publishMCP {
+				if anchor, err := s.store.LatestCommandHintAnchor(s.sessionID); err != nil {
+					log.Printf("capture MCP command hint anchor failed: %v", err)
+				} else {
+					hintEntryID, hintBuffer = anchor.EntryID, anchor.Buffer
+				}
+			} else {
+				if entryID, buffer, err := s.store.AppendCommandHintToLatestLogEntryWithAnchor(s.sessionID, cmd); err != nil {
+					log.Printf("append command hint failed: %v", err)
+				} else {
+					hintEntryID, hintBuffer = entryID, buffer
+				}
 			}
+		}
+		publishMCPHint := func() {
+			// Browser input has its origin-only optimistic trace. MCP has no
+			// browser origin, so persist and publish its canonical command to
+			// every observer only after the transport accepted the frame.
+			if !publishMCP || hintEntryID <= 0 {
+				return
+			}
+			anchor := storage.CommandHintAnchor{EntryID: hintEntryID, Buffer: hintBuffer}
+			if err := s.store.AppendCommandHintAtAnchor(anchor, cmd); err != nil {
+				log.Printf("append successful MCP command hint failed: %v", err)
+				return
+			}
+			s.broadcastCommandHint(cmd, hintEntryID, hintBuffer)
 		}
 		if manualMove {
 			if err := s.commitManualMapMove(cmd, dir, source); err != nil {
 				return canonicalCommands, err
 			}
 			canonicalCommands = append(canonicalCommands, cmd)
+			publishMCPHint()
 			continue
 		}
 		if handled, err := s.writeManualMapScan(cmd); handled {
@@ -171,6 +210,7 @@ func (s *Session) SendCommandWithTrace(command string, source string) ([]string,
 				return canonicalCommands, err
 			}
 			canonicalCommands = append(canonicalCommands, cmd)
+			publishMCPHint()
 			s.mu.Lock()
 			s.lastCommandAt = time.Now()
 			s.mu.Unlock()
@@ -189,6 +229,7 @@ func (s *Session) SendCommandWithTrace(command string, source string) ([]string,
 		// direction in the FIFO on a mid-speedwalk write error.
 		s.observeOutgoingMove(cmd, source)
 		canonicalCommands = append(canonicalCommands, cmd)
+		publishMCPHint()
 		s.mu.Lock()
 		s.lastCommandAt = time.Now()
 		s.mu.Unlock()
