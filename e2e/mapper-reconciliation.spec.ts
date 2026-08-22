@@ -235,6 +235,7 @@ test("confirms a crate-revealed mutable down exit and keeps OBS recording", asyn
   await expect.poll(() => stack.query<{ n: number }>(
     `SELECT count(*) AS n FROM rooms WHERE map_set_id=${stack.seed.map_set_id} AND zone='Хилло' AND l=-1`,
   )).toEqual([{ n: 1 }]);
+  await expect(page.locator(".map-pane__floors button.on")).toHaveText("-1");
   expect(stack.query<{ dir: string; to_l: number }>(
     `SELECT dir,to_l FROM map_edges WHERE map_set_id=${stack.seed.map_set_id} AND source='autorecord' AND from_zone='Хилло' ORDER BY from_l DESC,dir`,
   )).toEqual([{ dir: "D", to_l: -1 }, { dir: "U", to_l: 0 }]);
@@ -253,6 +254,8 @@ test("confirms a crate-revealed mutable down exit and keeps OBS recording", asyn
   await canvas.click({ position: { x: box!.width / 2, y: box!.height / 2 } });
   const menu = page.locator(".map-cell-menu");
   await menu.locator("summary", { hasText: "Room properties…" }).click();
+  await expect(menu.getByRole("button", { name: "Delete leaf room" }))
+    .toHaveCSS("background-color", "rgb(111, 32, 32)");
   page.once("dialog", (dialog) => dialog.accept());
   await menu.getByRole("button", { name: "Delete leaf room" }).click();
   await expect(page.locator(".map-pane__status")).toContainText("Room deleted; Undo is available");

@@ -154,6 +154,29 @@ describe("map pane corpus refresh", () => {
     expect(internal.renderer.findRoom(4, 2, 0)?.h).toBe("updated after edit");
   });
 
+  it("keeps following a newly recorded lower floor through rooms_changed", async () => {
+    await vi.waitFor(() => expect((pane as unknown as PaneInternals).currentZone).toBe("A"));
+    await pane.onRoomPosition(playerInA);
+
+    // room_position is intentionally published before rooms_changed. At this
+    // instant the browser's old room corpus does not know that level -1 exists.
+    await pane.onRoomPosition({ ...playerInA, l: -1 });
+    const lower = room({ z: "A", h: "new lower room", l: -1 });
+    fetchMock.mockImplementation((url: string) => {
+      if (url.includes("map-live-room")) return Promise.resolve(jsonRes({ seen: false }));
+      if (url.includes("/zones")) return Promise.resolve(jsonRes([{ zone: "A", room_count: 2 }]));
+      if (url.includes("zone=A")) return Promise.resolve(jsonRes([room({ z: "A", h: "player room" }), lower]));
+      throw new Error(`unexpected fetch ${url}`);
+    });
+
+    await pane.refreshRooms();
+
+    const internal = pane as unknown as PaneInternals;
+    expect(internal.renderer.findRoom(0, 0, -1)?.h).toBe("new lower room");
+    expect(internal.renderer.level).toBe(-1);
+    expect(pane.root.querySelector<HTMLButtonElement>(".map-pane__floors button.on")?.textContent).toBe("-1");
+  });
+
   it("falls back to the player zone when the current zone disappears", async () => {
     const internal = await viewB();
     zones = [{ zone: "A", room_count: 1 }];

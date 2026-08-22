@@ -1773,7 +1773,6 @@ body {
 }
 .map-cell-menu__room-properties > summary { color: #d7e5da; cursor: pointer; }
 .map-cell-menu__delete-help { margin: 7px 0 5px; font-size: 11px; color: #aab8ae; }
-.map-cell-menu__delete-leaf { width: 100%; border-color: #7c3d3d; color: #ff9a9a; }
 .map-cell-menu__mutable-exits {
   border: 1px solid #1b2a20;
   border-radius: 5px;
@@ -1869,6 +1868,16 @@ body {
 }
 .map-cell-menu__item:hover:not(:disabled) {
   border-color: #2f8a52;
+}
+.map-cell-menu__item.map-cell-menu__delete-leaf {
+  width: 100%;
+  background: #6f2020;
+  border-color: #b74a4a;
+  color: #fff;
+}
+.map-cell-menu__item.map-cell-menu__delete-leaf:hover:not(:disabled) {
+  background: #8a2929;
+  border-color: #df6868;
 }
 .map-cell-menu__item:disabled {
   opacity: 0.45;

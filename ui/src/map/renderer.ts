@@ -326,7 +326,11 @@ export class MapRenderer {
     const targetLevel = room ? displayLevel(room) : l;
     const targetX = room ? screenY(room) : x;
     const targetY = room ? screenX(room) : y;
-    if (targetLevel !== this.level && this.levels.includes(targetLevel)) {
+    // A fresh autorecord position is published before rooms_changed refetches
+    // the zone. Follow must remember that not-yet-cached level; replaceRooms
+    // will then preserve it once the committed room arrives. The same behaviour
+    // makes a vertical predicted ghost visible while its room is still pending.
+    if (targetLevel !== this.level) {
       this.level = targetLevel;
       this.onLevelChange?.(targetLevel);
     }

@@ -80,6 +80,12 @@ directions for confirmation, never automatic mutation. The cell menu exposes the
 same six-direction property editor. `U/D` scan hints use the same green frontier
 color as cardinal half-room hints.
 
+When Follow receives a position on a level absent from the browser's cached
+zone (the normal autorecord order is `room_position` before `rooms_changed`),
+the renderer retains that prospective level. The subsequent bounded zone reload
+preserves it and exposes the new floor immediately; it must not require a page
+reload or snap back to the old level.
+
 Rare/destructive room actions live under the cell menu's collapsed **Room
 properties** section. **Delete leaf room** is intentionally narrower than the MCP
 room-delete tool: the server refuses the player's current coordinate and, in the
