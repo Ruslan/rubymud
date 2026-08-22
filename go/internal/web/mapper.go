@@ -680,12 +680,13 @@ func (s *Server) mapCellPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Zone        string   `json:"zone"`
-		X           int      `json:"x"`
-		Y           int      `json:"y"`
-		L           int      `json:"l"`
-		AddExits    []string `json:"add_exits"`
-		RemoveExits []string `json:"remove_exits"`
+		Zone         string    `json:"zone"`
+		X            int       `json:"x"`
+		Y            int       `json:"y"`
+		L            int       `json:"l"`
+		AddExits     []string  `json:"add_exits"`
+		RemoveExits  []string  `json:"remove_exits"`
+		MutableExits *[]string `json:"mutable_exits"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
@@ -707,14 +708,25 @@ func (s *Server) mapCellPatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperSessionNotConnected, nil))
 		return
 	}
+	kind := storage.TopoPatchExits
+	if body.MutableExits != nil {
+		if len(body.AddExits) > 0 || len(body.RemoveExits) > 0 {
+			http.Error(w, "mutable_exits cannot be combined with exit patches", http.StatusBadRequest)
+			return
+		}
+		kind = storage.TopoSetMutableExits
+	}
 	op := storage.TopologyOp{
-		Kind:        storage.TopoPatchExits,
+		Kind:        kind,
 		Zone:        body.Zone,
 		X:           body.X,
 		Y:           body.Y,
 		L:           body.L,
 		AddExits:    normalizeDirs(body.AddExits),
 		RemoveExits: normalizeDirs(body.RemoveExits),
+	}
+	if body.MutableExits != nil {
+		op.MutableExits = normalizeDirs(*body.MutableExits)
 	}
 	res, err := sess.WriteTopology(op)
 	if err != nil {
@@ -729,6 +741,7 @@ func (s *Server) mapCellPatch(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperRoomNotFound, nil))
 		return
 	}
+	s.manager.RefreshSharedTopology(res.SetID, id)
 	out := map[string]any{"ok": true}
 	// A fork means the session's active set changed — tell the UI/agent so it can
 	// switch to the new editable set.

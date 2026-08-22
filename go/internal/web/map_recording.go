@@ -96,6 +96,38 @@ func (s *Server) mapReconciliationApply(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, map[string]any{"applied": true, "state": state})
 }
 
+func (s *Server) mapReconciliationAcceptMutableExits(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
+	var in struct {
+		ConflictID uint64   `json:"conflict_id"`
+		Directions []string `json:"directions"`
+	}
+	if !decodeStrictJSON(w, r, &in, locale) {
+		return
+	}
+	if in.ConflictID == 0 || len(in.Directions) == 0 {
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperReconciliationConflictToken, nil)
+		return
+	}
+	_, id, err := s.getSession(r)
+	if err != nil {
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperInvalidSessionID, nil)
+		return
+	}
+	sess, ok := s.manager.GetSession(id)
+	if !ok {
+		writeMapperTextError(w, http.StatusConflict, locale, appi18n.MapperReconciliationDisconnected, nil)
+		return
+	}
+	state, setID, err := sess.AcceptMutableExitConflict(in.ConflictID, in.Directions)
+	if err != nil {
+		writeMapperTextError(w, http.StatusConflict, locale, appi18n.MapperReconciliationFailed, map[string]any{"detail": err.Error()})
+		return
+	}
+	s.manager.RefreshSharedTopology(setID, id)
+	writeJSON(w, map[string]any{"applied": true, "state": state})
+}
+
 func (s *Server) mapRecordingState(w http.ResponseWriter, r *http.Request) {
 	locale := s.mapperLanguage()
 	_, id, err := s.getSession(r)

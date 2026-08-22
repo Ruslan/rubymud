@@ -51,28 +51,29 @@ func (MapSet) TableName() string { return "map_sets" }
 // not GORM directly. BColor is stored as text ("" when null; a "cl..." ident or
 // the decimal int as a string otherwise) so both representations round-trip.
 type Room struct {
-	ID          int64   `gorm:"primaryKey" json:"id"`
-	MapSetID    int64   `gorm:"column:map_set_id" json:"map_set_id"`
-	Zone        string  `json:"zone"`
-	X           int     `json:"x"`
-	Y           int     `json:"y"`
-	L           int     `json:"l"`
-	DX          int     `gorm:"column:dx" json:"dx"`
-	DY          int     `gorm:"column:dy" json:"dy"`
-	DL          int     `gorm:"column:dl" json:"dl"`
-	Tag         *int    `json:"tag"`
-	Hint        string  `json:"hint"`
-	Desc        string  `json:"desc"`
-	Exits       string  `json:"exits"`
-	EDirs       string  `gorm:"column:edirs" json:"edirs"` // JSON array text
-	Doors       string  `json:"doors"`                     // JSON array text
-	Ch          int     `json:"ch"`                        // bitmask ChN..ChD
-	ImageIndex  *int    `gorm:"column:imageindex" json:"imageindex"`
-	Note        string  `json:"note"`
-	IsDT        bool    `gorm:"column:is_dt" json:"is_dt"`
-	Pipe        bool    `json:"pipe"`
-	BColor      *string `gorm:"column:bcolor" json:"bcolor"`
-	Fingerprint string  `json:"fingerprint"`
+	ID           int64   `gorm:"primaryKey" json:"id"`
+	MapSetID     int64   `gorm:"column:map_set_id" json:"map_set_id"`
+	Zone         string  `json:"zone"`
+	X            int     `json:"x"`
+	Y            int     `json:"y"`
+	L            int     `json:"l"`
+	DX           int     `gorm:"column:dx" json:"dx"`
+	DY           int     `gorm:"column:dy" json:"dy"`
+	DL           int     `gorm:"column:dl" json:"dl"`
+	Tag          *int    `json:"tag"`
+	Hint         string  `json:"hint"`
+	Desc         string  `json:"desc"`
+	Exits        string  `json:"exits"`
+	EDirs        string  `gorm:"column:edirs" json:"edirs"`                 // JSON array text
+	Doors        string  `json:"doors"`                                     // JSON array text
+	MutableExits string  `gorm:"column:mutable_exits" json:"mutable_exits"` // canonical directions allowed to appear/disappear in place
+	Ch           int     `json:"ch"`                                        // bitmask ChN..ChD
+	ImageIndex   *int    `gorm:"column:imageindex" json:"imageindex"`
+	Note         string  `json:"note"`
+	IsDT         bool    `gorm:"column:is_dt" json:"is_dt"`
+	Pipe         bool    `json:"pipe"`
+	BColor       *string `gorm:"column:bcolor" json:"bcolor"`
+	Fingerprint  string  `json:"fingerprint"`
 	// Autorecord provenance is structured map data, not a user note. Imported
 	// rooms are verified/imported; continuous recording writes provisional rows
 	// with a bounded batch id and session origin.
@@ -155,6 +156,9 @@ func (s *Store) CreateMapSet(in MapSetInput) (int64, error) {
 			}
 			if in.Rooms[i].RecordSource == "" {
 				in.Rooms[i].RecordSource = "import"
+			}
+			if in.Rooms[i].MutableExits == "" {
+				in.Rooms[i].MutableExits = "[]"
 			}
 		}
 		// Batch insert keeps a large corpus (thousands of rooms) off many
@@ -527,6 +531,7 @@ type SlimRoom struct {
 	L      int      `json:"l"`
 	E      []string `json:"e"`  // exit dirs (edirs)
 	D      []string `json:"d"`  // door dirs
+	ME     []string `json:"me"` // exits explicitly allowed to mutate in place
 	Ch     int      `json:"ch"` // connectivity bitmask
 	P      bool     `json:"p"`  // pipe
 	I      *int     `json:"i"`  // imageindex
@@ -1008,6 +1013,7 @@ func (s *Store) ListSlimRooms(mapSetID int64, zone string) ([]SlimRoom, error) {
 			L:   r.L,
 			E:   decodeStrArray(r.EDirs),
 			D:   decodeStrArray(r.Doors),
+			ME:  decodeStrArray(r.MutableExits),
 			Ch:  r.Ch,
 			P:   r.Pipe,
 			I:   r.ImageIndex,
@@ -1206,6 +1212,27 @@ func (s *Store) patchExitsWithSnapshot(mapSetID int64, zone string, x, y, l int,
 	return before, found, nil
 }
 
+func (s *Store) setMutableExitsWithSnapshot(mapSetID int64, zone string, x, y, l int, dirs []string) (before TopologyBefore, found bool, err error) {
+	err = s.db.Transaction(func(tx *gorm.DB) error {
+		snap, serr := snapshotRoom(tx, mapSetID, zone, x, y, l)
+		if serr != nil {
+			return serr
+		}
+		if !snap.Existed {
+			return nil
+		}
+		found = true
+		before.Rooms = []RoomSnapshot{snap}
+		canonical := decodeStrArray(buildExitFields(normalizeDirLetters(dirs), nil).edirs)
+		encoded, _ := json.Marshal(canonical)
+		return tx.Model(&Room{}).Where("id = ?", snap.Room.ID).Update("mutable_exits", string(encoded)).Error
+	})
+	if err != nil {
+		return TopologyBefore{}, false, err
+	}
+	return before, found, nil
+}
+
 // upsertRoomWithSnapshot creates a room at the cell, or partially updates the
 // existing one (only fields the caller provided change; omitted preserved on
 // update / defaulted on create). Exit fields are normalized consistently: a given
@@ -1232,7 +1259,7 @@ func (s *Store) upsertRoomWithSnapshot(mapSetID int64, zone string, x, y, l int,
 		room := snap.Room
 		if !snap.Existed {
 			room = Room{MapSetID: mapSetID, Zone: zone, X: x, Y: y, L: l,
-				EDirs: "[]", Doors: "[]"}
+				EDirs: "[]", Doors: "[]", MutableExits: "[]"}
 		}
 
 		if f.Hint != nil {

@@ -279,6 +279,31 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 	}
 	evExits, _ := mapimport.NormExits(ev.Exits)
 
+	// A room may explicitly declare individual exits as mutable. Only those
+	// directions are allowed to differ while the stable name+description still
+	// match; every unmarked exit remains part of the room identity. An unmarked
+	// exit-only variant must stop here at yellow: allowing neighbor/global lookup
+	// to continue could jump to a distant text twin whose fingerprint happens to
+	// contain the newly observed exits.
+	if t.pos.Valid && t.pos.Confidence == Green && len(t.pending) == 0 {
+		if current := t.idx.Room(t.pos.Coord); current != nil {
+			if added, removed, exitOnly := current.ExitOnlyVariant(ev); exitOnly {
+				if _, _, mutable := current.MutableExitVariant(ev); mutable {
+					t.pos = Position{Valid: true, Coord: current.Coord, Confidence: Green,
+						ExitsAddedLive: added, ExitsRemovedMap: removed, EventDescribesCell: true}
+					return
+				}
+				reason := "current room exits diverged — explicit mutable-exit confirmation required"
+				if diff := formatExitDiff(added, removed); diff != "" {
+					reason += "; exits " + diff
+				}
+				t.pos = Position{Valid: true, Coord: current.Coord, Confidence: Yellow, Reason: reason,
+					ExitsAddedLive: added, ExitsRemovedMap: removed, EventDescribesCell: true}
+				return
+			}
+		}
+	}
+
 	// 1) If we have a valid position and a pending head, try the predicted cell.
 	if t.pos.Valid && len(t.pending) > 0 {
 		dir := t.pending[0]
@@ -444,6 +469,13 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 				// dead-reckoned coord — this is the "draw a new room" case.
 				EventDescribesCell: true,
 			}
+			t.pending = t.pending[1:]
+			return
+		}
+
+		if added, removed, ok := assumedRoom.MutableExitVariant(ev); ok {
+			t.pos = Position{Valid: true, Coord: assumed, Confidence: Green,
+				ExitsAddedLive: added, ExitsRemovedMap: removed, EventDescribesCell: true}
 			t.pending = t.pending[1:]
 			return
 		}
@@ -777,6 +809,45 @@ func appendUniqueRoom(list []*IndexRoom, r *IndexRoom) []*IndexRoom {
 // irrelevant because mapimport.Fingerprint canonicalizes the exit directions.
 func matchesFingerprint(room *IndexRoom, fingerprint string) bool {
 	return fingerprint != "" && room.Fingerprint == fingerprint
+}
+
+// MutableExitVariant accepts an exit-only variant of this exact room when, and
+// only when, every changed direction was explicitly marked mutable. It never
+// participates in global lookup, so repeated room text cannot select a distant
+// cell. added/removed are returned for scan/frontier UI even on a trusted match.
+func (r *IndexRoom) MutableExitVariant(ev RoomEvent) (added, removed []string, ok bool) {
+	if r == nil || len(r.MutableExits) == 0 {
+		return nil, nil, false
+	}
+	added, removed, ok = r.ExitOnlyVariant(ev)
+	if !ok {
+		return added, removed, false
+	}
+	allowed := make(map[string]bool, len(r.MutableExits))
+	for _, dir := range r.MutableExits {
+		allowed[dir] = true
+	}
+	for _, dir := range append(append([]string(nil), added...), removed...) {
+		if !allowed[dir] {
+			return added, removed, false
+		}
+	}
+	return added, removed, true
+}
+
+// ExitOnlyVariant identifies a safe-to-offer mutable-exit candidate. It does
+// not itself trust the observation: callers must either require MutableExits or
+// ask the player before persisting the differing directions.
+func (r *IndexRoom) ExitOnlyVariant(ev RoomEvent) (added, removed []string, ok bool) {
+	if r == nil || strings.TrimSpace(ev.Hint) == "" || strings.TrimSpace(ev.Desc) == "" {
+		return nil, nil, false
+	}
+	if mapimport.NormText(r.Hint) != mapimport.NormText(ev.Hint) || mapimport.NormText(r.Desc) != mapimport.NormText(ev.Desc) {
+		return nil, nil, false
+	}
+	evExits, _ := mapimport.NormExits(ev.Exits)
+	added, removed = exitDiff(r.EDirs, evExits)
+	return added, removed, len(added)+len(removed) > 0
 }
 
 // containsDir is a membership test over a direction list. Since migration 018 moved

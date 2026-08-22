@@ -632,6 +632,7 @@ export class MapRenderer {
         if (item.dir !== "U" && item.dir !== "D") continue;
         const sign = item.dir === "U" ? -1 : 1;
         const y = cy + sign * (half + 12 * S);
+		ctx.fillStyle = "rgba(84,232,136,.9)";
         ctx.textAlign = "left";
         ctx.fillText(`${item.dir === "U" ? "↑" : "↓"} ? ${shortScanHint(item.hint)}`, cx + half + 3 * S, y);
         continue;

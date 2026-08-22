@@ -173,7 +173,7 @@ func TestHistoryUniqueLineMigrationDedupesExistingRows(t *testing.T) {
 		// be added here too, or runMigrations fails with "no such table: sessions".
 		"011_session_timezone.sql", "012_mapper.sql", "013_mapper_editable.sql",
 		"014_mapper_profiles.sql", "015_mapper_format.sql", "021_log_buffer_cursor_index.sql",
-		"025_map_set_topology_revision.sql",
+		"025_map_set_topology_revision.sql", "034_mutable_room_exits.sql",
 	} {
 		if err := db.Exec("INSERT INTO schema_migrations (version) VALUES (?)", version).Error; err != nil {
 			t.Fatalf("insert schema migration %s: %v", version, err)

@@ -155,7 +155,13 @@ func (s *Session) prepareMapScanLocked() (mapScanJob, bool) {
 		configured[rule.Dir] = true
 	}
 	unknown := make(map[string]bool, len(room.EDirs))
-	for _, dir := range room.EDirs {
+	liveDirs := room.EDirs
+	if s.lastRoomOK {
+		if added, removed, ok := room.MutableExitVariant(s.lastRoom); ok {
+			liveDirs = applyExitDiff(room.EDirs, added, removed)
+		}
+	}
+	for _, dir := range liveDirs {
 		if !configured[dir] {
 			continue
 		}
@@ -175,6 +181,94 @@ func (s *Session) prepareMapScanLocked() (mapScanJob, bool) {
 	s.mapScanSequence++
 	s.mapScanLast, s.mapScanLastOK = key, true
 	return mapScanJob{token: s.mapScanSequence, key: key, config: config, unknown: unknown}, true
+}
+
+func applyExitDiff(base, added, removed []string) []string {
+	set := make(map[string]bool, len(base)+len(added))
+	for _, dir := range base {
+		set[dir] = true
+	}
+	for _, dir := range removed {
+		delete(set, dir)
+	}
+	for _, dir := range added {
+		set[dir] = true
+	}
+	out := make([]string, 0, len(set))
+	for _, dir := range []string{"N", "S", "E", "W", "U", "D"} {
+		if set[dir] {
+			out = append(out, dir)
+		}
+	}
+	return out
+}
+
+// writeManualMapScan recognizes the profile's exact scan command after VM/alias
+// expansion and gives a player-requested scan the same bounded capture as the
+// automatic probe. Unlike the automatic path it considers every configured
+// direction absent from the graph, because the point of the manual command may
+// be to reveal an exit the stored room text did not advertise yet.
+func (s *Session) writeManualMapScan(command string) (bool, error) {
+	s.mapWalkIOMu.Lock()
+	defer s.mapWalkIOMu.Unlock()
+
+	s.mapMu.Lock()
+	config, configured := mapper.DetectorScan(s.mapDetector)
+	if !configured || !strings.EqualFold(strings.TrimSpace(command), strings.TrimSpace(config.Command)) || s.mapScanCapture != nil {
+		s.mapMu.Unlock()
+		return false, nil
+	}
+	if s.mapRecordingMode != MapRecordingArmed && s.mapRecordingMode != MapRecordingRecording {
+		s.mapMu.Unlock()
+		return false, nil
+	}
+	if s.mapTracker == nil || s.mapTracker.Index() == nil || s.mapTracker.PendingCount() != 0 {
+		s.mapMu.Unlock()
+		return false, nil
+	}
+	pos := s.mapTracker.Position()
+	room := s.mapTracker.CurrentRoom()
+	if !pos.Valid || pos.Confidence != mapper.Green || !pos.EventDescribesCell || room == nil || s.conn == nil {
+		s.mapMu.Unlock()
+		return false, nil
+	}
+	unknown := make(map[string]bool, len(config.Directions))
+	for _, rule := range config.Directions {
+		edge := room.GridEdge(rule.Dir)
+		if edge == nil || (edge.Passable && edge.To == nil) {
+			unknown[rule.Dir] = true
+		}
+	}
+	if len(unknown) == 0 {
+		s.mapMu.Unlock()
+		return false, nil
+	}
+	idx := s.mapTracker.Index()
+	s.mapScanSequence++
+	key := mapScanKey{epoch: s.mapRecordingEpoch, setID: idx.MapSetID, revision: idx.TopologyRevision, coord: pos.Coord}
+	job := mapScanJob{token: s.mapScanSequence, key: key, config: config, unknown: unknown}
+	s.mapScanLast, s.mapScanLastOK = key, true
+	s.mapScanAfterBoundary = nil
+	s.mapScanSnapshot = nil
+	s.mapScanCapture = &mapScanCapture{mapScanJob: job, hints: make(map[string]string, len(unknown))}
+	s.mapMu.Unlock()
+
+	payload := []byte(command + "\n")
+	n, err := s.conn.Write(payload)
+	if err == nil && n != len(payload) {
+		err = io.ErrShortWrite
+	}
+	s.mapMu.Lock()
+	if err != nil {
+		if s.mapScanCapture != nil && s.mapScanCapture.token == job.token {
+			s.clearMapScanCaptureLocked()
+		}
+	} else if s.mapScanCapture != nil && s.mapScanCapture.token == job.token {
+		token := job.token
+		s.mapScanTimer = time.AfterFunc(mapScanTimeout, func() { s.expireMapScan(token) })
+	}
+	s.mapMu.Unlock()
+	return true, err
 }
 
 func (s *Session) mapScanJobCurrentLocked(job mapScanJob) bool {

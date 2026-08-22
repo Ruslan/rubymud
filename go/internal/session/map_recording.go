@@ -141,17 +141,19 @@ type mapAutorecordJob struct {
 }
 
 type MapRecordingConflictSnapshot struct {
-	ID           uint64           `json:"id"`
-	CreatedAt    time.Time        `json:"created_at"`
-	Move         PendingMapMove   `json:"move"`
-	Expected     mapper.Coord     `json:"expected"`
-	ExpectedHint string           `json:"expected_hint"`
-	ExpectedRoom mapper.RoomEvent `json:"expected_room"`
-	Observed     mapper.RoomEvent `json:"observed"`
-	Reason       string           `json:"reason"`
-	ReasonCode   string           `json:"reason_code,omitempty"`
-	ReasonArgs   map[string]any   `json:"reason_args,omitempty"`
-	ReasonDetail string           `json:"reason_detail,omitempty"`
+	ID                    uint64           `json:"id"`
+	CreatedAt             time.Time        `json:"created_at"`
+	Move                  PendingMapMove   `json:"move"`
+	Expected              mapper.Coord     `json:"expected"`
+	ExpectedHint          string           `json:"expected_hint"`
+	ExpectedRoom          mapper.RoomEvent `json:"expected_room"`
+	Observed              mapper.RoomEvent `json:"observed"`
+	Reason                string           `json:"reason"`
+	ReasonCode            string           `json:"reason_code,omitempty"`
+	ReasonArgs            map[string]any   `json:"reason_args,omitempty"`
+	ReasonDetail          string           `json:"reason_detail,omitempty"`
+	MutableExitCandidates []string         `json:"mutable_exit_candidates,omitempty"`
+	ExpectedMutableExits  []string         `json:"expected_mutable_exits,omitempty"`
 }
 
 type MapRecordingState struct {
@@ -179,6 +181,8 @@ func (s *Session) mapRecordingStateLocked() MapRecordingState {
 	out := MapRecordingState{Mode: mode, Reason: s.mapRecordingReason, Pending: len(s.mapRecordingPending) + s.mapRecordingWrites, Revision: s.mapRecordingRevision}
 	if s.mapRecordingConflict != nil {
 		cp := *s.mapRecordingConflict
+		cp.MutableExitCandidates = append([]string(nil), s.mapRecordingConflict.MutableExitCandidates...)
+		cp.ExpectedMutableExits = append([]string(nil), s.mapRecordingConflict.ExpectedMutableExits...)
 		out.Conflict = &cp
 	}
 	return out
@@ -473,6 +477,84 @@ func (s *Session) ApplyMapReconciliation(conflictID uint64, token string) (MapRe
 	return s.applyMapReconciliationLocked(conflictID, token)
 }
 
+// AcceptMutableExitConflict records the exact exit-only difference suggested by
+// OBS and resumes at the already-known expected room. The suggestion is valid
+// only when name+description matched; arbitrary conflicts cannot use this path.
+func (s *Session) AcceptMutableExitConflict(conflictID uint64, dirs []string) (MapRecordingState, int64, error) {
+	s.mapReconcileMu.Lock()
+	defer s.mapReconcileMu.Unlock()
+	s.mapAutorecordCommitMu.Lock()
+	defer s.mapAutorecordCommitMu.Unlock()
+
+	requested, _ := mapimport.NormExits(strings.Join(dirs, " "))
+	s.mapMu.Lock()
+	if s.mapRecordingMode != MapRecordingConflict || s.mapRecordingConflict == nil || s.mapRecordingConflict.ID != conflictID {
+		s.mapMu.Unlock()
+		return MapRecordingState{}, 0, fmt.Errorf("map recording conflict is no longer current")
+	}
+	cp := *s.mapRecordingConflict
+	candidates, _ := mapimport.NormExits(strings.Join(cp.MutableExitCandidates, " "))
+	if len(candidates) == 0 || !sameDirectionSet(requested, candidates) {
+		s.mapMu.Unlock()
+		return MapRecordingState{}, 0, fmt.Errorf("mutable exit choice does not match the current observation")
+	}
+	mutable, _ := mapimport.NormExits(strings.Join(append(append([]string(nil), cp.ExpectedMutableExits...), candidates...), " "))
+	epoch := s.mapRecordingEpoch
+	s.mapReconcileApplying = true
+	s.mapMu.Unlock()
+	committed := false
+	defer func() {
+		if !committed {
+			s.mapMu.Lock()
+			s.mapReconcileApplying = false
+			s.mapMu.Unlock()
+		}
+	}()
+
+	res, err := s.writeTopologyLocked(storage.TopologyOp{Kind: storage.TopoSetMutableExits, Zone: cp.Expected.Zone, X: cp.Expected.X, Y: cp.Expected.Y, L: cp.Expected.L, MutableExits: mutable})
+	if err != nil {
+		return s.MapRecordingState(), 0, err
+	}
+	if !res.Applied {
+		return s.MapRecordingState(), res.SetID, fmt.Errorf("expected room no longer exists")
+	}
+
+	s.mapMu.Lock()
+	if s.mapRecordingMode != MapRecordingConflict || s.mapRecordingConflict == nil || s.mapRecordingConflict.ID != conflictID || s.mapRecordingEpoch != epoch {
+		s.mapMu.Unlock()
+		return s.MapRecordingState(), res.SetID, fmt.Errorf("conflict changed while mutable exits committed")
+	}
+	s.mapTracker.Anchor(cp.Expected)
+	s.mapRecordingMode = MapRecordingRecording
+	s.mapRecordingReason = ""
+	s.mapRecordingConflict = nil
+	s.mapReconcileApplying = false
+	s.mapRecordingRevision++
+	state := s.mapRecordingStateLocked()
+	s.mapMu.Unlock()
+	committed = true
+	s.BroadcastMapPosition()
+	s.broadcastMsg(mapRecordingMsg(state))
+	go s.scheduleMapScan()
+	return state, res.SetID, nil
+}
+
+func sameDirectionSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	want := make(map[string]bool, len(a))
+	for _, dir := range a {
+		want[dir] = true
+	}
+	for _, dir := range b {
+		if !want[dir] {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *Session) applyMapReconciliationLocked(conflictID uint64, token string) (MapRecordingState, int64, error) {
 	s.mapMu.Lock()
 	p := s.mapReconcilePreview
@@ -685,8 +767,14 @@ func (s *Session) observeMapRecordingRoomLockedForAutorecord(ev mapper.RoomEvent
 	expected := s.mapTracker.Index().Room(move.Expected)
 	if expected != nil {
 		observedFingerprint := mapimport.Fingerprint(ev.Hint, ev.Desc, ev.Exits)
-		if expected.Fingerprint == observedFingerprint {
+		_, _, mutableVariant := expected.MutableExitVariant(ev)
+		if expected.Fingerprint == observedFingerprint || mutableVariant {
 			return false, nil
+		}
+		added, removed, exitOnly := expected.ExitOnlyVariant(ev)
+		var mutableCandidates []string
+		if exitOnly {
+			mutableCandidates = append(append([]string(nil), added...), removed...)
 		}
 		// Any reserved write for the previous recording step is now stale. Drop its
 		// reservation and advance the epoch so a goroutine that has not started
@@ -699,7 +787,7 @@ func (s *Session) observeMapRecordingRoomLockedForAutorecord(ev mapper.RoomEvent
 		s.mapRecordingSequence++
 		s.mapRecordingMode = MapRecordingConflict
 		s.mapRecordingReason = "occupied expected room content mismatch"
-		s.mapRecordingConflict = &MapRecordingConflictSnapshot{ID: s.mapRecordingSequence, CreatedAt: time.Now().UTC(), Move: move, Expected: expected.Coord, ExpectedHint: boundedMapText(expected.Hint, 512), ExpectedRoom: mapper.RoomEvent{Hint: boundedMapText(expected.Hint, 512), Desc: boundedMapText(expected.Desc, 4096), Exits: boundedMapText(expected.Exits, 1024)}, Observed: mapper.RoomEvent{Hint: boundedMapText(ev.Hint, 512), Desc: boundedMapText(ev.Desc, 4096), Exits: boundedMapText(ev.Exits, 1024)}, Reason: s.mapRecordingReason}
+		s.mapRecordingConflict = &MapRecordingConflictSnapshot{ID: s.mapRecordingSequence, CreatedAt: time.Now().UTC(), Move: move, Expected: expected.Coord, ExpectedHint: boundedMapText(expected.Hint, 512), ExpectedRoom: mapper.RoomEvent{Hint: boundedMapText(expected.Hint, 512), Desc: boundedMapText(expected.Desc, 4096), Exits: boundedMapText(expected.Exits, 1024)}, Observed: mapper.RoomEvent{Hint: boundedMapText(ev.Hint, 512), Desc: boundedMapText(ev.Desc, 4096), Exits: boundedMapText(ev.Exits, 1024)}, Reason: s.mapRecordingReason, MutableExitCandidates: mutableCandidates, ExpectedMutableExits: append([]string(nil), expected.MutableExits...)}
 		s.mapRecordingPending = s.mapRecordingPending[:0]
 		s.mapRecordingRevision++
 		return true, nil

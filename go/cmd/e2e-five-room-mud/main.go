@@ -21,6 +21,7 @@ func main() {
 	darkRoom := flag.Int("dark-room", 0, "room id hidden until the client sends torch")
 	roomBoundary := flag.Bool("room-boundary", false, "append the RMUD blank boundary after each room")
 	oneWayHillo := flag.Bool("one-way-hillo", false, "replay the one-way Hillo room pair")
+	dynamicCrate := flag.Bool("dynamic-crate", false, "replay the Hillo crate that reveals a down exit")
 	flag.Parse()
 	if *trace == "" {
 		fatal(fmt.Errorf("--trace is required"))
@@ -30,7 +31,7 @@ func main() {
 		fatal(fmt.Errorf("--listen must be loopback host:port"))
 	}
 	server, err := fiveroom.ListenWithOptions(*listen, *trace, fiveroom.Options{
-		DarkRoom: *darkRoom, RoomBoundary: *roomBoundary, OneWayHillo: *oneWayHillo,
+		DarkRoom: *darkRoom, RoomBoundary: *roomBoundary, OneWayHillo: *oneWayHillo, DynamicCrate: *dynamicCrate,
 	})
 	if err != nil {
 		fatal(err)

@@ -62,3 +62,19 @@ func TestWorldCanReplayHilloOneWayPassage(t *testing.T) {
 		t.Fatalf("E = room %d moved=%v, want room 2/false", room.ID, moved)
 	}
 }
+
+func TestWorldRevealsCrateDownExitOnlyAfterRussianAction(t *testing.T) {
+	w := NewWorldWithOptions(WorldOptions{DynamicCrate: true})
+	if got := w.Current().Exits; got != "N" {
+		t.Fatalf("initial exits=%q", got)
+	}
+	if w.ApplyAction("двигать ящик") == false || w.Current().Exits != "N D" {
+		t.Fatalf("crate action did not reveal D: %+v", w.Current())
+	}
+	if got := w.ScanLines(); len(got) != 2 || got[1] != "Внизу: Черная дыра в полу ведет в темноту." {
+		t.Fatalf("revealed scan=%#v", got)
+	}
+	if room, moved := w.Apply("D"); !moved || room.ID != 3 {
+		t.Fatalf("D room=%+v moved=%v", room, moved)
+	}
+}

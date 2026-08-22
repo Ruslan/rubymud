@@ -8,6 +8,7 @@ export interface SlimRoom {
   l: number; // level (floor): U=l+1, D=l-1
   e: string[]; // exit direction letters (edirs) e.g. ["N","S","U"]
   d: string[]; // door direction letters
+  me: string[]; // directions explicitly allowed to appear/disappear in this room
   ch: number; // connectivity bitmask ChN..ChD
   p: boolean; // pipe (narrow corridor: no tag/hint)
   i: number | null; // imageindex (special-room glyph)
@@ -186,5 +187,7 @@ export interface MapRecordingState {
     reason_code?: string;
     reason_args?: Record<string, unknown>;
     reason_detail?: string;
+    mutable_exit_candidates?: string[];
+    expected_mutable_exits?: string[];
   };
 }

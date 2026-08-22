@@ -20,18 +20,19 @@ type Coord struct {
 // keeps only what the state machine and BFS need, plus decoded direction lists.
 type IndexRoom struct {
 	Coord
-	Tag         *int
-	Hint        string
-	Desc        string
-	Exits       string
-	EDirs       []string // canonical exit dir letters (door markers stripped)
-	Doors       []string // door dir letters
-	Ch          int      // connectivity bitmask ChN..ChD
-	IsDT        bool     // EFFECTIVE death-trap: nativeIsDT || annotation dt
-	nativeIsDT  bool     // the room's own is_dt (from the map data), before overlay
-	Pipe        bool
-	ImageIndex  *int
-	Fingerprint string
+	Tag          *int
+	Hint         string
+	Desc         string
+	Exits        string
+	EDirs        []string // canonical exit dir letters (door markers stripped)
+	Doors        []string // door dir letters
+	MutableExits []string // dirs explicitly allowed to appear/disappear without changing room identity
+	Ch           int      // connectivity bitmask ChN..ChD
+	IsDT         bool     // EFFECTIVE death-trap: nativeIsDT || annotation dt
+	nativeIsDT   bool     // the room's own is_dt (from the map data), before overlay
+	Pipe         bool
+	ImageIndex   *int
+	Fingerprint  string
 
 	// grid holds this room's MATERIALIZED outgoing grid edges, indexed by dirOrder
 	// position (== chBitOrder bit), nil where there is no edge. One entry = one
@@ -228,19 +229,20 @@ func buildRoomIndex(mapSetID int64, rooms []storage.Room) *Index {
 			fp = mapimport.Fingerprint(r.Hint, r.Desc, r.Exits)
 		}
 		ir := &IndexRoom{
-			Coord:       Coord{Zone: r.Zone, X: r.X, Y: r.Y, L: r.L},
-			Tag:         r.Tag,
-			Hint:        r.Hint,
-			Desc:        r.Desc,
-			Exits:       r.Exits,
-			EDirs:       decodeDirs(r.EDirs),
-			Doors:       decodeDirs(r.Doors),
-			Ch:          r.Ch,
-			IsDT:        r.IsDT,
-			nativeIsDT:  r.IsDT,
-			Pipe:        r.Pipe,
-			ImageIndex:  r.ImageIndex,
-			Fingerprint: fp,
+			Coord:        Coord{Zone: r.Zone, X: r.X, Y: r.Y, L: r.L},
+			Tag:          r.Tag,
+			Hint:         r.Hint,
+			Desc:         r.Desc,
+			Exits:        r.Exits,
+			EDirs:        decodeDirs(r.EDirs),
+			Doors:        decodeDirs(r.Doors),
+			MutableExits: decodeDirs(r.MutableExits),
+			Ch:           r.Ch,
+			IsDT:         r.IsDT,
+			nativeIsDT:   r.IsDT,
+			Pipe:         r.Pipe,
+			ImageIndex:   r.ImageIndex,
+			Fingerprint:  fp,
 		}
 		idx.byCoord[ir.Coord] = ir
 		idx.byFP[fp] = append(idx.byFP[fp], ir)

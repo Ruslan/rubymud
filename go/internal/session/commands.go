@@ -166,6 +166,16 @@ func (s *Session) SendCommandWithTrace(command string, source string) ([]string,
 			canonicalCommands = append(canonicalCommands, cmd)
 			continue
 		}
+		if handled, err := s.writeManualMapScan(cmd); handled {
+			if err != nil {
+				return canonicalCommands, err
+			}
+			canonicalCommands = append(canonicalCommands, cmd)
+			s.mu.Lock()
+			s.lastCommandAt = time.Now()
+			s.mu.Unlock()
+			continue
+		}
 		payload := []byte(cmd + "\n")
 		n, err := s.writeCommandPayload(payload)
 		if err == nil && n != len(payload) {

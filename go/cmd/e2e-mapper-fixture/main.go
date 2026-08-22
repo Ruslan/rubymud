@@ -19,13 +19,14 @@ func main() {
 	mudPort := flag.Int("mud-port", 0, "test MUD port")
 	autorecord := flag.Bool("autorecord", false, "seed only the anchor room for the continuous autorecord E2E")
 	oneWayHillo := flag.Bool("one-way-hillo", false, "seed the one-way Hillo room pair")
+	dynamicCrate := flag.Bool("dynamic-crate", false, "seed the Hillo mutable-exit crate rooms")
 	flag.Parse()
 	if *runDir == "" || *dbPath == "" {
 		fatal(fmt.Errorf("--run-dir and --db are required"))
 	}
 	result, err := mapperfixture.Seed(mapperfixture.Options{
 		RunDir: *runDir, DBPath: *dbPath, MUDHost: *mudHost, MUDPort: *mudPort,
-		Autorecord: *autorecord, OneWayHillo: *oneWayHillo,
+		Autorecord: *autorecord, OneWayHillo: *oneWayHillo, DynamicCrate: *dynamicCrate,
 	})
 	if err != nil {
 		fatal(err)

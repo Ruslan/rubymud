@@ -1765,6 +1765,22 @@ body {
   cursor: pointer;
 }
 .map-cell-menu__knowledge { border-color: #2f8a52; color: #54e888; }
+.map-cell-menu__mutable-exits {
+  border: 1px solid #1b2a20;
+  border-radius: 5px;
+  padding: 5px 7px;
+  color: #9fc4ac;
+}
+.map-cell-menu__mutable-exits summary { color: #cfe6d6; cursor: pointer; }
+.map-cell-menu__mutable-exits p { margin: 6px 0; font-size: 11px; }
+.map-cell-menu__mutable-choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.map-cell-menu__mutable-choices label { white-space: nowrap; }
+.map-cell-menu__mutable-save { width: 100%; }
 
 .map-cell-menu {
   position: absolute;

@@ -31,6 +31,9 @@ const (
 	// TopoPatchExits adds AddExits and removes RemoveExits on ONE room's edirs /
 	// ch bitmask / display exits (the PatchRoomExits primitive).
 	TopoPatchExits TopologyOpKind = "patch_exits"
+	// TopoSetMutableExits replaces the per-room set of directions whose presence
+	// may legitimately change without changing room identity.
+	TopoSetMutableExits TopologyOpKind = "set_mutable_exits"
 	// TopoUpsertRoom creates a room at the target cell, or partially updates an
 	// existing one (only the fields the caller provided change; omitted fields are
 	// preserved on update / defaulted on create). Keyed by (zone,x,y,l).
@@ -223,15 +226,16 @@ func (p EdgeAttrPatch) Validate() error {
 //   - TopoUpsertRoom: Fields — the partial patch (only set members apply).
 //   - TopoAddManualEdge / TopoRemoveManualEdge: Dir, plus OneWay.
 type TopologyOp struct {
-	Kind        TopologyOpKind
-	Zone        string
-	X           int
-	Y           int
-	L           int
-	AddExits    []string
-	RemoveExits []string
-	Dir         string
-	Fields      RoomFields
+	Kind         TopologyOpKind
+	Zone         string
+	X            int
+	Y            int
+	L            int
+	AddExits     []string
+	RemoveExits  []string
+	MutableExits []string
+	Dir          string
+	Fields       RoomFields
 	// Attrs is the TopoSetEdgeAttrs payload (a partial write of one face).
 	Attrs EdgeAttrPatch
 	// Seam selects an existing seam for TopoSetEdgeAttrs. Dir and Seam are
@@ -280,12 +284,15 @@ func NormalizeTopologyOp(op TopologyOp) (TopologyOp, error) {
 		return op, nil
 	}
 	switch op.Kind {
-	case TopoPatchExits, TopoUpsertRoom, TopoLink, TopoUnlink, TopoDeleteRoom,
+	case TopoPatchExits, TopoSetMutableExits, TopoUpsertRoom, TopoLink, TopoUnlink, TopoDeleteRoom,
 		TopoAddManualEdge, TopoBlockManualEdge, TopoRemoveManualEdge, TopoSetEdgeAttrs,
 		TopoCreatePortal, TopoUpdatePortal, TopoDeletePortal:
 		var err error
 		if op.Zone, err = NormalizeZoneName(op.Zone); err != nil {
 			return op, err
+		}
+		if op.Kind == TopoSetMutableExits {
+			op.MutableExits = decodeStrArray(buildExitFields(normalizeDirLetters(op.MutableExits), nil).edirs)
 		}
 	case TopoAutorecordRoom:
 		if op.Autorecord == nil {
@@ -603,6 +610,8 @@ func (s *Store) applyTopologyOpUnfenced(mapSetID int64, op TopologyOp) (before T
 	switch op.Kind {
 	case TopoPatchExits:
 		return s.patchExitsWithSnapshot(mapSetID, op.Zone, op.X, op.Y, op.L, op.AddExits, op.RemoveExits)
+	case TopoSetMutableExits:
+		return s.setMutableExitsWithSnapshot(mapSetID, op.Zone, op.X, op.Y, op.L, op.MutableExits)
 	case TopoUpsertRoom:
 		return s.upsertRoomWithSnapshot(mapSetID, op.Zone, op.X, op.Y, op.L, op.Fields)
 	case TopoLink:
@@ -678,6 +687,11 @@ func (op TopologyOp) UndoLabel() string {
 			s = "exit patch (no-op)"
 		}
 		return s
+	case TopoSetMutableExits:
+		if len(op.MutableExits) == 0 {
+			return "clear mutable exits"
+		}
+		return "set mutable exits " + joinFields(op.MutableExits)
 	case TopoUpsertRoom:
 		return "upsert room"
 	case TopoLink:

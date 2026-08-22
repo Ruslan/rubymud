@@ -80,6 +80,71 @@ func TestTrackerSuccessfulStep(t *testing.T) {
 	}
 }
 
+func TestTrackerUnmarkedCurrentRoomExitChangeIsNotTrusted(t *testing.T) {
+	rooms := []storage.Room{
+		mkRoom("Хилло", -2, -7, 0, 1, "В окружении ящиков", "Небольшой закуток окружен ящиками.", "none", 0),
+	}
+	tr := NewTracker(buildTestIndex(1, rooms))
+	tr.Anchor(Coord{"Хилло", -2, -7, 0})
+
+	pos, _ := tr.Reconcile(ev("В окружении ящиков", "Небольшой закуток окружен ящиками.", "D"))
+	if pos.Confidence == Green {
+		t.Fatalf("unmarked exit-only change was trusted as the same room: %+v", pos)
+	}
+}
+
+func TestTrackerUnmarkedCurrentExitChangeCannotReanchorToDistantFingerprintTwin(t *testing.T) {
+	rooms := []storage.Room{
+		mkRoom("Хилло", 0, 0, 0, 1, "Одинаковая", "То же описание.", "N", chMask("N")),
+		mkRoom("Хилло", 10, 10, 0, 2, "Одинаковая", "То же описание.", "E", chMask("E")),
+	}
+	tr := NewTracker(buildTestIndex(1, rooms))
+	tr.Anchor(Coord{"Хилло", 0, 0, 0})
+
+	pos, _ := tr.Reconcile(ev("Одинаковая", "То же описание.", "E"))
+	if pos.Coord != (Coord{"Хилло", 0, 0, 0}) || pos.Confidence != Yellow {
+		t.Fatalf("unmarked exit change jumped to distant fingerprint twin: %+v", pos)
+	}
+	if len(pos.ExitsAddedLive) != 1 || pos.ExitsAddedLive[0] != "E" || len(pos.ExitsRemovedMap) != 1 || pos.ExitsRemovedMap[0] != "N" {
+		t.Fatalf("exit diff = +%v -%v, want +E -N", pos.ExitsAddedLive, pos.ExitsRemovedMap)
+	}
+}
+
+func TestTrackerMarkedMutableExitMayChangeAtCurrentRoom(t *testing.T) {
+	room := mkRoom("Хилло", -2, -7, 0, 1, "В окружении ящиков", "Небольшой закуток окружен ящиками.", "none", 0)
+	room.MutableExits = `["D"]`
+	tr := NewTracker(buildTestIndex(1, []storage.Room{room}))
+	tr.Anchor(Coord{"Хилло", -2, -7, 0})
+
+	pos, _ := tr.Reconcile(ev("В окружении ящиков", "Небольшой закуток окружен ящиками.", "D"))
+	if !pos.Valid || pos.Coord != (Coord{"Хилло", -2, -7, 0}) || pos.Confidence != Green || !pos.EventDescribesCell {
+		t.Fatalf("marked mutable exit lost the anchor: %+v", pos)
+	}
+	if len(pos.ExitsAddedLive) != 1 || pos.ExitsAddedLive[0] != "D" {
+		t.Fatalf("mutable exit diff = +%v -%v, want +D", pos.ExitsAddedLive, pos.ExitsRemovedMap)
+	}
+}
+
+func TestTrackerKnownLandingWithMarkedMutableExitStaysGreen(t *testing.T) {
+	box := mkRoom("Хилло", -2, -7, 0, 2, "В окружении ящиков", "Небольшой закуток окружен ящиками.", "none", 0)
+	box.MutableExits = `["D"]`
+	rooms := []storage.Room{
+		mkRoom("Хилло", -3, -7, 0, 1, "Проход между ящиками", "Паутина и пыль.", "S", chMask("S")),
+		box,
+	}
+	tr := NewTracker(buildTestIndex(1, rooms))
+	tr.Anchor(Coord{"Хилло", -3, -7, 0})
+	tr.PushMove("S")
+
+	pos, _ := tr.Reconcile(ev("В окружении ящиков", "Небольшой закуток окружен ящиками.", "D"))
+	if pos.Confidence != Green || pos.Coord != (Coord{"Хилло", -2, -7, 0}) || tr.PendingCount() != 0 {
+		t.Fatalf("known dynamic-exit landing = %+v pending=%d", pos, tr.PendingCount())
+	}
+	if len(pos.ExitsAddedLive) != 1 || pos.ExitsAddedLive[0] != "D" {
+		t.Fatalf("dynamic landing diff = +%v -%v, want +D", pos.ExitsAddedLive, pos.ExitsRemovedMap)
+	}
+}
+
 func TestTrackerHeadCancelOnRefusal(t *testing.T) {
 	tr := NewTracker(linearIndex())
 	tr.Anchor(Coord{"Z", 0, 0, 0})
@@ -540,10 +605,9 @@ func TestTrackerLongPipeRunCrossesZoneBoundary(t *testing.T) {
 
 // TestTrackerSupersetMismatchDegradesToYellow is the graceful-degradation golden
 // (the live Хилло repro): name+desc MATCH but the live game reports a SUPERSET of
-// the map's exits (a room grew a U exit over years of new content). With a pending
-// directional move, the tracker must degrade to 🟡 at the assumed cell — NOT 🔴 —
-// and expose the exit diff (+U). No auto-green: accepting the outdated map is a
-// conscious manual re-anchor.
+// the map's exits (a room grew a U exit over years of new content). The known
+// direction plus matching stable text confirm position 🟢 while exposing +U as
+// a topology difference.
 func TestTrackerSupersetMismatchDegradesToYellow(t *testing.T) {
 	// (-4,-4) tag=95 "Вдоль живой изгороди" [NSW]; N -> (-5,-4) pipe; -> (-6,-4)
 	// tag=103 "Северо-восточный угол города" ch=[SW]. Live event exits = S W U.

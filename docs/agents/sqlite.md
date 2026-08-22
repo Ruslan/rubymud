@@ -134,6 +134,10 @@ The following row counts were observed in the current `data/mudhost.db` at inspe
 - `profiles`: named configuration profiles; linked to sessions through `session_profiles(order_index)`.
 - `mapper_profiles`: room-text-format descriptions for the mapper (`name`, `spec` = `mapper.ProfileSpec` JSON, `version` = spec shape version). **Not** related to `profiles` above despite the word — these describe how to parse a room block (exits regex, block boundaries, left-column strip, header rule). Every write is compile-checked through `mapper.Compile`, so a row here always loads; a session whose profile fails to load falls back to the builtin and says so.
 - `map_inhabitants`: normalized NPC/monster/other knowledge scoped to a map set (`name`, `kind`, `look_target`, `look_text`, `note`, `strategy`).
+- `rooms.mutable_exits`: JSON array of canonical directions (`N/S/E/W/U/D`) that
+  may appear or disappear without changing this exact room's identity. Empty is
+  the safe default; this is room+direction metadata, not an edge and not a global
+  permission to ignore exits in fingerprints.
 - `room_inhabitants`: room-specific placements (`zone,x,y,l`, `presence_text`, `resident`). The composite FK keeps the entity in the same map set, but there is intentionally no FK to `rooms`: knowledge can survive a temporary room delete/undo. Writes are overlay-only and do not fork a frozen set or advance `topology_revision`.
   Catalogue search keeps ASCII queries in SQLite. SQLite `NOCASE` is
   ASCII-only, so non-ASCII queries stream the ordered compact projection through

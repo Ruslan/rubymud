@@ -15,12 +15,13 @@ import (
 const Zone = "Five Room Loop"
 
 type Options struct {
-	RunDir      string
-	DBPath      string
-	MUDHost     string
-	MUDPort     int
-	Autorecord  bool
-	OneWayHillo bool
+	RunDir       string
+	DBPath       string
+	MUDHost      string
+	MUDPort      int
+	Autorecord   bool
+	OneWayHillo  bool
+	DynamicCrate bool
 }
 
 type Result struct {
@@ -78,6 +79,9 @@ func Seed(opts Options) (Result, error) {
 	if opts.OneWayHillo {
 		rooms = hilloRooms()
 		archive = "e2e-hillo-one-way"
+	} else if opts.DynamicCrate {
+		rooms = crateRooms()
+		archive = "e2e-hillo-dynamic-crate"
 	} else if opts.Autorecord {
 		// Keep the physical world unchanged but seed only the confirmed anchor.
 		// The first E movement therefore lands in a real, complete room that is
@@ -116,6 +120,13 @@ func Seed(opts Options) (Result, error) {
 			2: {Zone: fiveroom.HilloZone, X: 0, Y: -1, L: 0},
 		}
 	}
+	if opts.DynamicCrate {
+		resultRooms = map[int]storage.EdgeCell{
+			1: {Zone: fiveroom.CrateZone, X: 0, Y: 0, L: 0},
+			2: {Zone: fiveroom.CrateZone, X: -1, Y: 0, L: 0},
+			3: {Zone: fiveroom.CrateZone, X: 0, Y: 0, L: -1},
+		}
+	}
 
 	return Result{
 		SessionID: session.ID,
@@ -138,6 +149,13 @@ func hilloRooms() []storage.Room {
 	return []storage.Room{
 		roomInZone(fiveroom.HilloZone, 1, 0, 0, fiveroom.HilloSourceHint, fiveroom.HilloSourceDesc, fiveroom.HilloSourceExits, []string{"N", "W"}, (1<<0)|(1<<3)),
 		roomInZone(fiveroom.HilloZone, 2, 0, -1, fiveroom.HilloTargetHint, fiveroom.HilloTargetDesc, fiveroom.HilloTargetExits, []string{"N", "S", "W"}, (1<<0)|(1<<1)|(1<<3)),
+	}
+}
+
+func crateRooms() []storage.Room {
+	return []storage.Room{
+		roomInZone(fiveroom.CrateZone, 1, 0, 0, fiveroom.CrateBoxHint, fiveroom.CrateBoxDesc, "N", []string{"N"}, 1<<0),
+		roomInZone(fiveroom.CrateZone, 2, -1, 0, fiveroom.CratePassageHint, fiveroom.CratePassageDesc, "S", []string{"S"}, 1<<1),
 	}
 }
 

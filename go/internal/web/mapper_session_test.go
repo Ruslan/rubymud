@@ -644,6 +644,43 @@ func TestRESTMapCellPatchSecondWriteNoRefork(t *testing.T) {
 	}
 }
 
+func TestRESTMapCellPatchSetsMutableDirectionsWithoutChangingExits(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+	sid := sess.SessionID()
+	seedTrackerSet(t, s, sid)
+	out := postMapCellPatch(t, ts, s.apiToken, sid, `{"zone":"Z","x":0,"y":0,"l":0,"mutable_exits":["d","D","u"]}`)
+	if out["ok"] != true {
+		t.Fatalf("mutable patch=%#v", out)
+	}
+	setID, ok, err := s.store.GetActiveMapSetID(sid)
+	if err != nil || !ok {
+		t.Fatalf("active set after mutable patch=%d ok=%v err=%v", setID, ok, err)
+	}
+	room := slimRoomAt(t, s, setID, "Z", 0, 0, 0)
+	if strings.Join(room.ME, ",") != "U,D" {
+		t.Fatalf("mutable directions=%v", room.ME)
+	}
+	if strings.Join(room.E, ",") != "S" {
+		t.Fatalf("ordinary exits changed=%v", room.E)
+	}
+	if depth := s.store.WriteJournal().Depth(setID); depth != 1 {
+		t.Fatalf("mutable metadata write journal depth=%d, want 1", depth)
+	}
+	undo := postMapUndo(t, ts, s.apiToken, sid)
+	if undo["applied"] != true || undo["nothing_to_undo"] != false {
+		t.Fatalf("undo mutable metadata=%#v", undo)
+	}
+	if undo["label"] != "set mutable exits U D" {
+		t.Fatalf("mutable undo label=%#v", undo["label"])
+	}
+	room = slimRoomAt(t, s, setID, "Z", 0, 0, 0)
+	if len(room.ME) != 0 {
+		t.Fatalf("undo left mutable directions=%v", room.ME)
+	}
+}
+
 // TestRESTMapCellPatchNoActiveSet: no active set => soft-fail ok:false, not 500.
 func TestRESTMapCellPatchNoActiveSet(t *testing.T) {
 	s, sess := setupMcpTestServer(t)

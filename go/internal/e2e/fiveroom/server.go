@@ -12,6 +12,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+	"unicode/utf8"
 )
 
 const (
@@ -53,6 +54,7 @@ type Options struct {
 	DarkRoom     int
 	RoomBoundary bool
 	OneWayHillo  bool
+	DynamicCrate bool
 }
 
 func Listen(addr, tracePath string) (*Server, error) {
@@ -122,7 +124,7 @@ func (s *Server) handleConnection(conn net.Conn, connectionID uint64) {
 		_ = conn.Close()
 	}()
 
-	world := NewWorldWithOptions(WorldOptions{OneWayHillo: s.options.OneWayHillo})
+	world := NewWorldWithOptions(WorldOptions{OneWayHillo: s.options.OneWayHillo, DynamicCrate: s.options.DynamicCrate})
 	lit := s.options.DarkRoom == 0
 	if err := s.writeObservedRoom(conn, world.Current(), lit); err != nil {
 		return
@@ -154,6 +156,19 @@ func (s *Server) handleConnection(conn net.Conn, connectionID uint64) {
 				return
 			}
 			if err := writeScanBlock(conn, world.ScanLines()); err != nil {
+				return
+			}
+			continue
+		}
+		if world.ApplyAction(command) {
+			entry := TraceEntry{Sequence: s.nextSequence.Add(1), ConnectionID: connectionID, From: from, Command: command, To: from, Moved: false}
+			if err := s.appendTrace(entry); err != nil {
+				return
+			}
+			if err := writeLinesBlock(conn,
+				"Стараясь не свалить на себя пирамиду всевозможных коробок, вы аккуратно передвинули ящик.",
+				"Взглянув на то место, где только что стоял, Вы обнаружили в полу дыру!",
+			); err != nil {
 				return
 			}
 			continue
@@ -237,10 +252,14 @@ func writeLine(conn net.Conn, line string) error {
 }
 
 func writeAcknowledgement(conn net.Conn, line string) error {
+	return writeLinesBlock(conn, line)
+}
+
+func writeLinesBlock(conn net.Conn, lines ...string) error {
 	if err := conn.SetWriteDeadline(time.Now().Add(writeTimeout)); err != nil {
 		return err
 	}
-	_, err := io.WriteString(conn, line+"\r\n\r\n")
+	_, err := io.WriteString(conn, strings.Join(lines, "\r\n")+"\r\n\r\n")
 	return err
 }
 
@@ -264,9 +283,12 @@ func readCommand(conn net.Conn, reader *bufio.Reader) (string, error) {
 		case '\r':
 			continue
 		case '\n':
+			if !utf8.ValidString(command.String()) {
+				return "", fmt.Errorf("command is not valid UTF-8")
+			}
 			return strings.TrimSpace(command.String()), nil
 		}
-		if b < 32 || b > 126 {
+		if b < 32 {
 			continue
 		}
 		if command.Len() >= maxCommandBytes {

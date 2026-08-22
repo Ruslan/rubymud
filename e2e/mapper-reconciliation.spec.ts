@@ -194,6 +194,54 @@ test("handles darkness, then creates one provisional room and a two-way passage"
   )).toEqual([{ n: 2 }]);
 });
 
+test("confirms a crate-revealed mutable down exit and keeps OBS recording", async ({ page }) => {
+  stack = await startStack({ dynamicCrate: true, roomBoundary: true });
+  await installMapLayout(page);
+  await page.goto(`${stack.baseURL}/?session_id=${stack.seed.session_id}`);
+  await connectAnchorAndArm(page, "В окружении ящиков");
+
+  await page.locator("#input").fill("двигать ящик");
+  await page.locator("#input").press("Enter");
+  await expect.poll(() => traceCommandCount("двигать ящик", 1)).toBe(1);
+  await page.locator("#input").fill("scan");
+  await page.locator("#input").press("Enter");
+  await expect.poll(() => traceCommandCount("scan", 1)).toBeGreaterThanOrEqual(1);
+  await expect.poll(() => downFrontierGreenPixels(page)).toBeGreaterThan(5);
+
+  await sendAndExpectRoom(page, "N", "Проход между ящиками");
+  await sendAndExpectRoom(page, "S", "В окружении ящиков");
+  const dialog = page.getByRole("dialog", { name: "Resolve mapper conflict" });
+  await expect(dialog).toBeVisible();
+  await expect(dialog).toContainText("Only exits differ");
+  await expect(dialog.locator(".map-reconciliation-diff")).toContainText("Observed: N D");
+  await dialog.getByRole("button", { name: "Mark D mutable and continue OBS" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(obsButton(page)).toHaveText("STOP OBS");
+  await expect(page.locator(".map-pane__confidence")).toHaveAttribute("title", /Confidence: green/);
+  expect(stack.query<{ mutable_exits: string }>(
+    `SELECT mutable_exits FROM rooms WHERE map_set_id=${stack.seed.map_set_id} AND zone='Хилло' AND x=0 AND y=0 AND l=0`,
+  )).toEqual([{ mutable_exits: `["D"]` }]);
+
+  // The same live N+D variant is now trusted only at this exact room. Returning
+  // through the known passage must stay green and must not reopen reconciliation.
+  await sendAndExpectRoom(page, "N", "Проход между ящиками");
+  await sendAndExpectRoom(page, "S", "В окружении ящиков");
+  await expect(page.getByRole("dialog", { name: "Resolve mapper conflict" })).toHaveCount(0);
+  await expect(page.locator(".map-pane__confidence")).toHaveAttribute("title", /Confidence: green/);
+
+  // D is still an unexplored graph edge, so OBS records the lower room and its
+  // default reverse U passage after the explicit mutable-room decision.
+  await sendAndExpectRoom(page, "D", "Под ящиками");
+  await expect.poll(() => stack.query<{ n: number }>(
+    `SELECT count(*) AS n FROM rooms WHERE map_set_id=${stack.seed.map_set_id} AND zone='Хилло' AND l=-1`,
+  )).toEqual([{ n: 1 }]);
+  expect(stack.query<{ dir: string; to_l: number }>(
+    `SELECT dir,to_l FROM map_edges WHERE map_set_id=${stack.seed.map_set_id} AND source='autorecord' AND from_zone='Хилло' ORDER BY from_l DESC,dir`,
+  )).toEqual([{ dir: "D", to_l: -1 }, { dir: "U", to_l: 0 }]);
+  await expect(page.locator(".map-pane__confidence")).toHaveAttribute("title", /Confidence: green/);
+  await page.locator(".map-pane").screenshot({ path: join(stack.artifactsDir, "mutable-crate-down.png") });
+});
+
 test("shows the Hillo one-way passage and lets the player block only its reverse face", async ({ page }) => {
   stack = await startStack({ oneWayHillo: true });
   await installMapLayout(page);
@@ -311,6 +359,25 @@ async function eastFrontierOpaquePixels(page: Page): Promise<number> {
     let opaque = 0;
     for (let i = 3; i < data.length; i += 4) if (data[i] > 0) opaque++;
     return opaque;
+  });
+}
+
+async function downFrontierGreenPixels(page: Page): Promise<number> {
+  return page.locator(".map-pane__canvas").evaluate((canvas: HTMLCanvasElement) => {
+    const ctx = canvas.getContext("2d");
+    if (!ctx || canvas.clientWidth === 0 || canvas.clientHeight === 0) return 0;
+    const sx = canvas.width / canvas.clientWidth;
+    const sy = canvas.height / canvas.clientHeight;
+    const x = Math.floor((canvas.clientWidth / 2 + 12) * sx);
+    const y = Math.floor((canvas.clientHeight / 2 + 10) * sy);
+    const width = Math.max(1, Math.floor(220 * sx));
+    const height = Math.max(1, Math.floor(55 * sy));
+    const data = ctx.getImageData(x, y, Math.min(width, canvas.width - x), Math.min(height, canvas.height - y)).data;
+    let green = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i] >= 70 && data[i] <= 100 && data[i + 1] >= 210 && data[i + 1] <= 250 && data[i + 2] >= 115 && data[i + 2] <= 155 && data[i + 3] > 0) green++;
+    }
+    return green;
   });
 }
 

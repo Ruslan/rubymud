@@ -1512,6 +1512,32 @@ export class MapPaneController {
     const select=document.createElement("select");select.setAttribute("aria-label",this.i18n.t('existingTargetRoom'));for(const room of targetRooms){const o=document.createElement("option");o.value=JSON.stringify({zone:room.z,x:room.x,y:room.y,l:room.l});o.textContent=`${room.h||this.i18n.t('unnamed')} — (${room.x}, ${room.y}, ${room.l})`;if(room.x===expected.x&&room.y===expected.y&&room.l===expected.l)o.selected=true;select.appendChild(o)}dialog.appendChild(select);
     const source=conflict.move.from;const coords=["display_x","display_y","display_l"] as const;const values=[source.x,source.y,source.l];const inputs:HTMLInputElement[]=[];coords.forEach((name,i)=>{const copy=this.i18n.t('displayCoord',{axis:name.slice(-1).toUpperCase()});const label=document.createElement("label");label.textContent=copy+' ';const input=document.createElement("input");input.type="number";input.value=String(values[i]);input.setAttribute("aria-label",copy);label.appendChild(input);dialog.appendChild(label);inputs.push(input)});
     const status=document.createElement("p");status.setAttribute("aria-live","polite");dialog.appendChild(status);const actions=document.createElement("div");actions.className="map-zone-dialog__actions";const preview=document.createElement("button");preview.type="button";preview.textContent=this.i18n.t('preview');const apply=document.createElement("button");apply.type="button";apply.textContent=this.i18n.t('apply');apply.disabled=true;const discard=document.createElement("button");discard.type="button";discard.textContent=this.i18n.t('discardObservation');const cancel=document.createElement("button");cancel.type="button";cancel.textContent=this.i18n.t('cancel');actions.append(preview,apply,discard,cancel);dialog.appendChild(actions);
+    const mutableCandidates = conflict.mutable_exit_candidates ?? [];
+    if (mutableCandidates.length > 0) {
+      const directions = mutableCandidates.join(" ");
+      const note = document.createElement("p");
+      note.className = "map-reconciliation-mutable";
+      note.textContent = this.i18n.t('mutableExitSuggestion', { directions });
+      dialog.insertBefore(note, status);
+      const accept = document.createElement("button");
+      accept.type = "button";
+      accept.className = "map-reconciliation-accept-mutable";
+      accept.textContent = this.i18n.t('acceptMutableExits', { directions });
+      actions.prepend(accept);
+      accept.addEventListener("click", async () => {
+        accept.disabled = true;
+        try {
+          const res = await fetchWithToken(`/api/sessions/${this.config.sessionID}/map-reconciliation/accept-mutable-exits`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ conflict_id: conflict.id, directions: mutableCandidates }) });
+          if (!res.ok) throw new Error(await res.text());
+          const data = await res.json();
+          if (data.state) this.onMapRecordingState(data.state as MapRecordingState);
+          this.closeReconciliationDialog();
+        } catch (err) {
+          status.textContent = this.i18n.t('mutableExitAcceptFailed', { error: err instanceof Error ? err.message : String(err) });
+          accept.disabled = false;
+        }
+      });
+    }
     let token="";const invalidate=()=>{token="";apply.disabled=true};select.addEventListener("change",invalidate);inputs.forEach(i=>i.addEventListener("input",invalidate));
     preview.addEventListener("click",async()=>{try{if(!select.value)throw new Error(this.i18n.t('chooseTarget'));if(inputs.some(input=>input.value.trim()===""||!Number.isSafeInteger(Number(input.value))))throw new Error(this.i18n.t('displayCoordsInteger'));const target=JSON.parse(select.value);const layouts=[{zone:source.zone,x:source.x,y:source.y,l:source.l,display_x:Number(inputs[0].value),display_y:Number(inputs[1].value),display_l:Number(inputs[2].value),pinned:false}];const res=await fetchWithToken(`/api/sessions/${this.config.sessionID}/map-reconciliation/preview`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({conflict_id:conflict.id,target,layouts})});if(!res.ok)throw new Error(await res.text());const data=await res.json();token=data.token;apply.disabled=!token;status.textContent=this.i18n.t('previewReady',{command:data.command,zone:data.target.zone,coords:`${data.target.x}, ${data.target.y}, ${data.target.l}`});}catch(err){invalidate();status.textContent=this.i18n.t('previewFailed',{error:err instanceof Error?err.message:String(err)})}});
     apply.addEventListener("click",async()=>{if(!token)return;apply.disabled=true;try{const res=await fetchWithToken(`/api/sessions/${this.config.sessionID}/map-reconciliation/apply`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({conflict_id:conflict.id,token})});if(!res.ok)throw new Error(await res.text());const data=await res.json();if(data.state)this.onMapRecordingState(data.state);this.closeReconciliationDialog();}catch(err){status.textContent=this.i18n.t('applyFailed',{error:err instanceof Error?err.message:String(err)});token="";apply.disabled=true;}});
@@ -1898,6 +1924,7 @@ export class MapPaneController {
       });
       knowledge.classList.add("map-cell-menu__knowledge");
       menu.appendChild(knowledge);
+      this.appendMutableExitEditor(menu, room);
     }
 
     // 2) «Записать комнату» — the human autorecord. One action, two labels:
@@ -1990,6 +2017,65 @@ export class MapPaneController {
 
   // Cross-zone transitions are direct room-menu actions. The menu already has a
   // pane-relative max height, so every valid seam remains reachable by keyboard.
+  private appendMutableExitEditor(menu: HTMLElement, room: SlimRoom): void {
+    const details = document.createElement("details");
+    details.className = "map-cell-menu__mutable-exits";
+    const summary = document.createElement("summary");
+    summary.textContent = this.i18n.t('mutableExits');
+    details.appendChild(summary);
+    const help = document.createElement("p");
+    help.textContent = this.i18n.t('mutableExitsHelp');
+    details.appendChild(help);
+    const selected = new Set(room.me ?? []);
+    const inputs: HTMLInputElement[] = [];
+    const choices = document.createElement("div");
+    choices.className = "map-cell-menu__mutable-choices";
+    for (const dir of ["N", "S", "E", "W", "U", "D"]) {
+      const label = document.createElement("label");
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.value = dir;
+      input.checked = selected.has(dir);
+      label.append(input, ` ${dir} · ${dirName(dir, this.i18n)}`);
+      choices.appendChild(label);
+      inputs.push(input);
+    }
+    details.appendChild(choices);
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "map-cell-menu__item map-cell-menu__mutable-save";
+    save.textContent = this.i18n.t('saveMutableExits');
+    save.addEventListener("click", () => {
+      save.disabled = true;
+      void this.saveMutableExits(room, inputs.filter((input) => input.checked).map((input) => input.value));
+    });
+    details.appendChild(save);
+    menu.appendChild(details);
+  }
+
+  private async saveMutableExits(room: SlimRoom, directions: string[]): Promise<void> {
+    if (this.config.sessionID == null) {
+      this.closeCellMenu();
+      this.setStatus(this.i18n.t('noSessionUpdate'));
+      return;
+    }
+    try {
+      const res = await fetchWithToken(`/api/sessions/${this.config.sessionID}/map-cell-patch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ zone: room.z, x: room.x, y: room.y, l: room.l, mutable_exits: directions }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      const data: { ok?: boolean; reason?: string } = await res.json();
+      if (!data.ok) throw new Error(data.reason ?? "?");
+      this.closeCellMenu();
+      this.setStatus(this.i18n.t('mutableExitsSaved'), { sticky: true });
+    } catch (err) {
+      this.closeCellMenu();
+      this.setStatus(this.i18n.t('mutableExitsSaveFailed', { error: err instanceof Error ? err.message : String(err) }), { sticky: true });
+    }
+  }
+
   private appendSeamItems(menu: HTMLElement, room: SlimRoom): void {
     const seams = seamsOf(room);
     if (seams.length === 0) return;

@@ -445,6 +445,7 @@ func newServer(listener WebListenerConfig, manager *session.Manager, store *stor
 				r.Post("/map-recording-stop", s.mapRecordingStop)
 				r.Post("/map-reconciliation/preview", s.mapReconciliationPreview)
 				r.Post("/map-reconciliation/apply", s.mapReconciliationApply)
+				r.Post("/map-reconciliation/accept-mutable-exits", s.mapReconciliationAcceptMutableExits)
 				r.Post("/map-mark-edge", s.mapMarkEdge)
 				r.Post("/map-edge-attrs", s.mapEdgeAttrs)
 				r.Post("/map-portals", s.mapPortal)

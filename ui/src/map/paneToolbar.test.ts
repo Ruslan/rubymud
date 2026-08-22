@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mainStyles = readFileSync(resolve(process.cwd(), "src/styles/main.css"), "utf8");
 
 const fetchMock = vi.fn();
-vi.mock("../dom", () => ({ fetchWithToken: (url: string) => fetchMock(url) }));
+vi.mock("../dom", () => ({ fetchWithToken: (url: string, init?: RequestInit) => fetchMock(url, init) }));
 
 import { MapPaneController } from "./pane";
 import type { SlimRoom } from "./types";
@@ -207,6 +207,37 @@ describe("map pane compact toolbar", () => {
     await vi.waitFor(()=>expect(pane.root.querySelector('[aria-label="Resolve mapper conflict"]')).toBeNull());
     expect(fetchMock.mock.calls.some(([url])=>String(url).endsWith('/map-recording-stop'))).toBe(true);
     expect(pane.root.querySelector<HTMLButtonElement>('.map-pane__recording-toggle')?.textContent).toBe('OBS');
+  });
+
+  it("offers an exit-only mutable-room confirmation and resumes OBS", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("A"));
+    const conflict = { id: 92, move: { command: "south", direction: "S", source: "input", from: { zone:"A",x:-1,y:0,l:0 }, expected: { zone:"A",x:0,y:0,l:0 } }, expected:{zone:"A",x:0,y:0,l:0}, expected_hint:"Atrium", expected_room:{hint:"Atrium",desc:"same",exits:"N"}, observed:{hint:"Atrium",desc:"same",exits:"N D"}, reason:"mismatch", mutable_exit_candidates:["D"], expected_mutable_exits:[] };
+    pane.onMapRecordingState({mode:"conflict",pending:0,revision:32,conflict});
+    const dialog=pane.root.querySelector<HTMLDialogElement>('[aria-label="Resolve mapper conflict"]')!;
+    expect(dialog.textContent).toContain("Only exits differ");
+    const accept=[...dialog.querySelectorAll<HTMLButtonElement>("button")].find(button=>button.textContent==="Mark D mutable and continue OBS")!;
+    fetchMock.mockResolvedValueOnce(json({applied:true,state:{mode:"recording",pending:0,revision:33}}));
+    accept.click();
+    await vi.waitFor(()=>expect(pane.root.querySelector('[aria-label="Resolve mapper conflict"]')).toBeNull());
+    const call=fetchMock.mock.calls.find(([url])=>String(url).endsWith('/map-reconciliation/accept-mutable-exits'))!;
+    expect(JSON.parse(String((call[1] as RequestInit).body))).toEqual({conflict_id:92,directions:["D"]});
+    expect(pane.root.querySelector<HTMLButtonElement>('.map-pane__recording-toggle')?.textContent).toBe('STOP OBS');
+  });
+
+  it("edits persisted mutable directions from the cell menu", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("A"));
+    const editable = { ...room(), me: ["D"] };
+    (pane as unknown as { openCellMenu(cell: {z:string;x:number;y:number;l:number}, room: SlimRoom, x:number, y:number): void }).openCellMenu(editable, editable, 20, 20);
+    const details=pane.root.querySelector<HTMLDetailsElement>('.map-cell-menu__mutable-exits')!;
+    expect(details.querySelector('summary')?.textContent).toBe('Mutable exits…');
+    const checked=[...details.querySelectorAll<HTMLInputElement>('input:checked')];
+    expect(checked.map(input=>input.value)).toEqual(["D"]);
+    details.querySelector<HTMLInputElement>('input[value="U"]')!.checked=true;
+    fetchMock.mockResolvedValueOnce(json({ok:true}));
+    details.querySelector<HTMLButtonElement>('.map-cell-menu__mutable-save')!.click();
+    await vi.waitFor(()=>expect(pane.root.textContent).toContain('Mutable exits saved'));
+    const call=fetchMock.mock.calls.find(([url,init])=>String(url).endsWith('/map-cell-patch') && String((init as RequestInit | undefined)?.body).includes('mutable_exits'))!;
+    expect(JSON.parse(String((call[1] as RequestInit).body)).mutable_exits).toEqual(["U","D"]);
   });
 
   it("shows why OBS stopped when the room is obscured", () => {

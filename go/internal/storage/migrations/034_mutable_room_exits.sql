@@ -1,0 +1,1 @@
+ALTER TABLE rooms ADD COLUMN mutable_exits TEXT NOT NULL DEFAULT '[]';

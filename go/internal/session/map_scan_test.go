@@ -125,6 +125,44 @@ func TestMapRecordingAutoScanCapturesBoundedSixDirectionOutput(t *testing.T) {
 	}
 }
 
+func TestManualConfiguredScanCapturesNewDynamicDownExit(t *testing.T) {
+	tag := 1
+	room := storage.Room{Zone: "Хилло", X: -2, Y: -7, L: 0, Tag: &tag, Hint: "В окружении ящиков", Desc: "Небольшой закуток окружен ящиками.", Exits: "", EDirs: `[]`, Doors: `[]`}
+	tr := mapper.NewTracker(buildTestMapIndex(7, []storage.Room{room}))
+	tr.Anchor(mapper.Coord{Zone: "Хилло", X: -2, Y: -7})
+	conn := &recordingConn{}
+	messages := &scanMessageLog{}
+	s := &Session{
+		conn: conn, mapTracker: tr,
+		mapDetector: mapper.NewSpecDetector(mapper.BuiltinRMUD(), mapper.DetectorInfo{Key: "rmud"}),
+		lastRoom:    mapper.RoomEvent{Hint: "В окружении ящиков", Desc: "Небольшой закуток окружен ящиками.", Exits: "none"}, lastRoomOK: true,
+		mapRecordingMode: MapRecordingArmed, mapRecordingEpoch: 1, mapWalkEpoch: 42, done: make(chan struct{}),
+		clients: map[int]clientSink{1: {id: 1, name: "test", send: func(msg ServerMsg) error {
+			messages.mu.Lock()
+			defer messages.mu.Unlock()
+			messages.items = append(messages.items, msg)
+			return nil
+		}}},
+	}
+
+	handled, err := s.writeManualMapScan("scan")
+	if err != nil || !handled {
+		t.Fatalf("manual configured scan handled=%v err=%v", handled, err)
+	}
+	if got := conn.String(); got != "scan\n" {
+		t.Fatalf("wire = %q", got)
+	}
+	for _, line := range []string{"     Внизу: Черная дыра в полу ведет в темноту.", ""} {
+		s.observeIncomingLine(line, line)
+	}
+	for _, msg := range messages.snapshot() {
+		if msg.Type == "room_scan" && len(msg.RoomScan) == 1 && msg.RoomScan[0].Dir == "D" && msg.RoomScan[0].Hint == "Черная дыра в полу ведет в темноту." {
+			return
+		}
+	}
+	t.Fatalf("manual D scan was not published: %+v", messages.snapshot())
+}
+
 func TestMapRecordingAutoScanIsOneShotAndMovementFencesLateOutput(t *testing.T) {
 	s, conn, messages := scanHarness(t)
 	if _, err := s.StartMapRecording(); err != nil {

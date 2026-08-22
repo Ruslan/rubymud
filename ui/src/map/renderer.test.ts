@@ -431,6 +431,29 @@ describe("MapRenderer scanned frontier", () => {
     expect(fillText.mock.calls.some(([text]) => String(text).includes("Еле заметная"))).toBe(true);
     expect(r.pick(330, 200)).toBeNull();
   });
+
+  it("highlights a scanned down exit in frontier green", () => {
+    const cv = makeCanvas();
+    const ctx = cv.getContext("2d")!;
+    let fillStyle = "";
+    const labelColors: string[] = [];
+    Object.defineProperty(ctx, "fillStyle", {
+      configurable: true,
+      get: () => fillStyle,
+      set: (value) => { fillStyle = String(value); },
+    });
+    vi.spyOn(ctx, "fillText").mockImplementation((text) => {
+      if (String(text).includes("Черная дыра")) labelColors.push(fillStyle);
+    });
+    const r = new MapRenderer(cv);
+    r.setZone("Хилло", [slim({ h: "В окружении ящиков" })]);
+    r.setMarker({ x: 0, y: 0, l: 0, color: "#54e888" });
+    r.setFrontier({ zone: "Хилло", x: 0, y: 0, l: 0, hints: [{ dir: "D", hint: "Черная дыра в полу ведет в темноту." }] });
+    r.centerOn(0, 0, 0);
+    (r as unknown as { paint(): void }).paint();
+
+    expect(labelColors).toEqual(["rgba(84,232,136,.9)"]);
+  });
 });
 
 // The EDGE EDITOR's click target: the boundary between two grid-adjacent rooms.

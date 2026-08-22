@@ -1193,7 +1193,7 @@ func (s *Session) applyTopologyToSet(setID int64, op storage.TopologyOp, res Top
 	res.Applied = true
 	var recordingStopped MapRecordingState
 	recordingWasStopped := false
-	if journal && op.Kind != storage.TopoAutorecordRoom {
+	if journal && op.Kind != storage.TopoAutorecordRoom && op.Kind != storage.TopoSetMutableExits {
 		// A manual/admin topology edit invalidates predicted cells waiting in
 		// the autorecord queue. The lifecycle lock held by WriteTopology makes
 		// this epoch change atomic with the write, so no stale job can publish
@@ -1227,7 +1227,7 @@ func (s *Session) applyTopologyToSet(setID int64, op storage.TopologyOp, res Top
 
 	// Refresh the tracker index (the graph changed) preserving position, and tell
 	// open map panes to reload the zone (carry the set id so a pane can filter).
-	if op.Kind == storage.TopoAutorecordRoom {
+	if op.Kind == storage.TopoAutorecordRoom || op.Kind == storage.TopoSetMutableExits {
 		// The worker publishes one coherent position/state/rooms_changed batch
 		// after it anchors the newly-created target. Do not expose the transient
 		// pre-anchor yellow position between the DB commit and that publication.

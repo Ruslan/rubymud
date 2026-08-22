@@ -112,6 +112,30 @@ func TestServerDarkRoomBecomesVisibleAfterTorch(t *testing.T) {
 	}
 }
 
+func TestServerAcceptsUTF8CrateCommand(t *testing.T) {
+	tracePath := filepath.Join(t.TempDir(), "trace.jsonl")
+	server, err := ListenWithOptions("127.0.0.1:0", tracePath, Options{DynamicCrate: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	conn, err := net.Dial("tcp", server.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	reader := bufio.NewReader(conn)
+	_ = readBlock(t, reader)
+	writeCommand(t, conn, "двигать ящик")
+	if got := readLines(t, reader, 3); !strings.Contains(got, "Стараясь не свалить") || !strings.Contains(got, "Вы обнаружили в полу дыру") {
+		t.Fatalf("crate acknowledgement=%q", got)
+	}
+	writeCommand(t, conn, "scan")
+	if got := readLines(t, reader, 3); !strings.Contains(got, "Внизу: Черная дыра в полу ведет в темноту.") {
+		t.Fatalf("crate scan=%q", got)
+	}
+}
+
 func readBlock(t *testing.T, reader *bufio.Reader) string {
 	t.Helper()
 	return readLines(t, reader, 3)

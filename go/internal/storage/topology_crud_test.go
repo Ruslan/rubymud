@@ -7,6 +7,31 @@ import (
 	"rubymud/go/internal/mapimport"
 )
 
+func TestSetMutableExitsIsCanonicalBoundedRoomMetadata(t *testing.T) {
+	store := newMapperTestStore(t)
+	id, err := store.CreateMapSet(sampleInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, found, err := store.ApplyTopologyOp(id, TopologyOp{Kind: TopoSetMutableExits, Zone: "Alpha", X: 0, Y: 0, L: 0, MutableExits: []string{"d", "bogus", "D", "u"}})
+	if err != nil || !found {
+		t.Fatalf("set mutable exits found=%v err=%v", found, err)
+	}
+	if len(before.Rooms) != 1 || before.Rooms[0].Room.MutableExits != "[]" {
+		t.Fatalf("before snapshot=%+v", before.Rooms)
+	}
+	var room Room
+	if err := store.DB().Where("map_set_id=? AND zone=? AND x=0 AND y=0 AND l=0", id, "Alpha").First(&room).Error; err != nil {
+		t.Fatal(err)
+	}
+	if room.MutableExits != `["U","D"]` {
+		t.Fatalf("mutable exits=%q, want canonical U,D", room.MutableExits)
+	}
+	if before.NoOp {
+		t.Fatal("first metadata write reported no-op")
+	}
+}
+
 // These cover the topology CRUD arms of ApplyTopologyOp
 // (upsert/link/unlink/delete) and the GENERALIZED full-room before-state snapshot
 // (RoomSnapshot list) + RestoreRoomSnapshots undo, at the storage layer.

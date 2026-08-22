@@ -46,12 +46,14 @@ func RoomByID(id int) (Room, bool) {
 type WorldOptions struct {
 	// OneWayHillo replays the real Hillo exception from the local map: «Вдоль
 	// оврага» leads west into «Лесистое предгорье», which has no reverse east exit.
-	OneWayHillo bool
+	OneWayHillo  bool
+	DynamicCrate bool
 }
 
 type World struct {
-	current int
-	options WorldOptions
+	current    int
+	options    WorldOptions
+	crateMoved bool
 }
 
 func NewWorld() *World { return &World{current: 1} }
@@ -61,6 +63,13 @@ func NewWorldWithOptions(options WorldOptions) *World {
 }
 
 func (w *World) Current() Room {
+	if w.options.DynamicCrate {
+		room := crateRooms[w.current]
+		if w.current == 1 && w.crateMoved {
+			room.Exits = "N D"
+		}
+		return room
+	}
 	if w.options.OneWayHillo {
 		return hilloRooms[w.current]
 	}
@@ -77,6 +86,14 @@ func (w *World) Apply(command string) (Room, bool) {
 	return w.Current(), true
 }
 
+func (w *World) ApplyAction(command string) bool {
+	if w.options.DynamicCrate && w.current == 1 && strings.EqualFold(strings.TrimSpace(command), "двигать ящик") {
+		w.crateMoved = true
+		return true
+	}
+	return false
+}
+
 // ScanLines returns the RMUD-shaped surroundings response for the current room.
 // It is presentation truth from the fake MUD, not mapper/storage data.
 func (w *World) ScanLines() []string {
@@ -89,8 +106,14 @@ func (w *World) ScanLines() []string {
 	lines := make([]string, 0, len(transitions[w.current]))
 	for _, dir := range dirs {
 		if target, ok := transitions[w.current][dir]; ok {
+			if w.options.DynamicCrate && w.current == 1 && dir == "D" {
+				lines = append(lines, "Внизу: Черная дыра в полу ведет в темноту.")
+				continue
+			}
 			var room Room
-			if w.options.OneWayHillo {
+			if w.options.DynamicCrate {
+				room = crateRooms[target]
+			} else if w.options.OneWayHillo {
 				room = hilloRooms[target]
 			} else {
 				room = rooms[target]
@@ -102,11 +125,34 @@ func (w *World) ScanLines() []string {
 }
 
 func (w *World) transitions() map[int]map[string]int {
+	if w.options.DynamicCrate {
+		if w.crateMoved {
+			return crateTransitionsRevealed
+		}
+		return crateTransitionsHidden
+	}
 	if w.options.OneWayHillo {
 		return hilloTransitions
 	}
 	return transitions
 }
+
+const (
+	CrateZone        = "Хилло"
+	CrateBoxHint     = "В окружении ящиков"
+	CrateBoxDesc     = "Небольшой закуток со всех сторон окружен валом из ящиков, мешков, коробок... И все это покрыто пылью и паутиной. Стоило сюда забираться. Как бы теперь отсюда выбраться, вот вопрос. Ведь все это великолепие свалится на голову - мало не покажется! Да... задачка. Ломая себе надо всем этим голову, вы заметили, что один из ящиков сильно выступает из-под остальных и присели на него отдохнуть."
+	CratePassageHint = "Проход между ящиками"
+	CratePassageDesc = "Паутина попала вам в лицо, и вы с омерзением сдернули ее. Посветив лампой поближе, вы убедились, что и пауки тут как тут. Да такие жирные! Чем, интересно знать, они могут здесь питаться, не крысами же. Проход, похоже, завел в очередной тупик... Вот разве что слева можно протиснуться немного подальше, только смысла никакого - паутина да пыль, что еще там можно найти!"
+)
+
+var crateRooms = map[int]Room{
+	1: {ID: 1, Hint: CrateBoxHint, Desc: CrateBoxDesc, Exits: "N"},
+	2: {ID: 2, Hint: CratePassageHint, Desc: CratePassageDesc, Exits: "S"},
+	3: {ID: 3, Hint: "Под ящиками", Desc: "Черная дыра в полу ведет в темноту.", Exits: "U"},
+}
+
+var crateTransitionsHidden = map[int]map[string]int{1: {"N": 2}, 2: {"S": 1}, 3: {"U": 1}}
+var crateTransitionsRevealed = map[int]map[string]int{1: {"N": 2, "D": 3}, 2: {"S": 1}, 3: {"U": 1}}
 
 var hilloRooms = map[int]Room{
 	1: {ID: 1, Hint: HilloSourceHint, Desc: HilloSourceDesc, Exits: HilloSourceExits},

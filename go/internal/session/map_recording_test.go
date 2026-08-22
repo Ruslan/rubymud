@@ -645,8 +645,91 @@ func TestFirstOccupiedMismatchFreezesConflictAndSecondRoomCannotReplaceIt(t *tes
 	if first.ID != second.ID || second.Observed.Hint != "Observed" || second.Move.Command != "s" || second.Expected != (mapper.Coord{Zone: "Z", X: 1}) {
 		t.Fatalf("conflict mutated: first=%+v second=%+v", first, second)
 	}
+	if len(second.MutableExitCandidates) != 0 {
+		t.Fatalf("description mismatch must never offer mutable exits: %v", second.MutableExitCandidates)
+	}
 	if state := s.MapRecordingState(); state.Mode != MapRecordingConflict || state.Pending != 0 {
 		t.Fatalf("state=%+v", state)
+	}
+}
+
+func TestOccupiedExpectedRoomMarkedMutableExitDoesNotConflict(t *testing.T) {
+	s := recordingHarness()
+	s.mapTracker.Index().Room(mapper.Coord{Zone: "Z", X: 1, Y: 0}).MutableExits = []string{"D"}
+	if _, err := s.StartMapRecording(); err != nil {
+		t.Fatal(err)
+	}
+	s.observeOutgoingMove("s", "input")
+	s.mapMu.Lock()
+	conflict := s.observeMapRecordingRoomLocked(mapper.RoomEvent{Hint: "Expected", Desc: "expected", Exits: "N D"})
+	state := s.mapRecordingStateLocked()
+	s.mapMu.Unlock()
+	if conflict || state.Mode != MapRecordingRecording || state.Pending != 0 || state.Conflict != nil {
+		t.Fatalf("dynamic exit became an OBS conflict: conflict=%v state=%+v", conflict, state)
+	}
+}
+
+func TestExitOnlyConflictOffersAndPersistsExplicitMutableDirection(t *testing.T) {
+	store := newProfileTestStore(t)
+	frozen, err := store.CreateMapSet(storage.MapSetInput{Name: "crate", Rooms: []storage.Room{
+		mkTrackRoom("Z", 0, 0, 0, 1, "Start", "start", "S"),
+		mkTrackRoom("Z", 1, 0, 0, 2, "Box", "same box", "N"),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	setID, err := store.ForkMapSet(frozen)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec, err := store.CreateSession("crate", "localhost", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SetActiveMapSetID(rec.ID, setID); err != nil {
+		t.Fatal(err)
+	}
+	rooms, _ := store.ListRooms(setID)
+	edges, _ := store.ListMapEdges(setID)
+	tr := mapper.NewTracker(mapper.BuildIndexWithEdges(setID, rooms, edges))
+	tr.Anchor(mapper.Coord{Zone: "Z"})
+	s := &Session{sessionID: rec.ID, store: store, mapTracker: tr, lastRoom: mapper.RoomEvent{Hint: "Start", Desc: "start", Exits: "S"}, lastRoomOK: true, mapRecordingMode: MapRecordingOff, clients: map[int]clientSink{}}
+	if _, err := s.StartMapRecording(); err != nil {
+		t.Fatal(err)
+	}
+	s.observeOutgoingMove("s", "input")
+	s.mapMu.Lock()
+	if !s.observeMapRecordingRoomLocked(mapper.RoomEvent{Hint: "Box", Desc: "same box", Exits: "N D"}) {
+		t.Fatal("unmarked exit variant did not pause for confirmation")
+	}
+	conflict := *s.mapRecordingConflict
+	s.mapMu.Unlock()
+	if len(conflict.MutableExitCandidates) != 1 || conflict.MutableExitCandidates[0] != "D" {
+		t.Fatalf("mutable candidates=%v, want D", conflict.MutableExitCandidates)
+	}
+	if _, _, err := s.AcceptMutableExitConflict(conflict.ID, []string{"U"}); err == nil {
+		t.Fatal("accepted a direction that was not observed changing")
+	}
+	if state := s.MapRecordingState(); state.Mode != MapRecordingConflict || state.Conflict == nil || state.Conflict.ID != conflict.ID {
+		t.Fatalf("invalid mutable choice changed conflict state: %+v", state)
+	}
+	state, gotSet, err := s.AcceptMutableExitConflict(conflict.ID, []string{"D"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotSet != setID || state.Mode != MapRecordingRecording || state.Conflict != nil {
+		t.Fatalf("accept state=%+v set=%d", state, gotSet)
+	}
+	var room storage.Room
+	if err := store.DB().Where("map_set_id=? AND zone='Z' AND x=1 AND y=0 AND l=0", setID).First(&room).Error; err != nil {
+		t.Fatal(err)
+	}
+	if room.MutableExits != `["D"]` {
+		t.Fatalf("persisted mutable exits=%q", room.MutableExits)
+	}
+	pos := s.mapTracker.Position()
+	if pos.Confidence != mapper.Green || pos.Coord != (mapper.Coord{Zone: "Z", X: 1}) {
+		t.Fatalf("position after accept=%+v", pos)
 	}
 }
 

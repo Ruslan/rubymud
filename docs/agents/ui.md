@@ -70,6 +70,16 @@ in either order; a small `mapMu` rendezvous records which won and either writes
 immediately or leaves the scan reserved for the boundary. Scans started later
 from an already settled anchor do not need this boundary gate.
 
+An exact player-entered scan command is captured by the same bounded parser while
+OBS is active, so a command-triggered exit can become a frontier hint before the
+stored room text changes. Room identity remains strict by default. A room may
+persist a small `mutable_exits` direction set; only differences wholly contained
+in that set may keep the exact current/predicted room green. When name and cleaned
+description match but an unmarked exit differs, OBS pauses and offers the differing
+directions for confirmation, never automatic mutation. The cell menu exposes the
+same six-direction property editor. `U/D` scan hints use the same green frontier
+color as cardinal half-room hints.
+
 ## Obscured Mapper Rooms
 
 A declarative room format may list exact `obscured_lines`: server phrases that
