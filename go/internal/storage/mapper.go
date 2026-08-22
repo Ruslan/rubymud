@@ -21,6 +21,7 @@ var (
 	ErrMapSetNotFound  = errors.New("map set not found")
 	ErrSessionNotFound = errors.New("session not found")
 	ErrMapSetHasForks  = errors.New("map set has editable forks")
+	ErrRoomNotLeaf     = errors.New("room is not a leaf")
 )
 
 // MapSet is one imported archive of maps (a global entity a session references).
@@ -2026,6 +2027,14 @@ func (s *Store) deletePortalWithSnapshot(mapSetID int64, from EdgeCell, sel Port
 // re-creating the room via undo/upsert re-associates them). This is the simplest,
 // most consistent choice — no cascade.
 func (s *Store) deleteRoomWithSnapshot(mapSetID int64, zone string, x, y, l int) (before TopologyBefore, found bool, err error) {
+	return s.deleteRoomWithSnapshotMode(mapSetID, zone, x, y, l, false)
+}
+
+func (s *Store) deleteLeafRoomWithSnapshot(mapSetID int64, zone string, x, y, l int) (before TopologyBefore, found bool, err error) {
+	return s.deleteRoomWithSnapshotMode(mapSetID, zone, x, y, l, true)
+}
+
+func (s *Store) deleteRoomWithSnapshotMode(mapSetID int64, zone string, x, y, l int, leafOnly bool) (before TopologyBefore, found bool, err error) {
 	err = s.db.Transaction(func(tx *gorm.DB) error {
 		snap, serr := snapshotRoom(tx, mapSetID, zone, x, y, l)
 		if serr != nil {
@@ -2033,6 +2042,27 @@ func (s *Store) deleteRoomWithSnapshot(mapSetID int64, zone string, x, y, l int)
 		}
 		if !snap.Existed {
 			return nil // found stays false — nothing to delete
+		}
+		if leafOnly {
+			var neighbours []EdgeCell
+			if serr := tx.Raw(`WITH neighbour_cells(zone,x,y,l) AS (
+				SELECT to_zone,to_x,to_y,to_l FROM map_edges
+				 WHERE map_set_id=? AND from_zone=? AND from_x=? AND from_y=? AND from_l=? AND to_zone IS NOT NULL
+				UNION
+				SELECT from_zone,from_x,from_y,from_l FROM map_edges
+				 WHERE map_set_id=? AND to_zone=? AND to_x=? AND to_y=? AND to_l=?
+			)
+			SELECT n.zone,n.x,n.y,n.l FROM neighbour_cells n
+			JOIN rooms r ON r.map_set_id=? AND r.zone=n.zone AND r.x=n.x AND r.y=n.y AND r.l=n.l
+			WHERE NOT (n.zone=? AND n.x=? AND n.y=? AND n.l=?) LIMIT 2`,
+				mapSetID, zone, x, y, l,
+				mapSetID, zone, x, y, l,
+				mapSetID, zone, x, y, l).Scan(&neighbours).Error; serr != nil {
+				return serr
+			}
+			if len(neighbours) > 1 {
+				return ErrRoomNotLeaf
+			}
 		}
 		found = true
 		before.Rooms = []RoomSnapshot{snap}

@@ -240,6 +240,24 @@ describe("map pane compact toolbar", () => {
     expect(JSON.parse(String((call[1] as RequestInit).body)).mutable_exits).toEqual(["U","D"]);
   });
 
+  it("keeps undoable leaf deletion inside room properties", async () => {
+    await vi.waitFor(() => expect((pane as unknown as { currentZone: string }).currentZone).toBe("A"));
+    const leaf = upperRoom();
+    (pane as unknown as { openCellMenu(cell: SlimRoom, room: SlimRoom, x: number, y: number): void }).openCellMenu(leaf, leaf, 20, 20);
+    const properties = pane.root.querySelector<HTMLDetailsElement>(".map-cell-menu__room-properties")!;
+    expect(properties.querySelector("summary")?.textContent).toBe("Room properties…");
+    properties.open = true;
+    const deleteButton = properties.querySelector<HTMLButtonElement>(".map-cell-menu__delete-leaf")!;
+    expect(deleteButton.textContent).toBe("Delete leaf room");
+    expect(deleteButton.closest(".map-cell-menu__room-properties")).toBe(properties);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    fetchMock.mockResolvedValueOnce(json({ deleted: true, set_id: 1 }));
+    deleteButton.click();
+    await vi.waitFor(() => expect(pane.root.textContent).toContain("Room deleted; Undo is available"));
+    const call = fetchMock.mock.calls.find(([url]) => String(url).endsWith("/map-room-delete-leaf"))!;
+    expect(JSON.parse(String((call[1] as RequestInit).body))).toEqual({ zone: "A", x: 1, y: 0, l: 1 });
+  });
+
   it("shows why OBS stopped when the room is obscured", () => {
     pane.onMapRecordingState({mode:"recording",pending:1,revision:40});
     pane.onMapRecordingState({mode:"off",pending:0,revision:41,reason:"Room is dark — restore visibility.",reason_code:"mapper.recording.room_obscured"});

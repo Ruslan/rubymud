@@ -751,6 +751,49 @@ func (s *Server) mapCellPatch(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, out)
 }
 
+func (s *Server) mapDeleteLeafRoom(w http.ResponseWriter, r *http.Request) {
+	locale := s.mapperLanguage()
+	_, id, err := s.getSession(r)
+	if err != nil {
+		writeMapperTextError(w, http.StatusBadRequest, locale, appi18n.MapperInvalidSessionID, nil)
+		return
+	}
+	var body struct {
+		Zone string `json:"zone"`
+		X    int    `json:"x"`
+		Y    int    `json:"y"`
+		L    int    `json:"l"`
+	}
+	if !decodeStrictJSON(w, r, &body, locale) {
+		return
+	}
+	sess, ok := s.manager.GetSession(id)
+	if !ok {
+		writeMapperTextError(w, http.StatusConflict, locale, appi18n.MapperSessionNotConnected, nil)
+		return
+	}
+	res, err := sess.DeleteLeafRoom(mapper.Coord{Zone: body.Zone, X: body.X, Y: body.Y, L: body.L})
+	if err != nil {
+		switch {
+		case errors.Is(err, session.ErrCannotDeleteCurrentRoom):
+			writeMapperTextError(w, http.StatusConflict, locale, appi18n.MapperDeleteCurrentRoom, nil)
+		case errors.Is(err, storage.ErrRoomNotLeaf):
+			writeMapperTextError(w, http.StatusConflict, locale, appi18n.MapperDeleteRoomNotLeaf, nil)
+		case errors.Is(err, session.ErrNoActiveMapSet):
+			writeMapperTextError(w, http.StatusConflict, locale, appi18n.MapperNoActiveMapSet, nil)
+		default:
+			writeMapperTextError(w, http.StatusInternalServerError, locale, appi18n.MapperTopologyWriteFailed, map[string]any{"detail": err.Error()})
+		}
+		return
+	}
+	if !res.Applied {
+		writeMapperTextError(w, http.StatusNotFound, locale, appi18n.MapperRoomNotFound, nil)
+		return
+	}
+	s.manager.RefreshSharedTopology(res.SetID, id)
+	writeJSON(w, map[string]any{"deleted": true, "set_id": res.SetID})
+}
+
 // mapLiveRoom handles GET /api/sessions/{sessionID}/map-live-room — the current
 // live room block the parser last saw, as {seen,hint,desc,exits}.
 //

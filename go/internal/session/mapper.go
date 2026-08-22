@@ -14,6 +14,8 @@ import (
 // no (or a cleared) active map set — the caller soft-fails with a reason.
 var ErrNoActiveMapSet = errors.New("no active map set for this session")
 
+var ErrCannotDeleteCurrentRoom = errors.New("current room cannot be deleted")
+
 // (exported for the web layer to distinguish the soft-fail from a real error.)
 
 // This file wires the mapper position tracker into the session. Design
@@ -1061,6 +1063,29 @@ func (s *Session) WriteTopology(op storage.TopologyOp) (TopologyWriteResult, err
 	s.mapReconcileMu.Lock()
 	defer s.mapReconcileMu.Unlock()
 	return s.writeTopologyLocked(op)
+}
+
+// DeleteLeafRoom is the browser-safe room deletion boundary. Storage checks the
+// graph leaf predicate atomically with the delete; the session separately refuses
+// its current coordinate so an ordinary cleanup cannot erase the player's anchor.
+func (s *Session) DeleteLeafRoom(c mapper.Coord) (TopologyWriteResult, error) {
+	zone, err := storage.NormalizeZoneName(c.Zone)
+	if err != nil {
+		return TopologyWriteResult{}, err
+	}
+	c.Zone = zone
+	s.mapReconcileMu.Lock()
+	defer s.mapReconcileMu.Unlock()
+	s.mapMu.Lock()
+	if s.mapTracker != nil {
+		pos := s.mapTracker.Position()
+		if pos.Valid && pos.Coord == c {
+			s.mapMu.Unlock()
+			return TopologyWriteResult{}, ErrCannotDeleteCurrentRoom
+		}
+	}
+	s.mapMu.Unlock()
+	return s.writeTopologyLocked(storage.TopologyOp{Kind: storage.TopoDeleteLeafRoom, Zone: c.Zone, X: c.X, Y: c.Y, L: c.L})
 }
 
 // writeTopologyLocked is the unified topology write-path with the session

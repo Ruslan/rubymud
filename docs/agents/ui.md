@@ -80,6 +80,14 @@ directions for confirmation, never automatic mutation. The cell menu exposes the
 same six-direction property editor. `U/D` scan hints use the same green frontier
 color as cardinal half-room hints.
 
+Rare/destructive room actions live under the cell menu's collapsed **Room
+properties** section. **Delete leaf room** is intentionally narrower than the MCP
+room-delete tool: the server refuses the player's current coordinate and, in the
+same topology transaction as deletion, refuses any room with more than one unique
+existing graph neighbour (incoming and outgoing faces both count). A successful
+delete stops OBS, refreshes every session sharing the set, and uses the normal
+topology journal, so the visible Undo action recreates the exact room and edges.
+
 ## Obscured Mapper Rooms
 
 A declarative room format may list exact `obscured_lines`: server phrases that

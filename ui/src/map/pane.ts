@@ -1924,7 +1924,7 @@ export class MapPaneController {
       });
       knowledge.classList.add("map-cell-menu__knowledge");
       menu.appendChild(knowledge);
-      this.appendMutableExitEditor(menu, room);
+      this.appendRoomProperties(menu, room);
     }
 
     // 2) «Записать комнату» — the human autorecord. One action, two labels:
@@ -2017,6 +2017,29 @@ export class MapPaneController {
 
   // Cross-zone transitions are direct room-menu actions. The menu already has a
   // pane-relative max height, so every valid seam remains reachable by keyboard.
+  private appendRoomProperties(menu: HTMLElement, room: SlimRoom): void {
+    const details = document.createElement("details");
+    details.className = "map-cell-menu__room-properties";
+    const summary = document.createElement("summary");
+    summary.textContent = this.i18n.t('roomProperties');
+    details.appendChild(summary);
+    this.appendMutableExitEditor(details, room);
+
+    const help = document.createElement("p");
+    help.className = "map-cell-menu__delete-help";
+    help.textContent = this.i18n.t('deleteLeafRoomHelp');
+    details.appendChild(help);
+    const deleteButton = this.menuButton(this.i18n.t('deleteLeafRoom'), () => void this.deleteLeafRoom(room));
+    deleteButton.classList.add("map-cell-menu__delete-leaf");
+    const pos = this.lastPosition;
+    if (pos?.valid && pos.zone === room.z && pos.x === room.x && pos.y === room.y && pos.l === room.l) {
+      deleteButton.disabled = true;
+      deleteButton.title = this.i18n.t('deleteCurrentRoom');
+    }
+    details.appendChild(deleteButton);
+    menu.appendChild(details);
+  }
+
   private appendMutableExitEditor(menu: HTMLElement, room: SlimRoom): void {
     const details = document.createElement("details");
     details.className = "map-cell-menu__mutable-exits";
@@ -2051,6 +2074,29 @@ export class MapPaneController {
     });
     details.appendChild(save);
     menu.appendChild(details);
+  }
+
+  private async deleteLeafRoom(room: SlimRoom): Promise<void> {
+    if (this.config.sessionID == null) {
+      this.closeCellMenu();
+      this.setStatus(this.i18n.t('noSessionUpdate'));
+      return;
+    }
+    const label = room.h || this.i18n.t('unnamed');
+    if (!window.confirm(this.i18n.t('deleteLeafConfirm', { room: label, coords: `${room.z} (${room.x},${room.y},${room.l})` }))) return;
+    try {
+      const res = await fetchWithToken(`/api/sessions/${this.config.sessionID}/map-room-delete-leaf`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ zone: room.z, x: room.x, y: room.y, l: room.l }),
+      });
+      if (!res.ok) throw new Error((await res.text()).trim() || `HTTP ${res.status}`);
+      this.closeCellMenu();
+      this.setStatus(this.i18n.t('deleteLeafSuccess'), { sticky: true });
+    } catch (err) {
+      this.closeCellMenu();
+      this.setStatus(this.i18n.t('deleteLeafFailed', { error: err instanceof Error ? err.message : String(err) }), { sticky: true });
+    }
   }
 
   private async saveMutableExits(room: SlimRoom, directions: string[]): Promise<void> {

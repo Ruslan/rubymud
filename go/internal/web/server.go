@@ -438,6 +438,7 @@ func newServer(listener WebListenerConfig, manager *session.Manager, store *stor
 				r.Post("/map-walk/cancel", s.cancelMapWalk)
 				r.Post("/map-walk/resume", s.resumeMapWalk)
 				r.Post("/map-cell-patch", s.mapCellPatch)
+				r.Post("/map-room-delete-leaf", s.mapDeleteLeafRoom)
 				r.Get("/map-live-room", s.mapLiveRoom)
 				r.Post("/map-record-room", s.mapRecordRoom)
 				r.Get("/map-recording-state", s.mapRecordingState)

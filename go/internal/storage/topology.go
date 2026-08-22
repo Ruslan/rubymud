@@ -48,6 +48,10 @@ const (
 	// TopoDeleteRoom deletes the room at the target cell. Its room_annotations /
 	// room_images are left dangling (see deleteRoomWithSnapshot).
 	TopoDeleteRoom TopologyOpKind = "delete_room"
+	// TopoDeleteLeafRoom is the browser-safe delete: the same exact/undoable
+	// mutation, but atomically refuses a room with more than one existing graph
+	// neighbour.
+	TopoDeleteLeafRoom TopologyOpKind = "delete_leaf_room"
 	// --- the hand-drawn layer (hidden exits and their negation) ---------------
 	//
 	// All three write map_edges rows with source='manual' and touch NO room field.
@@ -284,7 +288,7 @@ func NormalizeTopologyOp(op TopologyOp) (TopologyOp, error) {
 		return op, nil
 	}
 	switch op.Kind {
-	case TopoPatchExits, TopoSetMutableExits, TopoUpsertRoom, TopoLink, TopoUnlink, TopoDeleteRoom,
+	case TopoPatchExits, TopoSetMutableExits, TopoUpsertRoom, TopoLink, TopoUnlink, TopoDeleteRoom, TopoDeleteLeafRoom,
 		TopoAddManualEdge, TopoBlockManualEdge, TopoRemoveManualEdge, TopoSetEdgeAttrs,
 		TopoCreatePortal, TopoUpdatePortal, TopoDeletePortal:
 		var err error
@@ -620,6 +624,8 @@ func (s *Store) applyTopologyOpUnfenced(mapSetID int64, op TopologyOp) (before T
 		return s.linkWithSnapshot(mapSetID, op.Zone, op.X, op.Y, op.L, op.Dir, false)
 	case TopoDeleteRoom:
 		return s.deleteRoomWithSnapshot(mapSetID, op.Zone, op.X, op.Y, op.L)
+	case TopoDeleteLeafRoom:
+		return s.deleteLeafRoomWithSnapshot(mapSetID, op.Zone, op.X, op.Y, op.L)
 	case TopoAddManualEdge:
 		return s.manualEdgeWithSnapshot(mapSetID, op.Zone, op.X, op.Y, op.L, op.Dir, manualMarkPassable, op.OneWay)
 	case TopoBlockManualEdge:
@@ -698,7 +704,7 @@ func (op TopologyOp) UndoLabel() string {
 		return "link " + op.Dir
 	case TopoUnlink:
 		return "unlink " + op.Dir
-	case TopoDeleteRoom:
+	case TopoDeleteRoom, TopoDeleteLeafRoom:
 		return "delete room"
 	case TopoAddManualEdge:
 		return "mark hidden exit " + op.Dir + manualWaySuffix(op.OneWay)

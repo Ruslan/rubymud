@@ -67,6 +67,8 @@ const (
 	MapperRecordingObscured            Key = "mapper.recording.room_obscured"
 	MapperRecordingStopped             Key = "mapper.recording.stopped"
 	MapperRoomNotFound                 Key = "mapper.room_not_found"
+	MapperDeleteCurrentRoom            Key = "mapper.delete.current_room"
+	MapperDeleteRoomNotLeaf            Key = "mapper.delete.not_leaf"
 	MapperInvalidBody                  Key = "mapper.invalid_body"
 	MapperTopologyWriteFailed          Key = "mapper.topology_write_failed"
 	MapperEdgeWeightPositive           Key = "mapper.edge.weight_positive"
@@ -198,6 +200,8 @@ var catalogs = map[Locale]map[Key]string{
 		MapperRecordingObscured:            "room obscured; restore visibility and restart OBS",
 		MapperRecordingStopped:             "{detail}",
 		MapperRoomNotFound:                 "room not found in the active map set",
+		MapperDeleteCurrentRoom:            "the current room cannot be deleted — move to its neighbour first",
+		MapperDeleteRoomNotLeaf:            "room is not a leaf — it has more than one mapped neighbour",
 		MapperInvalidBody:                  "invalid body: {detail}",
 		MapperTopologyWriteFailed:          "{detail}",
 		MapperEdgeWeightPositive:           "edge weight must be finite and greater than zero",
@@ -327,6 +331,8 @@ var catalogs = map[Locale]map[Key]string{
 		MapperRecordingObscured:            "запись карты остановлена: комната не видна — восстановите освещение и снова включите НАБЛ",
 		MapperRecordingStopped:             "запись карты остановлена: {detail}",
 		MapperRoomNotFound:                 "комната не найдена в активном наборе карт",
+		MapperDeleteCurrentRoom:            "нельзя удалить текущую комнату — сначала перейдите в соседнюю",
+		MapperDeleteRoomNotLeaf:            "комната не листовая — у неё больше одного разведанного соседа",
 		MapperInvalidBody:                  "неверное тело запроса: {detail}",
 		MapperTopologyWriteFailed:          "не удалось изменить топологию: {detail}",
 		MapperEdgeWeightPositive:           "вес перехода должен быть конечным положительным числом",

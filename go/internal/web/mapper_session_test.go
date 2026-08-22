@@ -3,6 +3,7 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -678,6 +679,52 @@ func TestRESTMapCellPatchSetsMutableDirectionsWithoutChangingExits(t *testing.T)
 	room = slimRoomAt(t, s, setID, "Z", 0, 0, 0)
 	if len(room.ME) != 0 {
 		t.Fatalf("undo left mutable directions=%v", room.ME)
+	}
+}
+
+func TestRESTDeleteLeafRoomRefusesCurrentAndInteriorThenDeletesUndoably(t *testing.T) {
+	s, sess := setupMcpTestServer(t)
+	ts := httptest.NewServer(s.httpServer.Handler)
+	defer ts.Close()
+	sid := sess.SessionID()
+	setID := seedTrackerSet(t, s, sid)
+	sess.LoadActiveMapSet()
+	if ok, exact := sess.AnchorMapPosition(mapper.Coord{Zone: "Z", X: 0}); !ok || !exact {
+		t.Fatalf("anchor ok=%v exact=%v", ok, exact)
+	}
+
+	post := func(x int) (int, string) {
+		t.Helper()
+		req, _ := newAuthenticatedRequest(http.MethodPost, fmt.Sprintf("%s/api/sessions/%d/map-room-delete-leaf", ts.URL, sid),
+			strings.NewReader(fmt.Sprintf(`{"zone":"Z","x":%d,"y":0,"l":0}`, x)), s.apiToken)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(body)
+	}
+	if status, body := post(0); status != http.StatusConflict || !strings.Contains(body, "current room") {
+		t.Fatalf("current delete status=%d body=%q", status, body)
+	}
+	if status, body := post(1); status != http.StatusConflict || !strings.Contains(body, "not a leaf") {
+		t.Fatalf("interior delete status=%d body=%q", status, body)
+	}
+	if status, body := post(2); status != http.StatusOK || !strings.Contains(body, `"deleted":true`) {
+		t.Fatalf("leaf delete status=%d body=%q", status, body)
+	}
+	setID, ok, err := s.store.GetActiveMapSetID(sid)
+	if err != nil || !ok {
+		t.Fatalf("active set after leaf delete=%d ok=%v err=%v", setID, ok, err)
+	}
+	if slimRoomAt(t, s, setID, "Z", 2, 0, 0) != nil {
+		t.Fatal("leaf room still exists")
+	}
+	undo := postMapUndo(t, ts, s.apiToken, sid)
+	if undo["applied"] != true || slimRoomAt(t, s, setID, "Z", 2, 0, 0) == nil {
+		t.Fatalf("undo leaf=%#v", undo)
 	}
 }
 

@@ -240,6 +240,32 @@ test("confirms a crate-revealed mutable down exit and keeps OBS recording", asyn
   )).toEqual([{ dir: "D", to_l: -1 }, { dir: "U", to_l: 0 }]);
   await expect(page.locator(".map-pane__confidence")).toHaveAttribute("title", /Confidence: green/);
   await page.locator(".map-pane").screenshot({ path: join(stack.artifactsDir, "mutable-crate-down.png") });
+
+  // Return to the parent, delete the explored leaf through the real nested cell
+  // menu, then arm OBS and explore D again. This is the player's repeatable
+  // manual-test loop; the server must stop OBS for the topology edit and leave
+  // the delete undoable rather than silently retaining the old cell.
+  await sendAndExpectRoom(page, "U", "В окружении ящиков");
+  await page.locator(".map-pane__floors button", { hasText: "-1" }).click();
+  const canvas = page.locator(".map-pane__canvas");
+  const box = await canvas.boundingBox();
+  expect(box).not.toBeNull();
+  await canvas.click({ position: { x: box!.width / 2, y: box!.height / 2 } });
+  const menu = page.locator(".map-cell-menu");
+  await menu.locator("summary", { hasText: "Room properties…" }).click();
+  page.once("dialog", (dialog) => dialog.accept());
+  await menu.getByRole("button", { name: "Delete leaf room" }).click();
+  await expect(page.locator(".map-pane__status")).toContainText("Room deleted; Undo is available");
+  await expect.poll(() => stack.query<{ n: number }>(
+    `SELECT count(*) AS n FROM rooms WHERE map_set_id=${stack.seed.map_set_id} AND zone='Хилло' AND l=-1`,
+  )).toEqual([{ n: 0 }]);
+  await expect(obsButton(page)).toHaveText("OBS");
+  await obsButton(page).click();
+  await expect(obsButton(page)).toHaveText("STOP OBS");
+  await sendAndExpectRoom(page, "D", "Под ящиками");
+  await expect.poll(() => stack.query<{ n: number }>(
+    `SELECT count(*) AS n FROM rooms WHERE map_set_id=${stack.seed.map_set_id} AND zone='Хилло' AND l=-1`,
+  )).toEqual([{ n: 1 }]);
 });
 
 test("shows the Hillo one-way passage and lets the player block only its reverse face", async ({ page }) => {

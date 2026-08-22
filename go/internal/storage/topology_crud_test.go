@@ -1,11 +1,45 @@
 package storage
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
 	"rubymud/go/internal/mapimport"
 )
+
+func TestDeleteLeafRoomRefusesInteriorAndRestoresDeletedLeaf(t *testing.T) {
+	store := newMapperTestStore(t)
+	id, err := store.CreateMapSet(MapSetInput{Name: "line", Rooms: []Room{
+		{Zone: "Z", X: 0, Hint: "A", Exits: "S", EDirs: `["S"]`, Doors: `[]`, Ch: 2},
+		// B deliberately has no outgoing exits: the leaf guard must still count
+		// both one-way edges arriving from A and C.
+		{Zone: "Z", X: 1, Hint: "B", EDirs: `[]`, Doors: `[]`},
+		{Zone: "Z", X: 2, Hint: "C", Exits: "N", EDirs: `["N"]`, Doors: `[]`, Ch: 1},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := store.ApplyTopologyOp(id, TopologyOp{Kind: TopoDeleteLeafRoom, Zone: "Z", X: 1}); !errors.Is(err, ErrRoomNotLeaf) {
+		t.Fatalf("interior delete error=%v, want ErrRoomNotLeaf", err)
+	}
+	if roomAt(t, store, id, "Z", 1, 0, 0) == nil {
+		t.Fatal("refused interior room was deleted")
+	}
+	before, found, err := store.ApplyTopologyOp(id, TopologyOp{Kind: TopoDeleteLeafRoom, Zone: "Z", X: 2})
+	if err != nil || !found {
+		t.Fatalf("delete leaf found=%v err=%v", found, err)
+	}
+	if roomAt(t, store, id, "Z", 2, 0, 0) != nil {
+		t.Fatal("leaf room survived delete")
+	}
+	if applied, err := store.RestoreTopologyBefore(id, before); err != nil || !applied {
+		t.Fatalf("restore leaf applied=%v err=%v", applied, err)
+	}
+	if got := roomAt(t, store, id, "Z", 2, 0, 0); got == nil || got.Hint != "C" {
+		t.Fatalf("restored leaf=%+v", got)
+	}
+}
 
 func TestSetMutableExitsIsCanonicalBoundedRoomMetadata(t *testing.T) {
 	store := newMapperTestStore(t)
