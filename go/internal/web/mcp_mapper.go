@@ -341,6 +341,9 @@ func topologyAttrs(edge mapper.TopologyEdge) string {
 	if edge.OpenCmd != "" {
 		parts = append(parts, fmt.Sprintf("open_cmd=%q", edge.OpenCmd))
 	}
+	if edge.OpenDelayMS != 0 {
+		parts = append(parts, fmt.Sprintf("open_delay_ms=%d", edge.OpenDelayMS))
+	}
 	if edge.NoRoute {
 		parts = append(parts, "no_route=true")
 	}
@@ -449,6 +452,8 @@ func formatPath(targetDesc string, res mapper.PathResult) (string, bool) {
 	presumedDoors := 0
 	locked := 0
 	opens := 0
+	delayedOpenings := 0
+	totalOpenDelayMS := 0
 	var cmds []string
 	for _, st := range res.Steps {
 		if st.Seam {
@@ -468,6 +473,10 @@ func formatPath(targetDesc string, res mapper.PathResult) (string, bool) {
 		}
 		if st.OpenAction != "" {
 			opens++
+		}
+		if st.OpenDelayMS > 0 {
+			delayedOpenings++
+			totalOpenDelayMS += st.OpenDelayMS
 		}
 		// The opening action is a COMMAND OF THE ROUTE, not a footnote: it is what
 		// stops a door from cutting the walk short. It goes in front of the hop it
@@ -491,13 +500,21 @@ func formatPath(targetDesc string, res mapper.PathResult) (string, bool) {
 		sb.WriteString(fmt.Sprintf(", WARNING %d death trap(s) on path", dt))
 	}
 	sb.WriteString("\n")
-	sb.WriteString("Commands: " + strings.Join(cmds, "; ") + "\n")
+	if delayedOpenings > 0 {
+		sb.WriteString("Commands (diagnostic only; do NOT send as one script): " + strings.Join(cmds, "; ") + "\n")
+		sb.WriteString(fmt.Sprintf("This route has %d delayed opening(s), %d ms total. Use mud_map_walk_start so the server paces them safely.\n", delayedOpenings, totalOpenDelayMS))
+	} else {
+		sb.WriteString("Commands: " + strings.Join(cmds, "; ") + "\n")
+	}
 	if confirmedDoors > 0 || presumedDoors > 0 {
 		// Be honest about WHICH of the two door stories this route tells. A profile
 		// that describes no door verb (every one but rmud today) produces no opening
 		// commands, and promising the agent that the list is complete would send it
 		// walking into a shut door.
-		if opens > 0 {
+		if delayedOpenings > 0 {
+			sb.WriteString("Note: delayed opening actions are part of the route, but only the server walk may schedule them. " +
+				"A presumed door is recorded only on the far side; a hop marked LOCKED still needs the key.\n")
+		} else if opens > 0 {
 			sb.WriteString("Note: the opening command for every door hop below is ALREADY in the command list, right before the move — the route is complete, not truncated at the door. " +
 				"A presumed door is recorded only on the far side; opening is harmless if there is none. " +
 				"A hop marked LOCKED needs the key: the route still plans through it because you may hold one.\n")
@@ -519,6 +536,9 @@ func formatPath(targetDesc string, res mapper.PathResult) (string, bool) {
 		}
 		if st.Phrase != "" {
 			tag += "  [taken by the phrase \"" + st.Phrase + "\", not by a direction]"
+		}
+		if st.OpenDelayMS > 0 {
+			tag += fmt.Sprintf("  [WAIT %d ms after opening]", st.OpenDelayMS)
 		}
 		if st.Seam {
 			tag += "  [SEAM →" + st.ToZone
@@ -1063,6 +1083,9 @@ func (s *Server) mcpRoomEdgeAttrs(sid int64, c mcpCoordArg, dir string, patch st
 			parts = append(parts, fmt.Sprintf("opening command %q", *patch.OpenCmd))
 		}
 	}
+	if patch.OpenDelayMS != nil {
+		parts = append(parts, fmt.Sprintf("wait %d ms after opening before movement", *patch.OpenDelayMS))
+	}
 	if patch.NoRoute != nil {
 		if *patch.NoRoute {
 			parts = append(parts, "DO NOT ROUTE through this face (still walkable; the tracker accepts the step as usual)")
@@ -1108,6 +1131,9 @@ func (s *Server) mcpRoomSeamAttrs(sid int64, c mcpCoordArg, seam storage.SeamSel
 	}
 	if patch.OpenCmd != nil {
 		parts = append(parts, fmt.Sprintf("opening command %q", *patch.OpenCmd))
+	}
+	if patch.OpenDelayMS != nil {
+		parts = append(parts, fmt.Sprintf("wait %d ms after opening before movement", *patch.OpenDelayMS))
 	}
 	if patch.NoRoute != nil {
 		parts = append(parts, fmt.Sprintf("routing allowed: %t", !*patch.NoRoute))

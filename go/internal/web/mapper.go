@@ -1186,12 +1186,13 @@ func (s *Server) mapEdgeAttrs(w http.ResponseWriter, r *http.Request) {
 			Command    *string `json:"command"`
 			Order      *int    `json:"order"`
 		} `json:"seam"`
-		Weight  *float64 `json:"weight"`
-		Phrase  *string  `json:"phrase"`
-		Door    *bool    `json:"door"`
-		Locked  *bool    `json:"locked"`
-		OpenCmd *string  `json:"open_cmd"`
-		NoRoute *bool    `json:"no_route"`
+		Weight      *float64 `json:"weight"`
+		Phrase      *string  `json:"phrase"`
+		Door        *bool    `json:"door"`
+		Locked      *bool    `json:"locked"`
+		OpenCmd     *string  `json:"open_cmd"`
+		OpenDelayMS *int     `json:"open_delay_ms"`
+		NoRoute     *bool    `json:"no_route"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, "invalid body: "+err.Error(), http.StatusBadRequest)
@@ -1219,14 +1220,18 @@ func (s *Server) mapEdgeAttrs(w http.ResponseWriter, r *http.Request) {
 	}
 	patch := storage.EdgeAttrPatch{
 		Weight: body.Weight, Phrase: trimmedPtr(body.Phrase), Door: body.Door, Locked: body.Locked,
-		OpenCmd: trimmedPtr(body.OpenCmd), NoRoute: body.NoRoute,
+		OpenCmd: trimmedPtr(body.OpenCmd), OpenDelayMS: body.OpenDelayMS, NoRoute: body.NoRoute,
 	}
 	if patch.Empty() {
 		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperEdgeNothingToSet, nil))
 		return
 	}
 	if err := patch.Validate(); err != nil {
-		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperEdgeWeightPositive, nil))
+		key := appi18n.MapperEdgeWeightPositive
+		if errors.Is(err, storage.ErrEdgeOpeningDelayRange) || errors.Is(err, storage.ErrEdgeOpeningDelayNeedsOpen) {
+			key = appi18n.MapperEdgeOpeningDelay
+		}
+		writeJSON(w, mapperReasonBody(locale, false, key, nil))
 		return
 	}
 	if args, refused := edgeCommandsRefusalArgs(patch); refused {
@@ -1245,6 +1250,10 @@ func (s *Server) mapEdgeAttrs(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if err == session.ErrNoActiveMapSet {
 			writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperNoActiveMapSet, nil))
+			return
+		}
+		if errors.Is(err, storage.ErrEdgeOpeningDelayRange) || errors.Is(err, storage.ErrEdgeOpeningDelayNeedsOpen) {
+			writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperEdgeOpeningDelay, nil))
 			return
 		}
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1287,19 +1296,20 @@ func (s *Server) mapPortal(w http.ResponseWriter, r *http.Request) {
 		L    *int    `json:"l"`
 	}
 	type body struct {
-		Zone    *string  `json:"zone"`
-		X       *int     `json:"x"`
-		Y       *int     `json:"y"`
-		L       *int     `json:"l"`
-		Order   *int     `json:"order"`
-		Target  *coord   `json:"target"`
-		Command *string  `json:"command"`
-		Weight  *float64 `json:"weight"`
-		Phrase  *string  `json:"phrase"`
-		Door    *bool    `json:"door"`
-		Locked  *bool    `json:"locked"`
-		OpenCmd *string  `json:"open_cmd"`
-		NoRoute *bool    `json:"no_route"`
+		Zone        *string  `json:"zone"`
+		X           *int     `json:"x"`
+		Y           *int     `json:"y"`
+		L           *int     `json:"l"`
+		Order       *int     `json:"order"`
+		Target      *coord   `json:"target"`
+		Command     *string  `json:"command"`
+		Weight      *float64 `json:"weight"`
+		Phrase      *string  `json:"phrase"`
+		Door        *bool    `json:"door"`
+		Locked      *bool    `json:"locked"`
+		OpenCmd     *string  `json:"open_cmd"`
+		OpenDelayMS *int     `json:"open_delay_ms"`
+		NoRoute     *bool    `json:"no_route"`
 	}
 	var b body
 	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
@@ -1329,9 +1339,13 @@ func (s *Server) mapPortal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	from := storage.EdgeCell{Zone: fromZone, X: *b.X, Y: *b.Y, L: *b.L}
-	attrs := storage.EdgeAttrPatch{Weight: b.Weight, Phrase: trimmedPtr(b.Phrase), Door: b.Door, Locked: b.Locked, OpenCmd: trimmedPtr(b.OpenCmd), NoRoute: b.NoRoute}
+	attrs := storage.EdgeAttrPatch{Weight: b.Weight, Phrase: trimmedPtr(b.Phrase), Door: b.Door, Locked: b.Locked, OpenCmd: trimmedPtr(b.OpenCmd), OpenDelayMS: b.OpenDelayMS, NoRoute: b.NoRoute}
 	if err := attrs.Validate(); err != nil {
-		writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperEdgeWeightPositive, nil))
+		key := appi18n.MapperEdgeWeightPositive
+		if errors.Is(err, storage.ErrEdgeOpeningDelayRange) || errors.Is(err, storage.ErrEdgeOpeningDelayNeedsOpen) {
+			key = appi18n.MapperEdgeOpeningDelay
+		}
+		writeJSON(w, mapperReasonBody(locale, false, key, nil))
 		return
 	}
 	if args, refused := edgeCommandsRefusalArgs(attrs); refused {
@@ -1398,6 +1412,10 @@ func (s *Server) mapPortal(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if err == session.ErrNoActiveMapSet {
 			writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperNoActiveMapSet, nil))
+			return
+		}
+		if errors.Is(err, storage.ErrEdgeOpeningDelayRange) || errors.Is(err, storage.ErrEdgeOpeningDelayNeedsOpen) {
+			writeJSON(w, mapperReasonBody(locale, false, appi18n.MapperEdgeOpeningDelay, nil))
 			return
 		}
 		out := mapperReasonBody(locale, false, appi18n.MapperTopologyWriteFailed, map[string]any{"detail": err.Error()})
@@ -1725,8 +1743,8 @@ func normalizeDirs(in []string) []string {
 // pathResultJSON renders a mapper.PathResult as the map-path endpoint's JSON.
 //
 // `directions` is THE WHOLE WALK, in send order — not one token per map hop. Three
-// kinds of entry go into it, and the caller joins them with ';' without needing to
-// know which is which:
+// kinds of entry go into it. It may be joined with ';' only when the response has
+// no `delayed_openings`; delayed routes require the server-owned map-walk:
 //
 //   - a grid hop: its canonical lowercase English letter;
 //   - a seam hop: the seam's canonical english command (the raw "на <dir>" would be
@@ -1778,6 +1796,8 @@ func pathResultJSONLocale(res mapper.PathResult, locale appi18n.Locale) map[stri
 	doors := 0
 	locked := 0
 	phrases := 0
+	delayedOpenings := 0
+	openDelayMS := 0
 	for _, st := range res.Steps {
 		if st.OpenAction != "" {
 			dirs = append(dirs, st.OpenAction)
@@ -1803,6 +1823,10 @@ func pathResultJSONLocale(res mapper.PathResult, locale appi18n.Locale) map[stri
 		}
 		if st.Locked {
 			locked++
+		}
+		if st.OpenDelayMS > 0 {
+			delayedOpenings++
+			openDelayMS += st.OpenDelayMS
 		}
 	}
 	// The pane prints this summary verbatim. The stable code and counts also let
@@ -1835,6 +1859,10 @@ func pathResultJSONLocale(res mapper.PathResult, locale appi18n.Locale) map[stri
 	}
 	if phrases > 0 {
 		out["phrases"] = phrases
+	}
+	if delayedOpenings > 0 {
+		out["delayed_openings"] = delayedOpenings
+		out["open_delay_ms"] = openDelayMS
 	}
 	return out
 }

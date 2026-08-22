@@ -14,6 +14,12 @@ import (
 
 const mapWalkHopTimeout = 12 * time.Second
 
+// The configured delay starts after the opening write completes, while the MUD
+// starts its own mechanism only after reading that command. A small transport
+// cushion prevents an exactly-timed direction from arriving a few microseconds
+// before a strict server-side gate opens; it does not block any goroutine.
+const mapWalkOpenTransportCushion = 25 * time.Millisecond
+
 func (s *Session) walkEpoch() int64 {
 	if s.mapWalkEpoch != 0 {
 		return s.mapWalkEpoch
@@ -30,6 +36,9 @@ type mapWalkJob struct {
 	current        int
 	planning       bool
 	dispatching    bool
+	opening        bool
+	openedCurrent  bool
+	openWait       uint64
 	inFlight       bool
 	hop            uint64
 	expected       mapper.Coord
@@ -73,6 +82,9 @@ func (s *Session) mapWalkStateLocked(reason string) MapWalkState {
 	} else if s.mapWalk.paused {
 		state = "paused"
 		reason = s.mapWalk.pauseReason
+	} else if s.mapWalk.opening {
+		state = "waiting_open"
+		reason = ""
 	} else {
 		reason = ""
 	}
@@ -162,6 +174,9 @@ func (s *Session) startMapWalkRequest(to mapper.Coord, request uint64) (state Ma
 		s.mapWalk.desiredRequest = request
 		if !s.mapWalk.inFlight && !s.mapWalk.dispatching && !s.mapWalk.planning {
 			old := s.mapWalk
+			if old.timer != nil {
+				old.timer.Stop()
+			}
 			s.mapWalk = nil
 			stopped := MapWalkState{JobID: old.id, Current: old.current, Total: len(old.steps), Reason: "replaced", State: "stopped"}
 			s.mapWalkMu.Unlock()
@@ -449,12 +464,13 @@ func (s *Session) MapWalkSnapshot() (MapWalkState, bool) {
 
 func (s *Session) dispatchMapWalk(id uint64) (MapWalkState, bool) {
 	s.mapWalkMu.Lock()
-	if s.mapWalk == nil || s.mapWalk.id != id || s.mapWalk.stopping || s.mapWalk.paused || s.mapWalk.inFlight || s.mapWalk.dispatching || s.mapWalk.current >= len(s.mapWalk.steps) {
+	if s.mapWalk == nil || s.mapWalk.id != id || s.mapWalk.stopping || s.mapWalk.paused || s.mapWalk.opening || s.mapWalk.inFlight || s.mapWalk.dispatching || s.mapWalk.current >= len(s.mapWalk.steps) {
 		s.mapWalkMu.Unlock()
 		return MapWalkState{}, false
 	}
 	job := s.mapWalk
 	step := job.steps[job.current]
+	openAlreadySent := job.openedCurrent
 	job.dispatching = true
 	s.mapWalkMu.Unlock()
 	if s.mapWalkBeforeDispatchWrite != nil {
@@ -464,14 +480,19 @@ func (s *Session) dispatchMapWalk(id uint64) (MapWalkState, bool) {
 		return MapWalkState{}, false
 	}
 
-	openCommands, openVars, err := s.expandMapWalkScript(step.OpenAction)
+	var openCommands []string
+	var openVars bool
+	var err error
+	if !openAlreadySent {
+		openCommands, openVars, err = s.expandMapWalkScript(step.OpenAction)
+	}
 	if openVars {
 		s.BroadcastVariables()
 	}
 	if err != nil {
 		return s.finishMapWalkDispatch(id, "invalid door-opening script: "+err.Error(), false)
 	}
-	if step.OpenAction != "" && len(openCommands) == 0 {
+	if !openAlreadySent && step.OpenAction != "" && len(openCommands) == 0 {
 		return s.finishMapWalkDispatch(id, "door-opening script produced no MUD commands", false)
 	}
 	for _, command := range openCommands {
@@ -544,6 +565,32 @@ func (s *Session) dispatchMapWalk(id uint64) (MapWalkState, bool) {
 		s.mapWalkIOMu.Unlock()
 		return s.finishMapWalkDispatch(id, "failed to open door: "+err.Error(), sent)
 	}
+	if len(openCommands) > 0 && s.mapWalkAfterOpenWrite != nil {
+		s.mapWalkAfterOpenWrite()
+	}
+	if !openAlreadySent && len(openCommands) > 0 && step.OpenDelayMS > 0 {
+		s.mapWalkMu.Lock()
+		if s.mapWalk == nil || s.mapWalk.id != id || s.mapWalk.stopping || s.mapWalk.paused || !s.mapWalk.dispatching {
+			s.mapWalkMu.Unlock()
+			s.mapWalkIOMu.Unlock()
+			s.abortMapWalkDispatch(id)
+			return MapWalkState{}, false
+		}
+		job := s.mapWalk
+		job.dispatching = false
+		job.opening = true
+		job.openedCurrent = true
+		job.openWait++
+		wait := job.openWait
+		job.timer = time.AfterFunc(time.Duration(step.OpenDelayMS)*time.Millisecond+mapWalkOpenTransportCushion, func() {
+			s.resumeMapWalkAfterOpen(id, wait)
+		})
+		st := s.mapWalkStateLocked("")
+		s.mapWalkMu.Unlock()
+		s.mapWalkIOMu.Unlock()
+		s.broadcastMapWalk(st)
+		return MapWalkState{}, false
+	}
 	sentMove, err := s.writeMapWalkCommands(id, moveCommands)
 	sent = sent || sentMove
 	if err != nil {
@@ -595,6 +642,7 @@ func (s *Session) dispatchMapWalk(id uint64) (MapWalkState, bool) {
 		}
 	}
 	s.mapWalk.dispatching = false
+	s.mapWalk.openedCurrent = false
 	s.mapWalk.inFlight = true
 	s.mapWalk.expected = step.To
 	s.mapWalk.hop++
@@ -607,6 +655,20 @@ func (s *Session) dispatchMapWalk(id uint64) (MapWalkState, bool) {
 	s.lastCommandAt = time.Now()
 	s.mu.Unlock()
 	return MapWalkState{}, false
+}
+
+// resumeMapWalkAfterOpen continues one route hop after its directed opening
+// delay. The generation fence makes a cancelled/replaced job's timer a no-op.
+func (s *Session) resumeMapWalkAfterOpen(id, wait uint64) {
+	s.mapWalkMu.Lock()
+	if s.mapWalk == nil || s.mapWalk.id != id || !s.mapWalk.opening || s.mapWalk.openWait != wait {
+		s.mapWalkMu.Unlock()
+		return
+	}
+	s.mapWalk.opening = false
+	s.mapWalk.timer = nil
+	s.mapWalkMu.Unlock()
+	s.dispatchMapWalk(id)
 }
 
 // expandMapWalkScript is the route-only equivalent of the VM half of normal

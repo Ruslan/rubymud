@@ -430,6 +430,7 @@ export class MapRenderer {
     // the element grew/shrank between the last resize() and this paint). Resetting
     // the transform to identity for the clear guarantees full coverage; the dpr
     // transform is restored immediately after.
+    const byLogical = new Map(this.rooms.map((r) => [`${r.z}\0${r.x}\0${r.y}\0${r.l}`, r]));
     ctx.save();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, this.canvas.width, this.canvas.height);
@@ -491,12 +492,38 @@ export class MapRenderer {
       }
     }
 
+    // The materialized graph can know about a real passage that the MUD omits
+    // from its printed exits (hidden buttons, concealed paths, legacy map facts).
+    // Keep provenance distinct from a manual amber mark: green still means the
+    // parsed map graph, while the dash says "not announced by this room".
+    ctx.save();
+    ctx.strokeStyle = "rgba(47,138,82,.75)";
+    ctx.setLineDash([Math.max(2, 3 * S), Math.max(2, 3 * S)]);
+    for (const r of this.rooms) {
+      if (displayLevel(r) !== AL) continue;
+      const cx = this.sx(r);
+      const cy = this.sy(r);
+      for (const d of r.g) {
+        if (r.e.includes(d) || r.mb.includes(d)) continue;
+        const v = DIR_SCREEN_VEC[d];
+        if (!v) continue;
+        const delta = stepDelta(d);
+        const target = delta ? byLogical.get(`${r.z}\0${r.x + delta.dx}\0${r.y + delta.dy}\0${r.l + delta.dl}`) : undefined;
+        if (target && Math.hypot(this.sx(target) - cx, this.sy(target) - cy) > CELL * S * 1.01) continue;
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + v[0] * CELL * S * 0.5, cy + v[1] * CELL * S * 0.5);
+        ctx.stroke();
+      }
+    }
+    ctx.setLineDash([]);
+    ctx.restore();
+
     this.paintHandDrawn(S, AL);
 
     // Exact corridors are a single topology hop even when presentation layout
     // puts their endpoints far apart. Paint one clipped primitive and never
     // synthesize intermediate rooms/cells.
-    const byLogical = new Map(this.rooms.map((r) => [`${r.z}\0${r.x}\0${r.y}\0${r.l}`, r]));
     ctx.lineWidth = Math.max(2, 4 * S);
     ctx.strokeStyle = "rgba(47,138,82,.75)";
     for (const from of this.rooms) {

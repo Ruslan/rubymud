@@ -93,12 +93,13 @@ type TopologyEdge struct {
 	TargetTag    int
 	SeamOrder    int
 
-	Weight  float64
-	Phrase  string
-	Door    bool
-	Locked  bool
-	OpenCmd string
-	NoRoute bool
+	Weight      float64
+	Phrase      string
+	Door        bool
+	Locked      bool
+	OpenCmd     string
+	OpenDelayMS int
+	NoRoute     bool
 }
 
 // Index is the in-memory index of the active map set. It is rebuilt (never
@@ -447,7 +448,7 @@ func topologyEdgeSnapshot(e *Edge, direction string) TopologyEdge {
 		Kind: e.Kind, Source: e.Source, Direction: direction, Passable: e.Passable,
 		Command: e.Command, TargetZone: e.TargetZone, SeamOrder: e.seamOrder,
 		Weight: e.EffectiveWeight(), Phrase: e.Phrase, Door: e.Door, Locked: e.Locked,
-		OpenCmd: e.OpenCmd, NoRoute: e.NoRoute,
+		OpenCmd: e.OpenCmd, OpenDelayMS: e.OpenDelayMS, NoRoute: e.NoRoute,
 	}
 	if e.To != nil {
 		v.HasTarget, v.Target = true, *e.To

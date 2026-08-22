@@ -576,7 +576,7 @@ func (s *Server) mcpListTools() any {
 			},
 			map[string]any{
 				"name":        "mud_path",
-				"description": "Route from the current position (or a given 'from') to a target: to_zone (a lowest-cost room in a zone), to:{zone,x,y,l}, or to_hint (a lowest-cost room whose hint contains the text). Output is an ordered list of canonical English direction/seam commands for mud_send_command, command count, total weight, seam-crossing flags, pipe-run cell annotations, and known death-trap/door warnings. Refuses with isError when position is lost (red) — re-anchor with mud_anchor_here first. An omitted session_id defaults to the first session.",
+				"description": "Route from the current position (or a given 'from') to a target: to_zone (a lowest-cost room in a zone), to:{zone,x,y,l}, or to_hint (a lowest-cost room whose hint contains the text). Output is an ordered list of canonical English direction/seam commands, command count, total weight, seam-crossing flags, pipe-run cell annotations, and known death-trap/door warnings. A route with delayed opening actions marks the list diagnostic-only: start it with mud_map_walk_start so the server preserves pauses; do not flatten it into mud_send_command. Refuses with isError when position is lost (red) — re-anchor with mud_anchor_here first. An omitted session_id defaults to the first session.",
 				"inputSchema": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
@@ -789,7 +789,7 @@ func (s *Server) mcpListTools() any {
 					"mark=\"auto\": erase the hand-drawn mark and let the room's own exits decide this face again. " +
 					"NOT the same tool as mud_room_link, and not interchangeable with it: mud_room_link edits the ROOM'S EXITS (the parsed layer), so it shows up in the room's exit list and the next mud_room_upsert / «Записать комнату» overwrites it. This tool writes no room field at all — it writes the edge itself, and re-parsing the room cannot undo or resurrect it. Use mud_room_link when the map's record of the exits is simply wrong; use this when the map is right about the text and the text is not the whole truth. " +
 					"Edges are DIRECTED: by default both directions of the face are marked, one_way=true marks only the way OUT of this cell (a one-way passage or a one-way wall). Both cells must hold a room and be grid-adjacent (jump links are not supported yet). " +
-					"THE SAME TOOL ALSO DESCRIBES HOW THE PASSAGE IS TAKEN — phrase / door / locked / open_cmd / no_route. Those describe an EXISTING passage rather than creating one, so they need no `mark` (omit it) and always apply to exactly ONE face: every one of them is a statement about the side you approach from, and marking the pair would put words in your mouth about the other side. Setting any of them makes the face hand-drawn, so re-recording the room does not erase it. They are a SEPARATE undo entry from a mark passed in the same call. " +
+					"THE SAME TOOL ALSO DESCRIBES HOW THE PASSAGE IS TAKEN — phrase / door / locked / open_cmd / open_delay_ms / no_route. Those describe an EXISTING passage rather than creating one, so they need no `mark` (omit it) and always apply to exactly ONE face: every one of them is a statement about the side you approach from, and marking the pair would put words in your mouth about the other side. Setting any of them makes the face hand-drawn, so re-recording the room does not erase it. They are a SEPARATE undo entry from a mark passed in the same call. " +
 					"Topology write — forks a frozen set (forked_to reported). Reversible with mud_map_undo. Soft-fails (isError) with no active set, a missing room on either side, a bad direction, or attributes aimed at a face with no passage on it. An omitted session_id defaults to the first session.",
 				"inputSchema": map[string]any{
 					"type": "object",
@@ -810,6 +810,8 @@ func (s *Server) mcpListTools() any {
 						"locked": map[string]any{"type": "boolean", "description": "That door is LOCKED BY DEFAULT from this side (a door is routinely locked one way and open the other). It does not block routing — the route reports it, because the player may hold the key."},
 						"open_cmd": map[string]any{"type": "string",
 							"description": "The command that opens the door FROM THIS SIDE (\"откр две север\", \"дёрнуть рычаг\", \"say friend\"). Free text so the markup is not tied to one MUD's verbs. \"\" falls back to the mapper's default template."},
+						"open_delay_ms": map[string]any{"type": "integer", "minimum": 0, "maximum": storage.MaxOpenDelayMS,
+							"description": "Non-blocking wait after open_cmd and before the route's movement command. Requires door=true and an explicit non-empty open_cmd; 0 disables it."},
 						"no_route": map[string]any{"type": "boolean",
 							"description": "\"Passable, but do not plan a route through me.\" DIFFERENT from mark=\"blocked\": the way exists and walking it is normal (the tracker accepts the step as usual), the ROUTER just must not choose it — for dubious or DT-like transitions. When a target becomes unreachable only because of such marks, mud_path says so instead of \"no route\"."},
 					},
@@ -818,25 +820,26 @@ func (s *Server) mcpListTools() any {
 			},
 			map[string]any{
 				"name":        "mud_room_set_seam_attrs",
-				"description": "Set directed routing attributes on one existing automap seam. The seam selector is source {zone,x,y,l} plus target_zone, target_tag, command and optional exact occurrence order; it must identify exactly one transition. Attributes are weight, phrase, door, locked, open_cmd, and no_route. This is a topology write, forks a frozen set, survives room re-recording, and is reversible with mud_map_undo.",
+				"description": "Set directed routing attributes on one existing automap seam. The seam selector is source {zone,x,y,l} plus target_zone, target_tag, command and optional exact occurrence order; it must identify exactly one transition. Attributes are weight, phrase, door, locked, open_cmd, open_delay_ms, and no_route. This is a topology write, forks a frozen set, survives room re-recording, and is reversible with mud_map_undo.",
 				"inputSchema": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
-						"session_id":  sessionIDProp,
-						"zone":        map[string]any{"type": "string"},
-						"x":           map[string]any{"type": "integer"},
-						"y":           map[string]any{"type": "integer"},
-						"l":           map[string]any{"type": "integer"},
-						"target_zone": map[string]any{"type": "string"},
-						"target_tag":  map[string]any{"type": "integer"},
-						"command":     map[string]any{"type": "string", "description": "Exact parsed seam command."},
-						"order":       map[string]any{"type": "integer", "minimum": 0, "description": "Exact persisted occurrence, required when otherwise-identical seam selectors repeat."},
-						"weight":      map[string]any{"type": "number", "exclusiveMinimum": 0},
-						"phrase":      map[string]any{"type": "string"},
-						"door":        map[string]any{"type": "boolean"},
-						"locked":      map[string]any{"type": "boolean"},
-						"open_cmd":    map[string]any{"type": "string"},
-						"no_route":    map[string]any{"type": "boolean"},
+						"session_id":    sessionIDProp,
+						"zone":          map[string]any{"type": "string"},
+						"x":             map[string]any{"type": "integer"},
+						"y":             map[string]any{"type": "integer"},
+						"l":             map[string]any{"type": "integer"},
+						"target_zone":   map[string]any{"type": "string"},
+						"target_tag":    map[string]any{"type": "integer"},
+						"command":       map[string]any{"type": "string", "description": "Exact parsed seam command."},
+						"order":         map[string]any{"type": "integer", "minimum": 0, "description": "Exact persisted occurrence, required when otherwise-identical seam selectors repeat."},
+						"weight":        map[string]any{"type": "number", "exclusiveMinimum": 0},
+						"phrase":        map[string]any{"type": "string"},
+						"door":          map[string]any{"type": "boolean"},
+						"locked":        map[string]any{"type": "boolean"},
+						"open_cmd":      map[string]any{"type": "string"},
+						"open_delay_ms": map[string]any{"type": "integer", "minimum": 0, "maximum": storage.MaxOpenDelayMS},
+						"no_route":      map[string]any{"type": "boolean"},
 					},
 					"required": []string{"zone", "x", "y", "l", "target_zone", "target_tag", "command"},
 				},
@@ -854,7 +857,7 @@ func (s *Server) mcpListTools() any {
 						"target_zone": map[string]any{"type": "string", "description": "Exact target zone; required with target coordinates for create, optional for retargeting update."},
 						"target_x":    map[string]any{"type": "integer"}, "target_y": map[string]any{"type": "integer"}, "target_l": map[string]any{"type": "integer"},
 						"command": map[string]any{"type": "string", "maxLength": 4096, "description": "Raw traversal command; may contain scripts such as semicolon-separated commands and may be a direction when that is safe for this MUD."},
-						"weight":  map[string]any{"type": "number", "exclusiveMinimum": 0}, "phrase": map[string]any{"type": "string"}, "door": map[string]any{"type": "boolean"}, "locked": map[string]any{"type": "boolean"}, "open_cmd": map[string]any{"type": "string"}, "no_route": map[string]any{"type": "boolean"},
+						"weight":  map[string]any{"type": "number", "exclusiveMinimum": 0}, "phrase": map[string]any{"type": "string"}, "door": map[string]any{"type": "boolean"}, "locked": map[string]any{"type": "boolean"}, "open_cmd": map[string]any{"type": "string"}, "open_delay_ms": map[string]any{"type": "integer", "minimum": 0, "maximum": storage.MaxOpenDelayMS}, "no_route": map[string]any{"type": "boolean"},
 					},
 					"required": []string{"action", "zone", "x", "y", "l"},
 				},
@@ -1751,15 +1754,16 @@ func (s *Server) mcpCallTool(ctx context.Context, params json.RawMessage, mcpSes
 		var args struct {
 			SessionID int64 `json:"session_id"`
 			mcpRequiredCoord
-			Dir     string   `json:"dir"`
-			Mark    string   `json:"mark"`
-			OneWay  bool     `json:"one_way"`
-			Weight  *float64 `json:"weight"`
-			Phrase  *string  `json:"phrase"`
-			Door    *bool    `json:"door"`
-			Locked  *bool    `json:"locked"`
-			OpenCmd *string  `json:"open_cmd"`
-			NoRoute *bool    `json:"no_route"`
+			Dir         string   `json:"dir"`
+			Mark        string   `json:"mark"`
+			OneWay      bool     `json:"one_way"`
+			Weight      *float64 `json:"weight"`
+			Phrase      *string  `json:"phrase"`
+			Door        *bool    `json:"door"`
+			Locked      *bool    `json:"locked"`
+			OpenCmd     *string  `json:"open_cmd"`
+			OpenDelayMS *int     `json:"open_delay_ms"`
+			NoRoute     *bool    `json:"no_route"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
 			return nil, err
@@ -1783,7 +1787,7 @@ func (s *Server) mcpCallTool(ctx context.Context, params json.RawMessage, mcpSes
 		}
 		patch := storage.EdgeAttrPatch{
 			Weight: args.Weight, Phrase: mcpTrimmedPtr(args.Phrase), Door: args.Door, Locked: args.Locked,
-			OpenCmd: mcpTrimmedPtr(args.OpenCmd), NoRoute: args.NoRoute,
+			OpenCmd: mcpTrimmedPtr(args.OpenCmd), OpenDelayMS: args.OpenDelayMS, NoRoute: args.NoRoute,
 		}
 		// `mark` is now optional: a call that only describes an existing passage
 		// (phrase/door/…) has nothing to mark. A call with neither is a no-op the agent
@@ -1803,7 +1807,7 @@ func (s *Server) mcpCallTool(ctx context.Context, params json.RawMessage, mcpSes
 		markGiven := strings.TrimSpace(args.Mark) != ""
 		if !markGiven && patch.Empty() {
 			content = "nothing to do: pass mark (open/blocked/auto) to draw the passage, and/or " +
-				"phrase/door/locked/open_cmd/no_route to describe how it is taken."
+				"phrase/door/locked/open_cmd/open_delay_ms/no_route to describe how it is taken."
 			isError = true
 			break
 		}
@@ -1832,16 +1836,17 @@ func (s *Server) mcpCallTool(ctx context.Context, params json.RawMessage, mcpSes
 		var args struct {
 			SessionID int64 `json:"session_id"`
 			mcpRequiredCoord
-			TargetZone string   `json:"target_zone"`
-			TargetTag  *int     `json:"target_tag"`
-			Command    *string  `json:"command"`
-			Order      *int     `json:"order"`
-			Weight     *float64 `json:"weight"`
-			Phrase     *string  `json:"phrase"`
-			Door       *bool    `json:"door"`
-			Locked     *bool    `json:"locked"`
-			OpenCmd    *string  `json:"open_cmd"`
-			NoRoute    *bool    `json:"no_route"`
+			TargetZone  string   `json:"target_zone"`
+			TargetTag   *int     `json:"target_tag"`
+			Command     *string  `json:"command"`
+			Order       *int     `json:"order"`
+			Weight      *float64 `json:"weight"`
+			Phrase      *string  `json:"phrase"`
+			Door        *bool    `json:"door"`
+			Locked      *bool    `json:"locked"`
+			OpenCmd     *string  `json:"open_cmd"`
+			OpenDelayMS *int     `json:"open_delay_ms"`
+			NoRoute     *bool    `json:"no_route"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
 			return nil, err
@@ -1865,7 +1870,7 @@ func (s *Server) mcpCallTool(ctx context.Context, params json.RawMessage, mcpSes
 			content, isError = "zone plus target_zone, target_tag, and command are required.", true
 			break
 		}
-		patch := storage.EdgeAttrPatch{Weight: args.Weight, Phrase: mcpTrimmedPtr(args.Phrase), Door: args.Door, Locked: args.Locked, OpenCmd: mcpTrimmedPtr(args.OpenCmd), NoRoute: args.NoRoute}
+		patch := storage.EdgeAttrPatch{Weight: args.Weight, Phrase: mcpTrimmedPtr(args.Phrase), Door: args.Door, Locked: args.Locked, OpenCmd: mcpTrimmedPtr(args.OpenCmd), OpenDelayMS: args.OpenDelayMS, NoRoute: args.NoRoute}
 		if patch.Empty() {
 			content, isError = "provide at least one seam attribute to set.", true
 			break
@@ -1885,18 +1890,19 @@ func (s *Server) mcpCallTool(ctx context.Context, params json.RawMessage, mcpSes
 			SessionID int64  `json:"session_id"`
 			Action    string `json:"action"`
 			mcpRequiredCoord
-			Order      *int     `json:"order"`
-			TargetZone *string  `json:"target_zone"`
-			TargetX    *int     `json:"target_x"`
-			TargetY    *int     `json:"target_y"`
-			TargetL    *int     `json:"target_l"`
-			Command    *string  `json:"command"`
-			Weight     *float64 `json:"weight"`
-			Phrase     *string  `json:"phrase"`
-			Door       *bool    `json:"door"`
-			Locked     *bool    `json:"locked"`
-			OpenCmd    *string  `json:"open_cmd"`
-			NoRoute    *bool    `json:"no_route"`
+			Order       *int     `json:"order"`
+			TargetZone  *string  `json:"target_zone"`
+			TargetX     *int     `json:"target_x"`
+			TargetY     *int     `json:"target_y"`
+			TargetL     *int     `json:"target_l"`
+			Command     *string  `json:"command"`
+			Weight      *float64 `json:"weight"`
+			Phrase      *string  `json:"phrase"`
+			Door        *bool    `json:"door"`
+			Locked      *bool    `json:"locked"`
+			OpenCmd     *string  `json:"open_cmd"`
+			OpenDelayMS *int     `json:"open_delay_ms"`
+			NoRoute     *bool    `json:"no_route"`
 		}
 		if err := json.Unmarshal(call.Arguments, &args); err != nil {
 			return nil, err
@@ -1911,7 +1917,7 @@ func (s *Server) mcpCallTool(ctx context.Context, params json.RawMessage, mcpSes
 			content, isError = "zone,x,y,l are required.", true
 			break
 		}
-		attrs := storage.EdgeAttrPatch{Weight: args.Weight, Phrase: mcpTrimmedPtr(args.Phrase), Door: args.Door, Locked: args.Locked, OpenCmd: mcpTrimmedPtr(args.OpenCmd), NoRoute: args.NoRoute}
+		attrs := storage.EdgeAttrPatch{Weight: args.Weight, Phrase: mcpTrimmedPtr(args.Phrase), Door: args.Door, Locked: args.Locked, OpenCmd: mcpTrimmedPtr(args.OpenCmd), OpenDelayMS: args.OpenDelayMS, NoRoute: args.NoRoute}
 		if err := attrs.Validate(); err != nil {
 			content, isError = err.Error(), true
 			break
@@ -2119,7 +2125,7 @@ func formatSlimTopology(r storage.SlimRoom) string {
 	}
 	attrs := make([]storage.SlimEdgeAttr, 0, len(r.EA))
 	for _, attr := range r.EA {
-		if slimAttrsNonDefault(attr.Weight, attr.Phrase, attr.Door, attr.Locked, attr.OpenCmd, attr.NoRoute) {
+		if slimAttrsNonDefault(attr.Weight, attr.Phrase, attr.Door, attr.Locked, attr.OpenCmd, attr.OpenDelayMS, attr.NoRoute) {
 			attrs = append(attrs, attr)
 		}
 	}
@@ -2177,7 +2183,7 @@ func formatSlimEdgeAttr(a storage.SlimEdgeAttr) string {
 	if weight, ok := mcpNonDefaultWeight(a.Weight); ok {
 		parts = append(parts, fmt.Sprintf("weight=%g", weight))
 	}
-	parts = appendNonDefaultAttrParts(parts, a.Phrase, a.Door, a.Locked, a.OpenCmd, a.NoRoute)
+	parts = appendNonDefaultAttrParts(parts, a.Phrase, a.Door, a.Locked, a.OpenCmd, a.OpenDelayMS, a.NoRoute)
 	return strings.Join(parts, " ")
 }
 
@@ -2194,7 +2200,7 @@ func formatSlimSeam(a storage.SlimSeam) string {
 	if weight, ok := mcpNonDefaultWeight(a.Weight); ok {
 		parts = append(parts, fmt.Sprintf("weight=%g", weight))
 	}
-	parts = appendNonDefaultAttrParts(parts, a.Phrase, a.Door, a.Locked, a.OpenCmd, a.NoRoute)
+	parts = appendNonDefaultAttrParts(parts, a.Phrase, a.Door, a.Locked, a.OpenCmd, a.OpenDelayMS, a.NoRoute)
 	return strings.Join(parts, " ")
 }
 
@@ -2205,12 +2211,12 @@ func mcpNonDefaultWeight(weight *float64) (float64, bool) {
 	return *weight, *weight != 1
 }
 
-func slimAttrsNonDefault(weight *float64, phrase string, door, locked bool, openCmd string, noRoute bool) bool {
+func slimAttrsNonDefault(weight *float64, phrase string, door, locked bool, openCmd string, openDelayMS int, noRoute bool) bool {
 	_, weighted := mcpNonDefaultWeight(weight)
-	return weighted || phrase != "" || door || locked || openCmd != "" || noRoute
+	return weighted || phrase != "" || door || locked || openCmd != "" || openDelayMS != 0 || noRoute
 }
 
-func appendNonDefaultAttrParts(parts []string, phrase string, door, locked bool, openCmd string, noRoute bool) []string {
+func appendNonDefaultAttrParts(parts []string, phrase string, door, locked bool, openCmd string, openDelayMS int, noRoute bool) []string {
 	if phrase != "" {
 		parts = append(parts, fmt.Sprintf("phrase=%q", phrase))
 	}
@@ -2222,6 +2228,9 @@ func appendNonDefaultAttrParts(parts []string, phrase string, door, locked bool,
 	}
 	if openCmd != "" {
 		parts = append(parts, fmt.Sprintf("open_cmd=%q", openCmd))
+	}
+	if openDelayMS != 0 {
+		parts = append(parts, fmt.Sprintf("open_delay_ms=%d", openDelayMS))
 	}
 	if noRoute {
 		parts = append(parts, "no_route=true")

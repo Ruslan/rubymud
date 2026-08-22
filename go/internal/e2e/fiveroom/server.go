@@ -29,6 +29,7 @@ type TraceEntry struct {
 	Command      string `json:"command"`
 	To           int    `json:"to"`
 	Moved        bool   `json:"moved"`
+	AtUnixMilli  int64  `json:"at_unix_milli"`
 }
 
 type Server struct {
@@ -55,6 +56,7 @@ type Options struct {
 	RoomBoundary bool
 	OneWayHillo  bool
 	DynamicCrate bool
+	HiddenHatch  bool
 }
 
 func Listen(addr, tracePath string) (*Server, error) {
@@ -124,7 +126,7 @@ func (s *Server) handleConnection(conn net.Conn, connectionID uint64) {
 		_ = conn.Close()
 	}()
 
-	world := NewWorldWithOptions(WorldOptions{OneWayHillo: s.options.OneWayHillo, DynamicCrate: s.options.DynamicCrate})
+	world := NewWorldWithOptions(WorldOptions{OneWayHillo: s.options.OneWayHillo, DynamicCrate: s.options.DynamicCrate, HiddenHatch: s.options.HiddenHatch})
 	lit := s.options.DarkRoom == 0
 	if err := s.writeObservedRoom(conn, world.Current(), lit); err != nil {
 		return
@@ -140,7 +142,7 @@ func (s *Server) handleConnection(conn net.Conn, connectionID uint64) {
 		}
 		from := world.Current().ID
 		if strings.EqualFold(command, "torch") {
-			entry := TraceEntry{Sequence: s.nextSequence.Add(1), ConnectionID: connectionID, From: from, Command: command, To: from, Moved: false}
+			entry := TraceEntry{Sequence: s.nextSequence.Add(1), ConnectionID: connectionID, From: from, Command: command, To: from, Moved: false, AtUnixMilli: time.Now().UnixMilli()}
 			if err := s.appendTrace(entry); err != nil {
 				return
 			}
@@ -151,7 +153,7 @@ func (s *Server) handleConnection(conn net.Conn, connectionID uint64) {
 			continue
 		}
 		if strings.EqualFold(command, "scan") {
-			entry := TraceEntry{Sequence: s.nextSequence.Add(1), ConnectionID: connectionID, From: from, Command: command, To: from, Moved: false}
+			entry := TraceEntry{Sequence: s.nextSequence.Add(1), ConnectionID: connectionID, From: from, Command: command, To: from, Moved: false, AtUnixMilli: time.Now().UnixMilli()}
 			if err := s.appendTrace(entry); err != nil {
 				return
 			}
@@ -161,14 +163,18 @@ func (s *Server) handleConnection(conn net.Conn, connectionID uint64) {
 			continue
 		}
 		if world.ApplyAction(command) {
-			entry := TraceEntry{Sequence: s.nextSequence.Add(1), ConnectionID: connectionID, From: from, Command: command, To: from, Moved: false}
+			entry := TraceEntry{Sequence: s.nextSequence.Add(1), ConnectionID: connectionID, From: from, Command: command, To: from, Moved: false, AtUnixMilli: time.Now().UnixMilli()}
 			if err := s.appendTrace(entry); err != nil {
 				return
 			}
-			if err := writeLinesBlock(conn,
+			message := []string{
 				"Стараясь не свалить на себя пирамиду всевозможных коробок, вы аккуратно передвинули ящик.",
 				"Взглянув на то место, где только что стоял, Вы обнаружили в полу дыру!",
-			); err != nil {
+			}
+			if s.options.HiddenHatch {
+				message = []string{"Механизм с гулом приходит в движение."}
+			}
+			if err := writeLinesBlock(conn, message...); err != nil {
 				return
 			}
 			continue
@@ -176,7 +182,7 @@ func (s *Server) handleConnection(conn net.Conn, connectionID uint64) {
 		room, moved := world.Apply(command)
 		entry := TraceEntry{
 			Sequence: s.nextSequence.Add(1), ConnectionID: connectionID,
-			From: from, Command: command, To: room.ID, Moved: moved,
+			From: from, Command: command, To: room.ID, Moved: moved, AtUnixMilli: time.Now().UnixMilli(),
 		}
 		if err := s.appendTrace(entry); err != nil {
 			return

@@ -1300,6 +1300,91 @@ func TestMapWalkDoorWritesOpenAndOneMoveOnly(t *testing.T) {
 	}
 }
 
+func delayedDoorMapWalkHarness(t *testing.T, delayMS int) (*Session, *recordingConn) {
+	t.Helper()
+	rooms := []storage.Room{
+		mkTrackRoom("Z", 0, 0, 0, 1, "Беседка", "a", ""),
+		mkTrackRoom("Z", 0, 0, -1, 2, "Тупик", "b", ""),
+	}
+	edges := storage.DeriveImportedEdges(1, rooms, nil)
+	toZone, toX, toY, toL := "Z", 0, 0, -1
+	edges = append(edges, storage.MapEdge{
+		MapSetID: 1, Kind: storage.EdgeKindGrid, Source: storage.EdgeSourceManual, Passable: true,
+		FromZone: "Z", FromX: 0, FromY: 0, FromL: 0, Dir: "D",
+		ToZone: &toZone, ToX: &toX, ToY: &toY, ToL: &toL,
+		EdgeAttrs: storage.EdgeAttrs{Weight: 1, Door: true, OpenCmd: "повернуть рычаг", OpenDelayMS: delayMS},
+	})
+	store := newTestStore(t)
+	conn := &recordingConn{}
+	s := &Session{sessionID: 1, store: store, conn: conn, vm: vm.New(store, 1), clients: map[int]clientSink{}, mapTracker: mapper.NewTracker(mapper.BuildIndexWithEdges(1, rooms, edges))}
+	s.mapTracker.Anchor(mapper.Coord{Zone: "Z", X: 0, Y: 0, L: 0})
+	return s, conn
+}
+
+func TestMapWalkWaitsAfterOpeningCommandBeforeDirection(t *testing.T) {
+	s, conn := delayedDoorMapWalkHarness(t, 40)
+	st := s.StartMapWalk(mapper.Coord{Zone: "Z", X: 0, Y: 0, L: -1})
+	if !st.Active || st.State != "waiting_open" || conn.String() != "повернуть рычаг\n" {
+		t.Fatalf("start=%+v writes=%q, want opener-only waiting state", st, conn.String())
+	}
+	time.Sleep(15 * time.Millisecond)
+	if got := conn.String(); got != "повернуть рычаг\n" {
+		t.Fatalf("movement sent before opening delay: %q", got)
+	}
+	deadline := time.Now().Add(500 * time.Millisecond)
+	for conn.String() != "повернуть рычаг\nd\n" && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := conn.String(); got != "повернуть рычаг\nd\n" {
+		t.Fatalf("movement not sent after opening delay: %q", got)
+	}
+}
+
+func TestMapWalkCancelDuringOpeningDelayLeavesNoMovementTail(t *testing.T) {
+	s, conn := delayedDoorMapWalkHarness(t, 40)
+	s.StartMapWalk(mapper.Coord{Zone: "Z", X: 0, Y: 0, L: -1})
+	if st := s.CancelMapWalk("cancelled by user"); st.Active {
+		t.Fatalf("cancel=%+v, want terminal", st)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if got := conn.String(); got != "повернуть рычаг\n" {
+		t.Fatalf("cancel leaked delayed movement: %q", got)
+	}
+}
+
+func TestMapWalkReplacementDuringOpeningDelayStopsOldTail(t *testing.T) {
+	s, conn := delayedDoorMapWalkHarness(t, 40)
+	s.StartMapWalk(mapper.Coord{Zone: "Z", X: 0, Y: 0, L: -1})
+	st := s.StartMapWalk(mapper.Coord{Zone: "Z", X: 0, Y: 0, L: 0})
+	if st.Active || st.Reason != "already here" {
+		t.Fatalf("replacement=%+v, want already-here terminal", st)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if got := conn.String(); got != "повернуть рычаг\n" {
+		t.Fatalf("replacement leaked old delayed movement: %q", got)
+	}
+}
+
+func TestMapWalkCancelAfterOpenerWriteCannotStrandStoppingJob(t *testing.T) {
+	s, conn := delayedDoorMapWalkHarness(t, 40)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	s.mapWalkAfterOpenWrite = func() { close(entered); <-release }
+	started := make(chan MapWalkState, 1)
+	go func() { started <- s.StartMapWalk(mapper.Coord{Zone: "Z", X: 0, Y: 0, L: -1}) }()
+	<-entered
+	if st := s.CancelMapWalk("cancelled by user"); st.State != "stopping" {
+		t.Fatalf("cancel during opener tail=%+v", st)
+	}
+	close(release)
+	<-started
+	time.Sleep(80 * time.Millisecond)
+	st, active := s.MapWalkSnapshot()
+	if active || st.State != "stopped" || conn.String() != "повернуть рычаг\n" {
+		t.Fatalf("post-opener cancel stranded=%+v active=%v writes=%q", st, active, conn.String())
+	}
+}
+
 func TestMapWalkRunsUnparsedSeamThroughTheCommandPipeline(t *testing.T) {
 	rooms := []storage.Room{
 		mkTrackRoom("A", 0, 0, 0, 1, "A", "a", ""),

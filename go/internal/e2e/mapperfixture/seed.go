@@ -22,6 +22,7 @@ type Options struct {
 	Autorecord   bool
 	OneWayHillo  bool
 	DynamicCrate bool
+	HiddenHatch  bool
 }
 
 type Result struct {
@@ -82,6 +83,9 @@ func Seed(opts Options) (Result, error) {
 	} else if opts.DynamicCrate {
 		rooms = crateRooms()
 		archive = "e2e-hillo-dynamic-crate"
+	} else if opts.HiddenHatch {
+		rooms = hatchRooms()
+		archive = "e2e-hillo-hidden-delayed-hatch"
 	} else if opts.Autorecord {
 		// Keep the physical world unchanged but seed only the confirmed anchor.
 		// The first E movement therefore lands in a real, complete room that is
@@ -106,6 +110,26 @@ func Seed(opts Options) (Result, error) {
 	if err := store.SetActiveMapSetID(session.ID, mapSetID); err != nil {
 		return Result{}, fmt.Errorf("activate fixture map: %w", err)
 	}
+	if opts.HiddenHatch {
+		door, delay := true, 2000
+		for _, edge := range []struct {
+			cell storage.EdgeCell
+			dir  string
+			cmd  string
+		}{
+			{storage.EdgeCell{Zone: fiveroom.HatchZone, X: 0, Y: -1, L: 0}, "D", "повернуть рычаг"},
+			{storage.EdgeCell{Zone: fiveroom.HatchZone, X: 0, Y: -1, L: -1}, "U", "нажать кнопку"},
+		} {
+			cmd := edge.cmd
+			_, found, applyErr := store.ApplyTopologyOp(mapSetID, storage.TopologyOp{
+				Kind: storage.TopoSetEdgeAttrs, Zone: edge.cell.Zone, X: edge.cell.X, Y: edge.cell.Y, L: edge.cell.L, Dir: edge.dir,
+				Attrs: storage.EdgeAttrPatch{Door: &door, OpenCmd: &cmd, OpenDelayMS: &delay},
+			})
+			if applyErr != nil || !found {
+				return Result{}, fmt.Errorf("seed delayed hatch %s: found=%t: %w", edge.dir, found, applyErr)
+			}
+		}
+	}
 
 	resultRooms := map[int]storage.EdgeCell{
 		1: {Zone: Zone, X: 0, Y: 0, L: 0},
@@ -125,6 +149,13 @@ func Seed(opts Options) (Result, error) {
 			1: {Zone: fiveroom.CrateZone, X: 0, Y: 0, L: 0},
 			2: {Zone: fiveroom.CrateZone, X: -1, Y: 0, L: 0},
 			3: {Zone: fiveroom.CrateZone, X: 0, Y: 0, L: -1},
+		}
+	}
+	if opts.HiddenHatch {
+		resultRooms = map[int]storage.EdgeCell{
+			1: {Zone: fiveroom.HatchZone, X: 0, Y: 0, L: 0},
+			2: {Zone: fiveroom.HatchZone, X: 0, Y: -1, L: 0},
+			3: {Zone: fiveroom.HatchZone, X: 0, Y: -1, L: -1},
 		}
 	}
 
@@ -159,13 +190,25 @@ func crateRooms() []storage.Room {
 	}
 }
 
+func hatchRooms() []storage.Room {
+	return []storage.Room{
+		roomAt(fiveroom.HatchZone, 1, 0, 0, 0, fiveroom.HatchTurnHint, "Тропа огибает склон; скрытая дорожка уходит к беседке.", "N E S", []string{"N", "E", "S"}, (1<<0)|(1<<1)|(1<<2)|(1<<3)),
+		roomAt(fiveroom.HatchZone, 2, 0, -1, 0, fiveroom.HatchGazeboHint, "Старая беседка скрывает люк с рычагом.", "", nil, (1<<2)|(1<<5)),
+		roomAt(fiveroom.HatchZone, 3, 0, -1, -1, fiveroom.HatchDeadEndHint, "Подземный тупик; рядом с люком спрятана кнопка.", "", nil, 1<<4),
+	}
+}
+
 func room(tag, x, y int, hint, desc, exits string, edirs []string, ch int) storage.Room {
 	return roomInZone(Zone, tag, x, y, hint, desc, exits, edirs, ch)
 }
 
 func roomInZone(zone string, tag, x, y int, hint, desc, exits string, edirs []string, ch int) storage.Room {
+	return roomAt(zone, tag, x, y, 0, hint, desc, exits, edirs, ch)
+}
+
+func roomAt(zone string, tag, x, y, l int, hint, desc, exits string, edirs []string, ch int) storage.Room {
 	return storage.Room{
-		Zone: zone, X: x, Y: y, L: 0,
+		Zone: zone, X: x, Y: y, L: l,
 		Tag: &tag, Hint: hint, Desc: desc, Exits: exits,
 		EDirs: mustJSONStrings(edirs), Doors: "[]", Ch: ch,
 	}

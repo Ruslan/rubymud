@@ -708,35 +708,37 @@ func (s *Store) GetMapRoomKnowledge(mapSetID int64, cell EdgeCell) (MapRoomKnowl
 // SlimEdgeAttr is one face's attribute set on the wire, with the defaults omitted
 // so an ordinary door costs `{"dir":"N","door":true}` and nothing more.
 type SlimEdgeAttr struct {
-	Dir     string   `json:"dir"`
-	Weight  *float64 `json:"weight,omitempty"`
-	Phrase  string   `json:"phrase,omitempty"`
-	Door    bool     `json:"door,omitempty"`
-	Locked  bool     `json:"locked,omitempty"`
-	OpenCmd string   `json:"open_cmd,omitempty"`
-	NoRoute bool     `json:"no_route,omitempty"`
+	Dir         string   `json:"dir"`
+	Weight      *float64 `json:"weight,omitempty"`
+	Phrase      string   `json:"phrase,omitempty"`
+	Door        bool     `json:"door,omitempty"`
+	Locked      bool     `json:"locked,omitempty"`
+	OpenCmd     string   `json:"open_cmd,omitempty"`
+	OpenDelayMS int      `json:"open_delay_ms,omitempty"`
+	NoRoute     bool     `json:"no_route,omitempty"`
 }
 
 // SlimSeam is one normalized authoritative seam. Nullable selector/target fields
 // represent malformed legacy entries and dead seams without a raw automaps read.
 type SlimSeam struct {
-	Order      int      `json:"o"`
-	Kind       string   `json:"k"`
-	Source     string   `json:"r"`
-	Passable   bool     `json:"p"`
-	TargetZone string   `json:"tz"`
-	TargetTag  *int     `json:"tt,omitempty"`
-	ToZone     *string  `json:"z,omitempty"`
-	ToX        *int     `json:"x,omitempty"`
-	ToY        *int     `json:"y,omitempty"`
-	ToL        *int     `json:"l,omitempty"`
-	Command    string   `json:"c"`
-	Weight     *float64 `json:"weight,omitempty"`
-	Phrase     string   `json:"phrase,omitempty"`
-	Door       bool     `json:"door,omitempty"`
-	Locked     bool     `json:"locked,omitempty"`
-	OpenCmd    string   `json:"open_cmd,omitempty"`
-	NoRoute    bool     `json:"no_route,omitempty"`
+	Order       int      `json:"o"`
+	Kind        string   `json:"k"`
+	Source      string   `json:"r"`
+	Passable    bool     `json:"p"`
+	TargetZone  string   `json:"tz"`
+	TargetTag   *int     `json:"tt,omitempty"`
+	ToZone      *string  `json:"z,omitempty"`
+	ToX         *int     `json:"x,omitempty"`
+	ToY         *int     `json:"y,omitempty"`
+	ToL         *int     `json:"l,omitempty"`
+	Command     string   `json:"c"`
+	Weight      *float64 `json:"weight,omitempty"`
+	Phrase      string   `json:"phrase,omitempty"`
+	Door        bool     `json:"door,omitempty"`
+	Locked      bool     `json:"locked,omitempty"`
+	OpenCmd     string   `json:"open_cmd,omitempty"`
+	OpenDelayMS int      `json:"open_delay_ms,omitempty"`
+	NoRoute     bool     `json:"no_route,omitempty"`
 }
 
 // ListSlimRooms returns the slim rooms for one zone of a set, ordered by grid
@@ -865,7 +867,7 @@ func (s *Store) ListSlimRooms(mapSetID int64, zone string) ([]SlimRoom, error) {
 	if err := edgeRows.Err(); err != nil {
 		return nil, err
 	}
-	corridorRows, err := s.db.Raw(`SELECT source,passable,from_x,from_y,from_l,dir,to_zone,to_x,to_y,to_l,command,weight,phrase,door,locked,open_cmd,no_route FROM map_edges WHERE map_set_id=? AND from_zone=? AND kind=?`, mapSetID, zone, EdgeKindCorridor).Rows()
+	corridorRows, err := s.db.Raw(`SELECT source,passable,from_x,from_y,from_l,dir,to_zone,to_x,to_y,to_l,command,weight,phrase,door,locked,open_cmd,open_delay_ms,no_route FROM map_edges WHERE map_set_id=? AND from_zone=? AND kind=?`, mapSetID, zone, EdgeKindCorridor).Rows()
 	if err != nil {
 		return nil, err
 	}
@@ -873,7 +875,7 @@ func (s *Store) ListSlimRooms(mapSetID int64, zone string) ([]SlimRoom, error) {
 	for corridorRows.Next() {
 		var fx, fy, fl int
 		var c SlimCorridor
-		if err := corridorRows.Scan(&c.Source, &c.Passable, &fx, &fy, &fl, &c.Dir, &c.ToZone, &c.ToX, &c.ToY, &c.ToL, &c.Command, &c.Weight, &c.Phrase, &c.Door, &c.Locked, &c.OpenCmd, &c.NoRoute); err != nil {
+		if err := corridorRows.Scan(&c.Source, &c.Passable, &fx, &fy, &fl, &c.Dir, &c.ToZone, &c.ToX, &c.ToY, &c.ToL, &c.Command, &c.Weight, &c.Phrase, &c.Door, &c.Locked, &c.OpenCmd, &c.OpenDelayMS, &c.NoRoute); err != nil {
 			return nil, err
 		}
 		cell := EdgeCell{zone, fx, fy, fl}
@@ -904,10 +906,10 @@ func (s *Store) ListSlimRooms(mapSetID int64, zone string) ([]SlimRoom, error) {
 	// attributes one would land in `ea` under an empty direction and the edge editor
 	// would read it as a face — silently overwriting a real one. The filter costs
 	// nothing and closes that before it can happen.
-	attrRows, err := s.db.Raw(`SELECT from_x, from_y, from_l, dir, weight, phrase, door, locked, open_cmd, no_route
+	attrRows, err := s.db.Raw(`SELECT from_x, from_y, from_l, dir, weight, phrase, door, locked, open_cmd, open_delay_ms, no_route
 		FROM map_edges
 		WHERE map_set_id = ? AND from_zone = ? AND kind = ?
-		  AND (weight <> 1 OR door = 1 OR locked = 1 OR no_route = 1 OR phrase <> '' OR open_cmd <> '')`,
+		  AND (weight <> 1 OR door = 1 OR locked = 1 OR no_route = 1 OR phrase <> '' OR open_cmd <> '' OR open_delay_ms <> 0)`,
 		mapSetID, zone, EdgeKindGrid).Rows()
 	if err != nil {
 		return nil, err
@@ -918,7 +920,7 @@ func (s *Store) ListSlimRooms(mapSetID int64, zone string) ([]SlimRoom, error) {
 		var a SlimEdgeAttr
 		var weight float64
 		if err := attrRows.Scan(&fx, &fy, &fl, &a.Dir, &weight,
-			&a.Phrase, &a.Door, &a.Locked, &a.OpenCmd, &a.NoRoute); err != nil {
+			&a.Phrase, &a.Door, &a.Locked, &a.OpenCmd, &a.OpenDelayMS, &a.NoRoute); err != nil {
 			return nil, err
 		}
 		if weight != 1 {
@@ -937,7 +939,7 @@ func (s *Store) ListSlimRooms(mapSetID int64, zone string) ([]SlimRoom, error) {
 	}
 	seamRows, err := s.db.Raw(`SELECT seam_order, source, passable, from_x, from_y, from_l,
 		target_zone, target_tag, to_zone, to_x, to_y, to_l, command,
-		weight, phrase, door, locked, open_cmd, no_route
+		weight, phrase, door, locked, open_cmd, open_delay_ms, no_route
 		FROM map_edges WHERE map_set_id = ? AND from_zone = ? AND kind = ?
 		ORDER BY from_l ASC, from_x ASC, from_y ASC, seam_order ASC, id ASC`, mapSetID, zone, EdgeKindSeam).Rows()
 	if err != nil {
@@ -952,7 +954,7 @@ func (s *Store) ListSlimRooms(mapSetID int64, zone string) ([]SlimRoom, error) {
 		var toZone strNull
 		if err := seamRows.Scan(&a.Order, &a.Source, &a.Passable, &x, &y, &l,
 			&a.TargetZone, &tag, &toZone, &toX, &toY, &toL, &a.Command,
-			&weight, &a.Phrase, &a.Door, &a.Locked, &a.OpenCmd, &a.NoRoute); err != nil {
+			&weight, &a.Phrase, &a.Door, &a.Locked, &a.OpenCmd, &a.OpenDelayMS, &a.NoRoute); err != nil {
 			return nil, err
 		}
 		a.Kind = EdgeKindSeam
@@ -1668,6 +1670,9 @@ func (s *Store) setEdgeAttrsWithSnapshot(mapSetID int64, zone string, x, y, l in
 		}
 
 		next, changed := patch.Apply(cur.EdgeAttrs)
+		if err := validateEdgeAttrs(next); err != nil {
+			return err
+		}
 		if !changed {
 			// A WRITE THAT CHANGES NOTHING CHANGES NOTHING — including provenance.
 			// Promoting a derived face here would freeze it against the derivation for
@@ -1737,6 +1742,9 @@ func (s *Store) setSeamAttrsWithSnapshot(mapSetID int64, zone string, x, y, l in
 			return serr
 		}
 		next, changed := patch.Apply(cur.EdgeAttrs)
+		if err := validateEdgeAttrs(next); err != nil {
+			return err
+		}
 		if !changed {
 			return nil
 		}
@@ -1744,7 +1752,7 @@ func (s *Store) setSeamAttrsWithSnapshot(mapSetID int64, zone string, x, y, l in
 		// the authoritative seam list.
 		if err := tx.Model(&MapEdge{}).Where("id = ?", cur.ID).Updates(map[string]any{
 			"source": EdgeSourceManual, "weight": next.Weight, "phrase": next.Phrase,
-			"door": next.Door, "locked": next.Locked, "open_cmd": next.OpenCmd, "no_route": next.NoRoute,
+			"door": next.Door, "locked": next.Locked, "open_cmd": next.OpenCmd, "open_delay_ms": next.OpenDelayMS, "no_route": next.NoRoute,
 		}).Error; err != nil {
 			return err
 		}
@@ -1854,6 +1862,9 @@ func (s *Store) createPortalWithSnapshot(mapSetID int64, from, to EdgeCell, comm
 		}
 		base := EdgeAttrs{Weight: 1}
 		next, _ := attrs.Apply(base)
+		if serr := validateEdgeAttrs(next); serr != nil {
+			return serr
+		}
 		e := MapEdge{MapSetID: mapSetID, Kind: EdgeKindSeam, Source: EdgeSourceManual, Passable: true,
 			FromZone: from.Zone, FromX: from.X, FromY: from.Y, FromL: from.L,
 			Command: command, TargetZone: to.Zone, SeamOrder: order, EdgeAttrs: next}
@@ -1943,6 +1954,9 @@ func (s *Store) updatePortalWithSnapshot(mapSetID int64, from EdgeCell, sel Port
 			return serr
 		}
 		nextAttrs, attrChanged := patch.Attrs.Apply(cur.EdgeAttrs)
+		if err := validateEdgeAttrs(nextAttrs); err != nil {
+			return err
+		}
 		nextCommand := cur.Command
 		if command != nil {
 			nextCommand = *command
@@ -1957,7 +1971,7 @@ func (s *Store) updatePortalWithSnapshot(mapSetID int64, from EdgeCell, sel Port
 		}
 		updates := map[string]any{"source": EdgeSourceManual, "command": nextCommand,
 			"weight": nextAttrs.EffectiveWeight(), "phrase": nextAttrs.Phrase, "door": nextAttrs.Door,
-			"locked": nextAttrs.Locked, "open_cmd": nextAttrs.OpenCmd, "no_route": nextAttrs.NoRoute}
+			"locked": nextAttrs.Locked, "open_cmd": nextAttrs.OpenCmd, "open_delay_ms": nextAttrs.OpenDelayMS, "no_route": nextAttrs.NoRoute}
 		// Promotion freezes the currently resolved coordinate as well as an explicit
 		// retarget. No portal produced by this operation retains symbolic tag identity.
 		if patch.Target != nil || cur.TargetTag != nil {

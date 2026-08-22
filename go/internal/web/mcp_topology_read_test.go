@@ -19,13 +19,13 @@ func TestMCPMapZoneRendersMaterializedTopology(t *testing.T) {
 		Z: "Зона", X: 1, Y: 2, L: 0, T: &tag, H: "Комната \"A\"",
 		E: []string{"N"}, M: []string{"E"}, MB: []string{"N"},
 		G: []string{"S"}, GF: []string{"W"},
-		EA: []storage.SlimEdgeAttr{{Dir: "E", Weight: &weight, Phrase: "толкнуть ящик", Door: true, Locked: true, OpenCmd: "открыть люк", NoRoute: true}},
+		EA: []storage.SlimEdgeAttr{{Dir: "E", Weight: &weight, Phrase: "толкнуть ящик", Door: true, Locked: true, OpenCmd: "открыть люк", OpenDelayMS: 2000, NoRoute: true}},
 		SE: []storage.SlimSeam{{Order: 0, Kind: storage.EdgeKindSeam, Source: storage.EdgeSourceParsed, Passable: true, TargetZone: "Море", Command: ` войти "сюда" `}, {Order: 1, Kind: storage.EdgeKindSeam, Source: storage.EdgeSourceManual, Passable: true, TargetZone: "Море|2", TargetTag: &tag, Command: ` войти "сюда" `, Weight: &weight, NoRoute: true}},
 	}}, 300)
 
 	for _, want := range []string{
 		"manual_open=[E]", "manual_blocked=[N]", "grid_parsed=[S]", "grid_fallback=[W]",
-		`attrs={dir=E weight=2.5 phrase="толкнуть ящик" door=true locked=true open_cmd="открыть люк" no_route=true}`,
+		`attrs={dir=E weight=2.5 phrase="толкнуть ящик" door=true locked=true open_cmd="открыть люк" open_delay_ms=2000 no_route=true}`,
 		`seam={order=0 kind=seam source=parsed passable=true target_zone="Море" target_tag=null command=" войти \"сюда\" "}`,
 		`seam={order=1 kind=seam source=manual passable=true target_zone="Море|2" target_tag=7 command=" войти \"сюда\" " weight=2.5 no_route=true}`,
 	} {

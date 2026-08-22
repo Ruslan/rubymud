@@ -46,7 +46,7 @@ export interface SlimCorridor {
   dir: string; r: string; p: boolean;
   z: string; x: number; y: number; l: number;
   c: string; weight?: number; phrase?: string; door?: boolean; locked?: boolean;
-  open_cmd?: string; no_route?: boolean;
+  open_cmd?: string; open_delay_ms?: number; no_route?: boolean;
 }
 
 export interface MapRoomSearchResult {
@@ -78,6 +78,7 @@ export interface SlimEdgeAttr {
   door?: boolean; // a door stands on this face
   locked?: boolean; // that door is locked by default from this side
   open_cmd?: string; // the command that opens it from this side
+  open_delay_ms?: number; // pause after open_cmd and before traversal
   no_route?: boolean; // walkable, but the router must not plan through it
 }
 
@@ -98,6 +99,7 @@ export interface SlimSeam {
   door?: boolean;
   locked?: boolean;
   open_cmd?: string;
+  open_delay_ms?: number;
   no_route?: boolean;
 }
 

@@ -306,6 +306,21 @@ func TestMCPPathFlagsDoorAndPipe(t *testing.T) {
 	}
 }
 
+func TestMCPPathWarnsThatDelayedOpeningsNeedServerWalk(t *testing.T) {
+	text, isError := formatPath("Тупик", mapper.PathResult{Reachable: true, Steps: []mapper.PathStep{{
+		Command: "d", Dir: "d", Door: true, DoorKind: mapper.DoorConfirmed,
+		OpenAction: "повернуть рычаг", OpenDelayMS: 2000, Cells: 1,
+	}}})
+	if isError || !strings.Contains(text, "do NOT send as one script") ||
+		!strings.Contains(text, "Use mud_map_walk_start") ||
+		!strings.Contains(text, "WAIT 2000 ms after opening") {
+		t.Fatalf("delayed MCP path is unsafe or incomplete: %q", text)
+	}
+	if strings.Contains(text, "Commands: повернуть рычаг; d") {
+		t.Fatalf("delayed route exposed an apparently sendable script: %q", text)
+	}
+}
+
 // TestMCPPathFlagsPresumedDoor is the live field case surfaced through mud_path:
 // hop с (north) into a cell whose SOUTH face records the door while the source
 // has no door on that face -> the route must flag it as a PRESUMED door, distinct

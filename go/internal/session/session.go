@@ -190,6 +190,8 @@ type Session struct {
 	mapWalkBeforeManualPausedBroadcast func()
 	// Test-only hook after dispatch claims the job and before any route write.
 	mapWalkBeforeDispatchWrite func()
+	// Test-only hook after the opener is written and before delayed-wait state is published.
+	mapWalkAfterOpenWrite func()
 }
 
 func New(sessionID int64, mudAddr string, store *storage.Store, v *vm.VM, initCmds string, mccpOn bool) (*Session, error) {

@@ -27,7 +27,7 @@ func TestMCPSetSeamAttrsUsesSemanticSelector(t *testing.T) {
 	sess.LoadActiveMapSet()
 
 	res := callTool(t, s, "mud_room_set_seam_attrs", fmt.Sprintf(
-		`{"session_id":%d,"zone":"A","x":0,"y":0,"l":0,"target_zone":"B","target_tag":7,"command":"enter","weight":0.5,"phrase":"open portal","door":true,"locked":true,"open_cmd":"say friend","no_route":true}`,
+		`{"session_id":%d,"zone":"A","x":0,"y":0,"l":0,"target_zone":"B","target_tag":7,"command":"enter","weight":0.5,"phrase":"open portal","door":true,"locked":true,"open_cmd":"say friend","open_delay_ms":2000,"no_route":true}`,
 		sess.SessionID()))
 	if res["isError"] == true {
 		t.Fatalf("set seam attrs: %q", toolText(t, res))
@@ -46,7 +46,7 @@ func TestMCPSetSeamAttrsUsesSemanticSelector(t *testing.T) {
 			seam = e
 		}
 	}
-	if seam == nil || seam.Source != storage.EdgeSourceManual || seam.Weight != .5 || seam.Phrase != "open portal" || !seam.Door || !seam.Locked || seam.OpenCmd != "say friend" || !seam.NoRoute {
+	if seam == nil || seam.Source != storage.EdgeSourceManual || seam.Weight != .5 || seam.Phrase != "open portal" || !seam.Door || !seam.Locked || seam.OpenCmd != "say friend" || seam.OpenDelayMS != 2000 || !seam.NoRoute {
 		t.Fatalf("stored seam attrs = %+v", seam)
 	}
 	original, err := s.store.ListMapEdges(id)

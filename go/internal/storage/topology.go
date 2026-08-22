@@ -1,12 +1,19 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"time"
 
 	"gorm.io/gorm"
+)
+
+var (
+	ErrEdgeOpeningDelayRange     = errors.New("edge opening delay must be between 0 and 30000 milliseconds")
+	ErrEdgeOpeningDelayNeedsOpen = errors.New("edge opening delay requires a door and a non-empty opening command")
 )
 
 // This file is the storage half of the unified topology write-path.
@@ -110,12 +117,13 @@ const (
 // (clear the phrase, drop the door). Same shape and reason as RoomFields — an MCP
 // agent setting only `no_route` must not silently erase a door someone else marked.
 type EdgeAttrPatch struct {
-	Weight  *float64
-	Phrase  *string
-	Door    *bool
-	Locked  *bool
-	OpenCmd *string
-	NoRoute *bool
+	Weight      *float64
+	Phrase      *string
+	Door        *bool
+	Locked      *bool
+	OpenCmd     *string
+	OpenDelayMS *int
+	NoRoute     *bool
 }
 
 // SeamSelector identifies one existing directed seam without exposing the volatile
@@ -205,6 +213,9 @@ func (p EdgeAttrPatch) Apply(base EdgeAttrs) (EdgeAttrs, bool) {
 	if p.OpenCmd != nil {
 		out.OpenCmd = *p.OpenCmd
 	}
+	if p.OpenDelayMS != nil {
+		out.OpenDelayMS = *p.OpenDelayMS
+	}
 	if p.NoRoute != nil {
 		out.NoRoute = *p.NoRoute
 	}
@@ -213,12 +224,25 @@ func (p EdgeAttrPatch) Apply(base EdgeAttrs) (EdgeAttrs, bool) {
 
 // Empty reports whether the patch sets nothing at all.
 func (p EdgeAttrPatch) Empty() bool {
-	return p.Weight == nil && p.Phrase == nil && p.Door == nil && p.Locked == nil && p.OpenCmd == nil && p.NoRoute == nil
+	return p.Weight == nil && p.Phrase == nil && p.Door == nil && p.Locked == nil && p.OpenCmd == nil && p.OpenDelayMS == nil && p.NoRoute == nil
 }
 
 func (p EdgeAttrPatch) Validate() error {
 	if p.Weight != nil && !ValidExplicitWeight(*p.Weight) {
 		return fmt.Errorf("edge weight must be finite and greater than zero")
+	}
+	if p.OpenDelayMS != nil && !ValidOpenDelayMS(*p.OpenDelayMS) {
+		return ErrEdgeOpeningDelayRange
+	}
+	return nil
+}
+
+func validateEdgeAttrs(attrs EdgeAttrs) error {
+	if !ValidOpenDelayMS(attrs.OpenDelayMS) {
+		return ErrEdgeOpeningDelayRange
+	}
+	if attrs.OpenDelayMS > 0 && (!attrs.Door || strings.TrimSpace(attrs.OpenCmd) == "") {
+		return ErrEdgeOpeningDelayNeedsOpen
 	}
 	return nil
 }

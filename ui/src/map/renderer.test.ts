@@ -20,6 +20,7 @@ function fakeCtx(): CanvasRenderingContext2D {
       closePath: noop,
       fill: noop,
       stroke: noop,
+      setLineDash: noop,
       fillText: noop,
       fillStyle: "",
       strokeStyle: "",
@@ -117,6 +118,26 @@ describe("pipe orientation", () => {
     expect(stroke).toHaveBeenCalledTimes(1);
     const [ax,ay]=moveTo.mock.calls[0]!;const [bx,by]=lineTo.mock.calls[0]!;
     expect(ay).toBe(by);expect(Math.abs(Number(bx)-Number(ax))).toBeGreaterThan(30);
+  });
+
+  it("paints an adjacent materialized passage omitted from both exit lines as dashed", () => {
+    const cv = makeCanvas();
+    const ctx = cv.getContext("2d")!;
+    let dashed = false;
+    let dashedStrokes = 0;
+    const stroke = vi.spyOn(ctx, "stroke").mockImplementation(() => { if (dashed) dashedStrokes++; });
+    const setLineDash = vi.spyOn(ctx, "setLineDash").mockImplementation((dash) => { dashed = dash.length > 0; });
+    const west = slim({ h: "Беседка", x: 0, y: -1, e: [], g: ["E"] });
+    const east = slim({ h: "Поворот", x: 0, y: 0, e: ["N", "S"], g: ["N", "S", "W"] });
+    const r = new MapRenderer(cv);
+    r.setZone("Z", [west, east]);
+    r.centerOn(0, 0, 0);
+
+    (r as unknown as { paint(): void }).paint();
+
+    expect(stroke).toHaveBeenCalledTimes(4); // two ordinary exits plus two hidden halves
+    expect(dashedStrokes).toBe(2);
+    expect(setLineDash.mock.calls.some(([dash]) => dash.length > 0)).toBe(true);
   });
   it("uses N/S connectivity before four-neighbour geometry", () => {
     expect(pipeAxis(3, { hL: true, hR: true, vU: true, vD: true })).toBe("v");

@@ -35,7 +35,8 @@ func TestMigration026BackfillsAndDropsLegacyAutomaps(t *testing.T) {
 		('026_drop_rooms_automaps.sql'), ('027_canonical_zone_names.sql'),
 		('028_room_inhabitants.sql'), ('029_room_layouts.sql'), ('030_exact_corridors.sql'),
 		('031_app_language.sql'), ('032_autorecord_provenance.sql'),
-		('033_autorecord_bidirectional.sql'), ('034_mutable_room_exits.sql')`).Error; err != nil {
+		('033_autorecord_bidirectional.sql'), ('034_mutable_room_exits.sql'),
+		('025b_map_edge_open_delay.sql')`).Error; err != nil {
 		t.Fatalf("fence future migrations: %v", err)
 	}
 	if err := runMigrations(db); err != nil {

@@ -49,6 +49,15 @@ Blocked contacts and contacts whose exact zone or room no longer exists are not
 treated as successful jumps. Async jumps use the pane load generation guard so
 a late response cannot replace a newer zone selection.
 
+Materialized grid faces in `g` that are absent from the room's printed `e` exits
+are concealed-but-known passages. The canvas draws their adjacent half-stubs in
+dashed green; manual `m` passages remain dashed amber, preserving provenance.
+Directed door attributes may include `open_delay_ms=0..30000` beside an explicit
+`open_cmd`. Map-walk sends the opener, waits on a generation-fenced Go timer
+without blocking the game loop, then sends movement. Cancellation/replacement
+stops the tail. A flattened chat script cannot encode the pause, so the route
+insert action refuses delayed routes and directs the player to **Start route**.
+
 ## Mapper Scan Frontier
 
 During active room recording the server may emit an ephemeral `room_scan` for

@@ -3,7 +3,10 @@
 // dependency: the emulator is the external truth the host must observe.
 package fiveroom
 
-import "strings"
+import (
+	"strings"
+	"time"
+)
 
 const (
 	HilloZone        = "Хилло"
@@ -48,12 +51,15 @@ type WorldOptions struct {
 	// оврага» leads west into «Лесистое предгорье», which has no reverse east exit.
 	OneWayHillo  bool
 	DynamicCrate bool
+	HiddenHatch  bool
+	HatchDelay   time.Duration
 }
 
 type World struct {
-	current    int
-	options    WorldOptions
-	crateMoved bool
+	current      int
+	options      WorldOptions
+	crateMoved   bool
+	hatchReadyAt time.Time
 }
 
 func NewWorld() *World { return &World{current: 1} }
@@ -70,6 +76,9 @@ func (w *World) Current() Room {
 		}
 		return room
 	}
+	if w.options.HiddenHatch {
+		return hatchRooms[w.current]
+	}
 	if w.options.OneWayHillo {
 		return hilloRooms[w.current]
 	}
@@ -78,6 +87,12 @@ func (w *World) Current() Room {
 
 func (w *World) Apply(command string) (Room, bool) {
 	command = strings.ToUpper(strings.TrimSpace(command))
+	if w.options.HiddenHatch && ((w.current == 2 && command == "D") || (w.current == 3 && command == "U")) {
+		if w.hatchReadyAt.IsZero() || time.Now().Before(w.hatchReadyAt) {
+			return w.Current(), false
+		}
+		w.hatchReadyAt = time.Time{}
+	}
 	next, ok := w.transitions()[w.current][command]
 	if !ok {
 		return w.Current(), false
@@ -91,12 +106,27 @@ func (w *World) ApplyAction(command string) bool {
 		w.crateMoved = true
 		return true
 	}
+	if w.options.HiddenHatch {
+		trimmed := strings.TrimSpace(command)
+		if (w.current == 2 && strings.EqualFold(trimmed, "повернуть рычаг")) ||
+			(w.current == 3 && strings.EqualFold(trimmed, "нажать кнопку")) {
+			delay := w.options.HatchDelay
+			if delay <= 0 {
+				delay = 2 * time.Second
+			}
+			w.hatchReadyAt = time.Now().Add(delay)
+			return true
+		}
+	}
 	return false
 }
 
 // ScanLines returns the RMUD-shaped surroundings response for the current room.
 // It is presentation truth from the fake MUD, not mapper/storage data.
 func (w *World) ScanLines() []string {
+	if w.options.HiddenHatch {
+		return nil // every passage in this fixture is deliberately concealed
+	}
 	prefix := map[string]string{
 		"N": "На севере:", "E": "На востоке:", "S": "На юге:",
 		"W": "На западе:", "U": "Наверху:", "D": "Внизу:",
@@ -131,6 +161,9 @@ func (w *World) transitions() map[int]map[string]int {
 		}
 		return crateTransitionsHidden
 	}
+	if w.options.HiddenHatch {
+		return hatchTransitions
+	}
 	if w.options.OneWayHillo {
 		return hilloTransitions
 	}
@@ -162,4 +195,23 @@ var hilloRooms = map[int]Room{
 var hilloTransitions = map[int]map[string]int{
 	1: {"W": 2},
 	2: {},
+}
+
+const (
+	HatchZone        = "Хилло"
+	HatchTurnHint    = "Поворот"
+	HatchGazeboHint  = "Беседка"
+	HatchDeadEndHint = "Тупик"
+)
+
+var hatchRooms = map[int]Room{
+	1: {ID: 1, Hint: HatchTurnHint, Desc: "Тропа огибает склон; скрытая дорожка уходит к беседке.", Exits: "N E S"},
+	2: {ID: 2, Hint: HatchGazeboHint, Desc: "Старая беседка скрывает люк с рычагом.", Exits: ""},
+	3: {ID: 3, Hint: HatchDeadEndHint, Desc: "Подземный тупик; рядом с люком спрятана кнопка.", Exits: ""},
+}
+
+var hatchTransitions = map[int]map[string]int{
+	1: {"W": 2},
+	2: {"E": 1, "D": 3},
+	3: {"U": 2},
 }

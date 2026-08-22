@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"rubymud/go/internal/e2e/fiveroom"
 	"rubymud/go/internal/storage"
 )
 
@@ -104,6 +105,41 @@ func TestSeedReplaysHilloOneWayRoomTextButKeepsDerivedReverseUntilMarked(t *test
 		}
 	}
 	t.Fatal("derived reverse E face missing before the player marks the rare one-way passage")
+}
+
+func TestSeedHiddenHatchCarriesConcealedFacesAndDirectedDelays(t *testing.T) {
+	runDir := t.TempDir()
+	result, err := Seed(Options{RunDir: runDir, DBPath: filepath.Join(runDir, "mudhost.db"), MUDHost: "127.0.0.1", MUDPort: 40123, HiddenHatch: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store, err := storage.Open(filepath.Join(runDir, "mudhost.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	edges, err := store.ListMapEdges(result.MapSetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"D": "повернуть рычаг", "U": "нажать кнопку"}
+	seen := map[string]bool{}
+	for _, edge := range edges {
+		if command, ok := want[edge.Dir]; ok && edge.Door && edge.OpenCmd == command && edge.OpenDelayMS == 2000 {
+			seen[edge.Dir] = true
+		}
+	}
+	if !seen["D"] || !seen["U"] {
+		t.Fatalf("delayed directed hatch attrs missing: seen=%v edges=%+v", seen, edges)
+	}
+	rooms, err := store.ListRooms(result.MapSetID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	turn := roomByHint(t, rooms, fiveroom.HatchTurnHint)
+	if strings.Contains(turn.EDirs, `"W"`) || turn.Ch&(1<<3) == 0 {
+		t.Fatalf("turn must omit printed W but retain physical W connectivity: %+v", turn)
+	}
 }
 
 func roomByHint(t *testing.T, rooms []storage.Room, hint string) storage.Room {

@@ -67,6 +67,9 @@ type PathStep struct {
 	// room format describes no door verb: every profile but the builtin rmud, where
 	// sending anything would be a guess at another server's vocabulary.
 	OpenAction string
+	// OpenDelayMS is the bounded pause after OpenAction and before Command. It is
+	// carried as data so the session can wait without blocking its input loop.
+	OpenDelayMS int
 	// Locked says the door on this hop is marked locked by default from the side we
 	// approach it. It does NOT stop the route (the player may hold the key); it is
 	// reported so "the walk stopped here" has a name.
@@ -177,6 +180,7 @@ type worldNeighbor struct {
 	toZone       string
 	phrase       string // hand-drawn command that takes this passage, "" if none
 	openAction   string // command to send before the move to get through a door
+	openDelayMS  int    // bounded pause after openAction and before command
 	locked       bool   // that door is marked locked by default from this side
 	weight       float64
 	exactCommand bool // corridor Command is transport truth; Phrase is annotation
@@ -227,7 +231,7 @@ func (idx *Index) worldNeighbors(c Coord, ignoreVetoes bool) (out []worldNeighbo
 		if nb == nil || nb.IsDT {
 			continue
 		}
-		door, openAct, locked := doorOnHop(r, nb, dir, idx.doorOpen)
+		door, openAct, openDelay, locked := doorOnHop(r, nb, dir, idx.doorOpen)
 		cmd := strings.ToLower(dir)
 		exact := e.Kind == storage.EdgeKindCorridor
 		if exact {
@@ -243,6 +247,7 @@ func (idx *Index) worldNeighbors(c Coord, ignoreVetoes bool) (out []worldNeighbo
 			toZone:       nc.Zone,
 			phrase:       e.Phrase,
 			openAction:   openAct,
+			openDelayMS:  openDelay,
 			locked:       locked,
 			weight:       e.EffectiveWeight(),
 			exactCommand: exact,
@@ -303,6 +308,7 @@ func (idx *Index) worldNeighbors(c Coord, ignoreVetoes bool) (out []worldNeighbo
 			toZone:       tr.Zone,
 			phrase:       e.Phrase,
 			openAction:   open,
+			openDelayMS:  e.OpenDelayMS,
 			locked:       e.Locked,
 			weight:       e.EffectiveWeight(),
 		})
@@ -347,20 +353,20 @@ func doorGrade(a, b *IndexRoom, dir string) DoorKind {
 // that records the door — the walked face when it is confirmed, the target's reverse
 // face when it is only presumed — because the opening command and the lock are
 // per-direction (a door locked from one side opens freely from the other).
-func doorOnHop(a, b *IndexRoom, dir, tmpl string) (kind DoorKind, openAction string, locked bool) {
+func doorOnHop(a, b *IndexRoom, dir, tmpl string) (kind DoorKind, openAction string, openDelayMS int, locked bool) {
 	kind = doorGrade(a, b, dir)
 	switch kind {
 	case DoorConfirmed:
 		e := a.GridEdge(dir)
-		return kind, doorOpenAction(e.OpenCmd, dir, tmpl), e.Locked
+		return kind, doorOpenAction(e.OpenCmd, dir, tmpl), e.OpenDelayMS, e.Locked
 	case DoorPresumed:
 		// The door was recorded only on the far side. Its opening command is the one
 		// stored there, but the LOCK is not: "locked from the other side" says nothing
 		// about this one, and claiming it would report a lock the operator never marked.
 		e := b.GridEdge(OppositeDir(dir))
-		return kind, doorOpenAction(e.OpenCmd, dir, tmpl), false
+		return kind, doorOpenAction(e.OpenCmd, dir, tmpl), e.OpenDelayMS, false
 	default:
-		return DoorNone, "", false
+		return DoorNone, "", 0, false
 	}
 }
 
@@ -468,6 +474,7 @@ func (idx *Index) findPath(start Coord, goal func(*IndexRoom) bool, ignoreVetoes
 				toZone:       nb.toZone,
 				phrase:       nb.phrase,
 				openAction:   nb.openAction,
+				openDelayMS:  nb.openDelayMS,
 				locked:       nb.locked,
 				exactCommand: nb.exactCommand,
 			}
@@ -529,6 +536,7 @@ type rawStep struct {
 	isDT         bool
 	phrase       string
 	openAction   string
+	openDelayMS  int
 	locked       bool
 	exactCommand bool
 }
@@ -605,6 +613,7 @@ func collapsePipeRuns(raw []rawStep) []PathStep {
 			Cells:        1,
 			Phrase:       rs.phrase,
 			OpenAction:   rs.openAction,
+			OpenDelayMS:  rs.openDelayMS,
 			Locked:       rs.locked,
 		})
 	}

@@ -64,6 +64,7 @@ describe("faceAttrs", () => {
       door: false,
       locked: false,
       openCmd: "",
+      openDelayMS: 0,
       noRoute: true,
     });
     expect(faceAttrs(r, "S")).toEqual({
@@ -72,6 +73,7 @@ describe("faceAttrs", () => {
       door: true,
       locked: true,
       openCmd: "дёрнуть рычаг",
+      openDelayMS: 0,
       noRoute: false,
     });
   });
@@ -175,6 +177,16 @@ describe("attrsSummary", () => {
     );
     expect(s).toContain("дёрнуть рычаг");
     expect(s).not.toContain("откр две");
+  });
+
+  it("states the pause between the opening action and movement", () => {
+    const s = attrsSummary(
+      { ...emptyEdgeAttrs, door: true, openCmd: "повернуть рычаг", openDelayMS: 2000 },
+      "D",
+      DEFAULT_OPEN,
+    );
+    expect(s).toContain("повернуть рычаг");
+    expect(s).toContain("waits 2000 ms before movement");
   });
 
   it("calls out an opening command with no door, which would never fire", () => {

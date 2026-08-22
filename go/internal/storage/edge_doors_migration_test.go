@@ -54,6 +54,9 @@ func TestMigration018BackfillsDoorsOntoExistingEdges(t *testing.T) {
 		if err := db.Exec(`INSERT INTO schema_migrations (version) VALUES (?)`, "026_drop_rooms_automaps.sql").Error; err != nil {
 			t.Fatalf("fence 026: %v", err)
 		}
+		if err := db.Exec(`INSERT INTO schema_migrations (version) VALUES (?)`, "025b_map_edge_open_delay.sql").Error; err != nil {
+			t.Fatalf("fence 025b: %v", err)
+		}
 		if err := runMigrations(db); err != nil {
 			t.Fatalf("migrate to 017: %v", err)
 		}
@@ -86,6 +89,9 @@ func TestMigration018BackfillsDoorsOntoExistingEdges(t *testing.T) {
 		}
 		if err := db.Exec(`DELETE FROM schema_migrations WHERE version = ?`, "026_drop_rooms_automaps.sql").Error; err != nil {
 			t.Fatalf("unfence 026: %v", err)
+		}
+		if err := db.Exec(`DELETE FROM schema_migrations WHERE version = ?`, "025b_map_edge_open_delay.sql").Error; err != nil {
+			t.Fatalf("unfence 025b: %v", err)
 		}
 	}()
 

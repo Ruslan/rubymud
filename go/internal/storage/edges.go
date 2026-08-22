@@ -121,6 +121,8 @@ type EdgeAttrs struct {
 	Locked bool `json:"locked"`
 	// OpenCmd opens the door from this side; empty falls back to the default.
 	OpenCmd string `gorm:"column:open_cmd" json:"open_cmd"`
+	// OpenDelayMS is a bounded non-blocking pause after OpenCmd and before movement.
+	OpenDelayMS int `gorm:"column:open_delay_ms" json:"open_delay_ms"`
 	// NoRoute: walkable, but the router must not plan through it.
 	NoRoute bool `gorm:"column:no_route" json:"no_route"`
 }
@@ -142,8 +144,12 @@ func ValidExplicitWeight(weight float64) bool {
 // Any reports whether the attribute set says anything at all. Used to decide
 // whether a face is worth sending to the UI and whether a write has content.
 func (a EdgeAttrs) Any() bool {
-	return a.Weight != 0 && a.Weight != 1 || a.Phrase != "" || a.Door || a.Locked || a.OpenCmd != "" || a.NoRoute
+	return a.Weight != 0 && a.Weight != 1 || a.Phrase != "" || a.Door || a.Locked || a.OpenCmd != "" || a.OpenDelayMS != 0 || a.NoRoute
 }
+
+const MaxOpenDelayMS = 30_000
+
+func ValidOpenDelayMS(delay int) bool { return delay >= 0 && delay <= MaxOpenDelayMS }
 
 func (MapEdge) TableName() string { return "map_edges" }
 
@@ -589,9 +595,9 @@ func attachEdgeAttrs(db *gorm.DB, mapSetID int64, edges []MapEdge) error {
 	if len(edges) == 0 {
 		return nil
 	}
-	rows, err := db.Raw(`SELECT id, weight, phrase, door, locked, open_cmd, no_route
+	rows, err := db.Raw(`SELECT id, weight, phrase, door, locked, open_cmd, open_delay_ms, no_route
 		FROM map_edges
-		WHERE map_set_id = ? AND (weight <> 1 OR door = 1 OR locked = 1 OR no_route = 1 OR phrase <> '' OR open_cmd <> '')`,
+		WHERE map_set_id = ? AND (weight <> 1 OR door = 1 OR locked = 1 OR no_route = 1 OR phrase <> '' OR open_cmd <> '' OR open_delay_ms <> 0)`,
 		mapSetID).Rows()
 	if err != nil {
 		return err
@@ -617,7 +623,7 @@ func attachEdgeAttrs(db *gorm.DB, mapSetID int64, edges []MapEdge) error {
 	for rows.Next() {
 		var id int64
 		var at EdgeAttrs
-		if err := rows.Scan(&id, &at.Weight, &at.Phrase, &at.Door, &at.Locked, &at.OpenCmd, &at.NoRoute); err != nil {
+		if err := rows.Scan(&id, &at.Weight, &at.Phrase, &at.Door, &at.Locked, &at.OpenCmd, &at.OpenDelayMS, &at.NoRoute); err != nil {
 			return err
 		}
 		if e := find(id); e != nil {

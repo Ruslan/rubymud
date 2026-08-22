@@ -143,4 +143,18 @@ describe("map pane status", () => {
     await vi.advanceTimersByTimeAsync(20_000);
     expect(status(pane).style.display).not.toBe("none");
   });
+
+  it("does not flatten delayed opening steps into an unsafe chat script", async () => {
+    fetchMock.mockResolvedValue(jsonRes({
+      reachable: true,
+      directions: ["w", "повернуть рычаг", "d"],
+      delayed_openings: 1,
+      open_delay_ms: 2000,
+    }));
+    await internals.routeToCell(room, room, "insert");
+    expect(internals.config.setInputText).not.toHaveBeenCalled();
+    expect(status(pane).textContent).toContain("2000 ms of opening waits");
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(status(pane).style.display).not.toBe("none");
+  });
 });

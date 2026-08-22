@@ -518,6 +518,20 @@ describe("map pane seam chooser", () => {
       seam: { target_zone: "Восточная дорога", target_tag: 41, command: "на восток", order: 0 },
       open_cmd: "open east gate",
     });
+
+    const delay = [...pane.root.querySelectorAll<HTMLInputElement>('input[type="number"]')]
+      .find((input) => input.parentElement?.textContent?.includes("wait before movement"))!;
+    delay.value = "2000";
+    delay.dispatchEvent(new FocusEvent("blur"));
+    await vi.waitFor(() => expect(fetchMock.mock.calls.filter(([url]) =>
+      url.includes("map-edge-attrs"),
+    )).toHaveLength(3));
+    const delayedWrite = fetchMock.mock.calls.filter(([url]) => url.includes("map-edge-attrs"))[2]!;
+    expect(JSON.parse(String(delayedWrite[1]!.body))).toEqual({
+      zone: "Город", x: 0, y: 0, l: 0,
+      seam: { target_zone: "Восточная дорога", target_tag: 41, command: "на восток", order: 0 },
+      open_delay_ms: 2000,
+    });
   });
 
   it("keeps keyboard focus and reclamps the popup when optimistic door fields expand", async () => {

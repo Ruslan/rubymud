@@ -72,6 +72,7 @@ const (
 	MapperInvalidBody                  Key = "mapper.invalid_body"
 	MapperTopologyWriteFailed          Key = "mapper.topology_write_failed"
 	MapperEdgeWeightPositive           Key = "mapper.edge.weight_positive"
+	MapperEdgeOpeningDelay             Key = "mapper.edge.opening_delay"
 	MapperEdgeMovementCommand          Key = "mapper.edge.movement_command"
 	MapperWalkSessionNotConnected      Key = "mapper.walk.session_not_connected"
 	MapperWalkNoGameTransport          Key = "mapper.walk.no_game_transport"
@@ -205,6 +206,7 @@ var catalogs = map[Locale]map[Key]string{
 		MapperInvalidBody:                  "invalid body: {detail}",
 		MapperTopologyWriteFailed:          "{detail}",
 		MapperEdgeWeightPositive:           "edge weight must be finite and greater than zero",
+		MapperEdgeOpeningDelay:             "opening delay must be 0–30000 ms and requires a door with an explicit opening command",
 		MapperEdgeMovementCommand:          "{field} {value} is a movement command (direction {direction}): the route would send it, the tracker would count it as a step, and your position would drift. Use a command that is not a bare direction.",
 		MapperWalkSessionNotConnected:      "session not connected",
 		MapperWalkNoGameTransport:          "session not connected — no game transport",
@@ -336,6 +338,7 @@ var catalogs = map[Locale]map[Key]string{
 		MapperInvalidBody:                  "неверное тело запроса: {detail}",
 		MapperTopologyWriteFailed:          "не удалось изменить топологию: {detail}",
 		MapperEdgeWeightPositive:           "вес перехода должен быть конечным положительным числом",
+		MapperEdgeOpeningDelay:             "пауза открытия должна быть от 0 до 30000 мс и требует дверь с явно заданной командой открытия",
 		MapperEdgeMovementCommand:          "{field} {value} является командой движения (направление {direction}): маршрут отправил бы её, трекер посчитал бы её шагом, и позиция сместилась бы. Укажите команду, которая не является отдельным направлением.",
 		MapperWalkSessionNotConnected:      "сессия не подключена",
 		MapperWalkNoGameTransport:          "сессия не подключена — нет игрового транспорта",

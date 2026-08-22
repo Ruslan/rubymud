@@ -84,6 +84,7 @@ type AttrPatch = {
   door?: boolean;
   locked?: boolean;
   open_cmd?: string;
+  open_delay_ms?: number;
   no_route?: boolean;
 };
 
@@ -104,6 +105,7 @@ function applyAttrPatch(attrs: EdgeAttrs, patch: AttrPatch): EdgeAttrs {
     ...(patch.door !== undefined ? { door: patch.door } : {}),
     ...(patch.locked !== undefined ? { locked: patch.locked } : {}),
     ...(patch.open_cmd !== undefined ? { openCmd: patch.open_cmd } : {}),
+    ...(patch.open_delay_ms !== undefined ? { openDelayMS: patch.open_delay_ms } : {}),
     ...(patch.no_route !== undefined ? { noRoute: patch.no_route } : {}),
   };
 }
@@ -146,6 +148,11 @@ function describeAttrPatch(
       ? i18n.t('openReset', { command: renderDefaultOpen(doorOpen, dir) })
       : i18n.t('openResetEmpty');
   }
+  if (patch.open_delay_ms !== undefined) {
+    return patch.open_delay_ms > 0
+      ? i18n.t('openDelaySet', { milliseconds: patch.open_delay_ms })
+      : i18n.t('openDelayRemoved');
+  }
   if (patch.no_route !== undefined) {
     return patch.no_route
       ? i18n.t('noRouteSet')
@@ -178,6 +185,8 @@ interface MapPathResponse {
   // still plans through them (the player may hold the key), so this is a warning.
   locked?: number;
   phrases?: number;
+  delayed_openings?: number;
+  open_delay_ms?: number;
   // The target is unreachable ONLY because of hand-drawn "не водить сюда" marks.
   vetoed_only?: boolean;
   here?: boolean;
@@ -1604,6 +1613,8 @@ export class MapPaneController {
     if (next.state === "paused") {
       const reason = useSnapshotReason ? next.reason ?? this.i18n.t('paused') : this.i18n.t('paused');
       label = this.i18n.t('walkFailed', { current: next.current, total: next.total, reason });
+    } else if (next.state === "waiting_open") {
+      label = this.i18n.t('walkWaitingOpen', { current: hop, total: next.total });
     } else {
       label = next.state === "stopping"
         ? this.i18n.t('walkStopping', { current: next.current, total: next.total })
@@ -2223,7 +2234,7 @@ export class MapPaneController {
     title.className = "map-cell-menu__section";
     title.textContent = this.i18n.t('portalFrom', { room: room.h || this.i18n.t('cell'), coord: `${room.z} ${room.x},${room.y},${room.l}` });
     box.appendChild(title);
-    const attrs = this.appendDirectedAttrControls(box, seam ? seamAttrs(room, seam) : { weight: 1, phrase: "", door: false, locked: false, openCmd: "", noRoute: false }, seamDirection(seam?.command ?? ""), (patch) =>
+    const attrs = this.appendDirectedAttrControls(box, seam ? seamAttrs(room, seam) : { weight: 1, phrase: "", door: false, locked: false, openCmd: "", openDelayMS: 0, noRoute: false }, seamDirection(seam?.command ?? ""), (patch) =>
       seam
         ? (seam.tag == null ? this.writePortalAttrs(room, seam, patch) : this.writeSeamAttrs(room, seam, patch))
         : Promise.resolve(false),
@@ -2611,7 +2622,7 @@ export class MapPaneController {
       controls.appendChild(this.attrText(
         i18n.t('traversalPhrase'), attrs.phrase, i18n.t('phraseExample'), (v) => submit({ phrase: v }), "phrase",
       ));
-      controls.appendChild(this.attrCheck(i18n.t('door'), attrs.door, (v) => submit({ door: v }), "door"));
+      controls.appendChild(this.attrCheck(i18n.t('door'), attrs.door, (v) => submit(v ? { door: true } : { door: false, open_delay_ms: 0 }), "door"));
       // The lock and opening command are meaningful only with a door, so an
       // optimistic door toggle reveals them in the same popup before its write settles.
       if (attrs.door) {
@@ -2619,7 +2630,10 @@ export class MapPaneController {
           i18n.t('lockedDefault'), attrs.locked, (v) => submit({ locked: v }), "locked",
         ));
         controls.appendChild(this.attrText(
-          i18n.t('openingCommand'), attrs.openCmd, this.openCmdPlaceholder(dir), (v) => submit({ open_cmd: v }), "open_cmd",
+          i18n.t('openingCommand'), attrs.openCmd, this.openCmdPlaceholder(dir), (v) => submit(v ? { open_cmd: v } : { open_cmd: "", open_delay_ms: 0 }), "open_cmd",
+        ));
+        controls.appendChild(this.attrDelayNumber(
+          i18n.t('openingDelay'), attrs.openDelayMS, (v) => submit({ open_delay_ms: v }), "open_delay_ms",
         ));
       }
       controls.appendChild(this.attrCheck(
@@ -2739,6 +2753,45 @@ export class MapPaneController {
       const next = Number(input.value);
       if (!Number.isFinite(next) || next <= 0) {
         input.setCustomValidity(i18n.t('weightPositive'));
+        input.reportValidity();
+        return;
+      }
+      input.setCustomValidity("");
+      if (next !== committedValue) {
+        committedValue = next;
+        commit(next);
+      }
+    };
+    input.addEventListener("blur", fire);
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        fire();
+      }
+    });
+    wrap.appendChild(input);
+    return wrap;
+  }
+
+  private attrDelayNumber(label: string, value: number, commit: (v: number) => void, field?: string): HTMLElement {
+    const i18n = this.i18n ?? createMapperI18n('en');
+    const wrap = document.createElement("label");
+    wrap.className = "map-edge-menu__attr";
+    const cap = document.createElement("span");
+    cap.textContent = label;
+    wrap.appendChild(cap);
+    const input = document.createElement("input");
+    input.type = "number";
+    input.min = "0";
+    input.max = "30000";
+    input.step = "100";
+    input.value = String(value);
+    if (field) input.dataset.mapEdgeAttr = field;
+    let committedValue = value;
+    const fire = (): void => {
+      const next = Number(input.value);
+      if (!Number.isInteger(next) || next < 0 || next > 30000) {
+        input.setCustomValidity(i18n.t('openingDelayRange'));
         input.reportValidity();
         return;
       }
@@ -3186,6 +3239,10 @@ export class MapPaneController {
         return;
       }
       if (action === "insert") {
+        if ((data.delayed_openings ?? 0) > 0) {
+          this.setStatus(this.i18n.t('routeDelayNeedsWalker', { milliseconds: data.open_delay_ms ?? 0 }), { sticky: true });
+          return;
+        }
         const walk = dirs.join(";");
         if (this.config.setInputText) {
           this.config.setInputText(walk);

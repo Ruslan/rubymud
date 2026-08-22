@@ -289,11 +289,11 @@ test("shows the Hillo one-way passage and lets the player block only its reverse
     `SELECT source,passable,to_x,to_y FROM map_edges WHERE map_set_id=${stack.seed.map_set_id} AND from_zone='Хилло' AND from_x=0 AND from_y=-1 AND dir='E'`,
   )).toEqual([{ source: "parsed", passable: 1, to_x: 0, to_y: 0 }]);
 
-  // Room text owns the ordinary stubs, so the physical mismatch must look torn:
-  // the known W half is painted and the absent E half stays transparent.
+  // The source-advertised half is solid. The graph's presumed reverse remains
+  // visible as a dashed hidden fact until the player explicitly denies it.
   await expect.poll(async () => {
     const pixels = await westOneWayPixels(page);
-    return pixels.source > 10 && pixels.missing === 0;
+    return pixels.source > 10 && pixels.missing > 0;
   }).toBe(true);
   await page.locator(".map-pane").screenshot({ path: join(stack.artifactsDir, "hillo-one-way-before-mark.png") });
 
@@ -353,6 +353,66 @@ test("shows the Hillo one-way passage and lets the player block only its reverse
   await expect(page.locator(".map-pane__confidence")).toHaveAttribute("title", /Confidence: green/);
   await expect(page.getByRole("dialog", { name: "Resolve mapper conflict" })).toHaveCount(0);
   await page.locator(".map-pane").screenshot({ path: join(stack.artifactsDir, "hillo-one-way-blocked.png") });
+});
+
+test("routes through concealed W/E and waits two seconds for lever and button hatches", async ({ page }) => {
+  stack = await startStack({ hiddenHatch: true });
+  await installMapLayout(page);
+  await page.goto(`${stack.baseURL}/?session_id=${stack.seed.session_id}`);
+  await connectAnchorAndArm(page, "Поворот");
+
+  await expect.poll(async () => {
+    const pixels = await westPassageDashPixels(page);
+    return pixels.opaque >= 4 && pixels.transparent >= 2;
+  }).toBe(true);
+  await page.locator(".map-pane").screenshot({ path: join(stack.artifactsDir, "hidden-hatch-dashed.png") });
+
+  const token = await page.evaluate(() => (window as Window & { API_TOKEN?: string }).API_TOKEN ?? "");
+  const headers = { "X-Session-Token": token };
+  const pathDown = await page.request.post(
+    `${stack.baseURL}/api/sessions/${stack.seed.session_id}/map-path`,
+    { headers, data: { to: stack.seed.rooms["3"] } },
+  );
+  expect(pathDown.ok()).toBeTruthy();
+  expect(await pathDown.json()).toEqual(expect.objectContaining({
+    reachable: true,
+    directions: ["w", "повернуть рычаг", "d"],
+    delayed_openings: 1,
+    open_delay_ms: 2000,
+  }));
+
+  const walkDown = await page.request.post(
+    `${stack.baseURL}/api/sessions/${stack.seed.session_id}/map-walk`,
+    { headers, data: { to: stack.seed.rooms["3"] } },
+  );
+  expect(walkDown.ok()).toBeTruthy();
+  expect(await walkDown.json()).toEqual(expect.objectContaining({ active: true }));
+  await expect(page.locator(".map-pane__walk-progress")).toContainText("Opening passage before step 2/2");
+  await expect.poll(() => traceHasMove("d", 2, 3, true), { timeout: 6_000 }).toBe(true);
+  expectTraceDelay("повернуть рычаг", "d", 1_900, 4_500);
+  await expect(page.locator(".map-pane__confidence")).toHaveAttribute("title", /Confidence: green/);
+
+  const pathUp = await page.request.post(
+    `${stack.baseURL}/api/sessions/${stack.seed.session_id}/map-path`,
+    { headers, data: { to: stack.seed.rooms["1"] } },
+  );
+  expect(pathUp.ok()).toBeTruthy();
+  expect(await pathUp.json()).toEqual(expect.objectContaining({
+    reachable: true,
+    directions: ["нажать кнопку", "u", "e"],
+    delayed_openings: 1,
+    open_delay_ms: 2000,
+  }));
+  const walkUp = await page.request.post(
+    `${stack.baseURL}/api/sessions/${stack.seed.session_id}/map-walk`,
+    { headers, data: { to: stack.seed.rooms["1"] } },
+  );
+  expect(walkUp.ok()).toBeTruthy();
+  await expect(page.locator(".map-pane__walk-progress")).toContainText("Opening passage before step 1/2");
+  await expect.poll(() => traceHasMove("u", 3, 2, true), { timeout: 6_000 }).toBe(true);
+  expectTraceDelay("нажать кнопку", "u", 1_900, 4_500);
+  await expect.poll(() => traceHasMove("e", 2, 1, true)).toBe(true);
+  await page.locator(".map-pane").screenshot({ path: join(stack.artifactsDir, "hidden-hatch-route-complete.png") });
 });
 
 async function startStack(options: LiveStackOptions = {}): Promise<LiveStack> {
@@ -443,6 +503,43 @@ function traceHasMove(command: string, from: number, to: number, moved: boolean)
     .filter(Boolean)
     .map((line) => JSON.parse(line) as { command: string; from: number; to: number; moved: boolean });
   return rows.some((row) => row.command === command && row.from === from && row.to === to && row.moved === moved);
+}
+
+function expectTraceDelay(opener: string, movement: string, minimumMS: number, maximumMS: number): void {
+  const rows = readFileSync(stack.tracePath, "utf8").trim().split("\n")
+    .filter(Boolean)
+    .map((line) => JSON.parse(line) as { command: string; at_unix_milli: number });
+  const open = rows.findLast((row) => row.command === opener);
+  const move = rows.findLast((row) => row.command === movement);
+  expect(open, `missing opener ${opener}`).toBeDefined();
+  expect(move, `missing movement ${movement}`).toBeDefined();
+  const elapsed = move!.at_unix_milli - open!.at_unix_milli;
+  expect(elapsed).toBeGreaterThanOrEqual(minimumMS);
+  expect(elapsed).toBeLessThanOrEqual(maximumMS);
+}
+
+async function westPassageDashPixels(page: Page): Promise<{ opaque: number; transparent: number }> {
+  return page.locator(".map-pane__canvas").evaluate((canvas: HTMLCanvasElement) => {
+    const ctx = canvas.getContext("2d");
+    if (!ctx || canvas.clientWidth === 0 || canvas.clientHeight === 0) return { opaque: 0, transparent: 0 };
+    const sx = canvas.width / canvas.clientWidth;
+    const sy = canvas.height / canvas.clientHeight;
+    const left = Math.floor((canvas.clientWidth / 2 - 30) * sx);
+    const top = Math.floor((canvas.clientHeight / 2 - 2) * sy);
+    const width = Math.max(1, Math.floor(20 * sx));
+    const height = Math.max(1, Math.floor(4 * sy));
+    const data = ctx.getImageData(left, top, width, height).data;
+    let opaque = 0;
+    let transparent = 0;
+    for (let x = 0; x < width; x++) {
+      let painted = false;
+      for (let y = 0; y < height; y++) {
+        if (data[(y * width + x) * 4 + 3] > 0) painted = true;
+      }
+      if (painted) opaque++; else transparent++;
+    }
+    return { opaque, transparent };
+  });
 }
 
 function mapLayoutInit(): void {

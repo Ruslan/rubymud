@@ -791,7 +791,7 @@ func sameDerivedGridSemantics(actual, derived MapEdge) bool {
 		actual.From() != derived.From() ||
 		actual.EffectiveWeight() != derived.EffectiveWeight() ||
 		actual.Phrase != derived.Phrase || actual.Door != derived.Door ||
-		actual.Locked != derived.Locked || actual.OpenCmd != derived.OpenCmd || actual.NoRoute != derived.NoRoute {
+		actual.Locked != derived.Locked || actual.OpenCmd != derived.OpenCmd || actual.OpenDelayMS != derived.OpenDelayMS || actual.NoRoute != derived.NoRoute {
 		return false
 	}
 	actualTo, actualHasTo := actual.To()

@@ -142,6 +142,7 @@ export interface EdgeAttrs {
   door: boolean;
   locked: boolean;
   openCmd: string;
+  openDelayMS: number;
   noRoute: boolean;
 }
 
@@ -151,6 +152,7 @@ export const emptyEdgeAttrs: EdgeAttrs = {
   door: false,
   locked: false,
   openCmd: "",
+  openDelayMS: 0,
   noRoute: false,
 };
 
@@ -164,6 +166,7 @@ export function faceAttrs(room: SlimRoom | null, dir: string): EdgeAttrs {
     door: hit.door === true,
     locked: hit.locked === true,
     openCmd: hit.open_cmd ?? "",
+    openDelayMS: hit.open_delay_ms ?? 0,
     noRoute: hit.no_route === true,
   };
 }
@@ -179,6 +182,7 @@ export function seamAttrs(room: SlimRoom, seam: SeamTarget): EdgeAttrs {
     door: hit.door === true,
     locked: hit.locked === true,
     openCmd: hit.open_cmd ?? "",
+    openDelayMS: hit.open_delay_ms ?? 0,
     noRoute: hit.no_route === true,
   };
 }
@@ -208,6 +212,9 @@ export function attrsSummary(
       parts.push(i18n.t('attrOpen', { command: cmd }));
     } else {
       parts.push(i18n.t('attrNoOpen'));
+    }
+    if (attrs.openDelayMS > 0) {
+      parts.push(i18n.t('attrOpenDelay', { milliseconds: attrs.openDelayMS }));
     }
   } else if (attrs.openCmd) {
     // An opening command with no door is inert — say so rather than let it look armed.

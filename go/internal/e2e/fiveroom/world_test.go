@@ -1,6 +1,9 @@
 package fiveroom
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestWorldWalksFiveRoomLoopAndRefusesInvalidMoves(t *testing.T) {
 	w := NewWorld()
@@ -76,5 +79,35 @@ func TestWorldRevealsCrateDownExitOnlyAfterRussianAction(t *testing.T) {
 	}
 	if room, moved := w.Apply("D"); !moved || room.ID != 3 {
 		t.Fatalf("D room=%+v moved=%v", room, moved)
+	}
+}
+
+func TestWorldHiddenHatchNeedsItsDirectedActionAndDelay(t *testing.T) {
+	w := NewWorldWithOptions(WorldOptions{HiddenHatch: true, HatchDelay: 20 * time.Millisecond})
+	if got := w.Current().Hint; got != HatchTurnHint {
+		t.Fatalf("start=%q", got)
+	}
+	if room, moved := w.Apply("W"); !moved || room.Hint != HatchGazeboHint {
+		t.Fatalf("hidden W room=%+v moved=%v", room, moved)
+	}
+	if _, moved := w.Apply("D"); moved {
+		t.Fatal("hatch moved before lever")
+	}
+	if !w.ApplyAction("повернуть рычаг") {
+		t.Fatal("lever not accepted")
+	}
+	if _, moved := w.Apply("D"); moved {
+		t.Fatal("hatch moved before delay elapsed")
+	}
+	time.Sleep(25 * time.Millisecond)
+	if room, moved := w.Apply("D"); !moved || room.Hint != HatchDeadEndHint {
+		t.Fatalf("delayed D room=%+v moved=%v", room, moved)
+	}
+	if !w.ApplyAction("нажать кнопку") {
+		t.Fatal("button not accepted")
+	}
+	time.Sleep(25 * time.Millisecond)
+	if room, moved := w.Apply("U"); !moved || room.Hint != HatchGazeboHint {
+		t.Fatalf("delayed U room=%+v moved=%v", room, moved)
 	}
 }

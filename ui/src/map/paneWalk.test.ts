@@ -110,6 +110,13 @@ describe("map pane server walk", () => {
     });
   });
 
+  it("distinguishes a delayed opener from ordinary movement progress", () => {
+    pane.onMapWalk({ active: true, job_id: 4, current: 1, total: 3, state: "waiting_open" });
+    expect(pane.root.querySelector(".map-pane__walk-progress")?.textContent)
+      .toBe("Opening passage before step 2/3…");
+    expect(pane.root.querySelector<HTMLButtonElement>(".map-pane__walk-stop")?.disabled).toBe(false);
+  });
+
   it("renders a paused walk and resumes only when the server permits it", async () => {
     pane.onMapWalk({ active: true, job_id: 4, current: 1, total: 3, state: "paused", reason: "movement refused", can_resume: false });
     const resume = pane.root.querySelector<HTMLButtonElement>(".map-pane__walk-resume");

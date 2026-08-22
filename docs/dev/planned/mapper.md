@@ -46,7 +46,7 @@ Mapper пригоден для обычной работы и не имеет и
 - `map_edges`: **единственный источник истины топологии**. Одна строка означает
   один направленный переход. В одной модели живут сеточные рёбра, межзонные швы
   и exact portals; там же хранятся `passable`, `weight`, `phrase`, `door`,
-  `locked`, `open_cmd` и `no_route`.
+  `locked`, `open_cmd`, `open_delay_ms` и `no_route`.
 - `room_annotations`: независимый overlay заметок, hazard и DT. Он не меняет
   топологию, поэтому не форкает набор и не входит в topology undo.
 - `map_inhabitants`: нормализованный каталог известных NPC, монстров и прочих
