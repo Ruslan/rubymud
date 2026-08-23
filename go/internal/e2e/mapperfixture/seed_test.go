@@ -140,6 +140,10 @@ func TestSeedHiddenHatchCarriesConcealedFacesAndDirectedDelays(t *testing.T) {
 	if strings.Contains(turn.EDirs, `"W"`) || turn.Ch&(1<<3) == 0 {
 		t.Fatalf("turn must omit printed W but retain physical W connectivity: %+v", turn)
 	}
+	pipe := roomByHint(t, rooms, "Узкий тоннель")
+	if !pipe.Pipe || pipe.EDirs != "[]" || pipe.Ch != (1<<0)|(1<<1) {
+		t.Fatalf("legacy pipe shape must carry N/S in ch with empty edirs: %+v", pipe)
+	}
 }
 
 func roomByHint(t *testing.T, rooms []storage.Room, hint string) storage.Room {

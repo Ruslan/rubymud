@@ -156,6 +156,8 @@ func Seed(opts Options) (Result, error) {
 			1: {Zone: fiveroom.HatchZone, X: 0, Y: 0, L: 0},
 			2: {Zone: fiveroom.HatchZone, X: 0, Y: -1, L: 0},
 			3: {Zone: fiveroom.HatchZone, X: 0, Y: -1, L: -1},
+			4: {Zone: fiveroom.HatchZone, X: -1, Y: 0, L: 0},
+			5: {Zone: fiveroom.HatchZone, X: -2, Y: 0, L: 0},
 		}
 	}
 
@@ -195,7 +197,15 @@ func hatchRooms() []storage.Room {
 		roomAt(fiveroom.HatchZone, 1, 0, 0, 0, fiveroom.HatchTurnHint, "Тропа огибает склон; скрытая дорожка уходит к беседке.", "N E S", []string{"N", "E", "S"}, (1<<0)|(1<<1)|(1<<2)|(1<<3)),
 		roomAt(fiveroom.HatchZone, 2, 0, -1, 0, fiveroom.HatchGazeboHint, "Старая беседка скрывает люк с рычагом.", "", nil, (1<<2)|(1<<5)),
 		roomAt(fiveroom.HatchZone, 3, 0, -1, -1, fiveroom.HatchDeadEndHint, "Подземный тупик; рядом с люком спрятана кнопка.", "", nil, 1<<4),
+		pipeRoomAt(fiveroom.HatchZone, 4, -1, 0, 0, "Узкий тоннель", "Прямой тесный тоннель тянется с севера на юг.", "N S", (1<<0)|(1<<1)),
+		roomAt(fiveroom.HatchZone, 5, -2, 0, 0, "Конец тоннеля", "Тоннель заканчивается небольшой площадкой.", "S", []string{"S"}, 1<<1),
 	}
+}
+
+func pipeRoomAt(zone string, tag, x, y, l int, hint, desc, exits string, ch int) storage.Room {
+	room := roomAt(zone, tag, x, y, l, hint, desc, exits, nil, ch)
+	room.Pipe = true
+	return room
 }
 
 func room(tag, x, y int, hint, desc, exits string, edirs []string, ch int) storage.Room {

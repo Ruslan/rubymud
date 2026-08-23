@@ -365,6 +365,7 @@ test("routes through concealed W/E and waits two seconds for lever and button ha
     const pixels = await westPassageDashPixels(page);
     return pixels.opaque >= 4 && pixels.transparent >= 2;
   }).toBe(true);
+  await expect.poll(() => northPipeAlphaVariation(page)).toBeLessThanOrEqual(1);
   await page.locator(".map-pane").screenshot({ path: join(stack.artifactsDir, "hidden-hatch-dashed.png") });
 
   const token = await page.evaluate(() => (window as Window & { API_TOKEN?: string }).API_TOKEN ?? "");
@@ -539,6 +540,42 @@ async function westPassageDashPixels(page: Page): Promise<{ opaque: number; tran
       if (painted) opaque++; else transparent++;
     }
     return { opaque, transparent };
+  });
+}
+
+async function northPipeAlphaVariation(page: Page): Promise<number> {
+  return page.locator(".map-pane__canvas").evaluate((canvas: HTMLCanvasElement) => {
+    const ctx = canvas.getContext("2d");
+    if (!ctx || canvas.clientWidth === 0 || canvas.clientHeight === 0) return 255;
+    const sx = canvas.width / canvas.clientWidth;
+    const sy = canvas.height / canvas.clientHeight;
+    const x = Math.floor((canvas.clientWidth / 2) * sx);
+    const center = Math.floor((canvas.clientHeight / 2) * sy);
+    // Auto-fit chooses the scale from the viewport, so locate the northern
+    // endpoint rather than assuming CELL=30 CSS px. Its painted center-column
+    // run is continuous through the CH-backed pipe to the centered anchor.
+    let firstPainted = -1;
+    for (let y = 0; y < center; y++) {
+      if (ctx.getImageData(x, y, 1, 1).data[3]! > 20) {
+        firstPainted = y;
+        break;
+      }
+    }
+    if (firstPainted < 0) return 255;
+    const span = center - firstPainted;
+    // The middle pipe cell occupies roughly the middle third of that run. Keep
+    // clear of the endpoint square and the current-room marker/exit stub.
+    const top = Math.floor(firstPainted + span * 0.42);
+    const bottom = Math.floor(firstPainted + span * 0.70);
+    let min = 255;
+    let max = 0;
+    for (let y = top; y <= bottom; y++) {
+      const alpha = ctx.getImageData(x, y, 1, 1).data[3]!;
+      if (alpha === 0) continue;
+      min = Math.min(min, alpha);
+      max = Math.max(max, alpha);
+    }
+    return max === 0 ? 255 : max - min;
   });
 }
 

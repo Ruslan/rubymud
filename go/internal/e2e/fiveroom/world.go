@@ -208,10 +208,14 @@ var hatchRooms = map[int]Room{
 	1: {ID: 1, Hint: HatchTurnHint, Desc: "Тропа огибает склон; скрытая дорожка уходит к беседке.", Exits: "N E S"},
 	2: {ID: 2, Hint: HatchGazeboHint, Desc: "Старая беседка скрывает люк с рычагом.", Exits: ""},
 	3: {ID: 3, Hint: HatchDeadEndHint, Desc: "Подземный тупик; рядом с люком спрятана кнопка.", Exits: ""},
+	4: {ID: 4, Hint: "Узкий тоннель", Desc: "Прямой тесный тоннель тянется с севера на юг.", Exits: "N S"},
+	5: {ID: 5, Hint: "Конец тоннеля", Desc: "Тоннель заканчивается небольшой площадкой.", Exits: "S"},
 }
 
 var hatchTransitions = map[int]map[string]int{
-	1: {"W": 2},
+	1: {"W": 2, "N": 4},
 	2: {"E": 1, "D": 3},
 	3: {"U": 2},
+	4: {"S": 1, "N": 5},
+	5: {"S": 4},
 }

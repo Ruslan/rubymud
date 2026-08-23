@@ -22,6 +22,20 @@ const MAX_SELECTION = 8000;
 
 type PipeAxis = "h" | "v" | null;
 
+const CH_DIR_BIT: Readonly<Record<string, number>> = {
+  N: 1 << 0,
+  S: 1 << 1,
+  E: 1 << 2,
+  W: 1 << 3,
+  U: 1 << 4,
+  D: 1 << 5,
+};
+
+function pipeCarriesDirection(ch: number, dir: string): boolean {
+  const bit = CH_DIR_BIT[dir];
+  return bit !== undefined && (ch & bit) !== 0;
+}
+
 interface PipeNeighbours {
   hL: boolean;
   hR: boolean;
@@ -494,6 +508,8 @@ export class MapRenderer {
 
     // The materialized graph can know about a real passage that the MUD omits
     // from its printed exits (hidden buttons, concealed paths, legacy map facts).
+    // Imported pipe cells are the exception: their ordinary directions live in
+    // CH while EDirs is intentionally empty, so CH-backed faces stay solid.
     // Keep provenance distinct from a manual amber mark: green still means the
     // parsed map graph, while the dash says "not announced by this room".
     ctx.save();
@@ -505,6 +521,7 @@ export class MapRenderer {
       const cy = this.sy(r);
       for (const d of r.g) {
         if (r.e.includes(d) || r.mb.includes(d)) continue;
+        if (r.p && pipeCarriesDirection(r.ch, d)) continue;
         const v = DIR_SCREEN_VEC[d];
         if (!v) continue;
         const delta = stepDelta(d);

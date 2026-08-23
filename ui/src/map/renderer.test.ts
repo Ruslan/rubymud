@@ -139,6 +139,41 @@ describe("pipe orientation", () => {
     expect(dashedStrokes).toBe(2);
     expect(setLineDash.mock.calls.some(([dash]) => dash.length > 0)).toBe(true);
   });
+
+  it("does not mistake legacy pipe connectivity for concealed exits", () => {
+    const cv = makeCanvas();
+    const ctx = cv.getContext("2d")!;
+    let dashed = false;
+    let dashedStrokes = 0;
+    vi.spyOn(ctx, "setLineDash").mockImplementation((dash) => { dashed = dash.length > 0; });
+    vi.spyOn(ctx, "stroke").mockImplementation(() => { if (dashed) dashedStrokes++; });
+    // Imported narrow tunnels intentionally keep EDirs empty. Their ordinary
+    // N/S or E/W connectivity lives in CH and the materialized graph.
+    const pipe = slim({ h: "тоннель", p: true, ch: 12, e: [], g: ["E", "W"] });
+    const r = new MapRenderer(cv);
+    r.setZone("Z", [pipe]);
+
+    (r as unknown as { paint(): void }).paint();
+
+    expect(dashedStrokes).toBe(0);
+  });
+
+  it("still marks a pipe face missing from both CH and EDirs as concealed", () => {
+    const cv = makeCanvas();
+    const ctx = cv.getContext("2d")!;
+    let dashed = false;
+    let dashedStrokes = 0;
+    vi.spyOn(ctx, "setLineDash").mockImplementation((dash) => { dashed = dash.length > 0; });
+    vi.spyOn(ctx, "stroke").mockImplementation(() => { if (dashed) dashedStrokes++; });
+    const pipe = slim({ p: true, ch: 12, e: [], g: ["E", "W", "N"] });
+    const r = new MapRenderer(cv);
+    r.setZone("Z", [pipe]);
+
+    (r as unknown as { paint(): void }).paint();
+
+    expect(dashedStrokes).toBe(1);
+  });
+
   it("uses N/S connectivity before four-neighbour geometry", () => {
     expect(pipeAxis(3, { hL: true, hR: true, vU: true, vD: true })).toBe("v");
   });

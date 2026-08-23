@@ -52,6 +52,8 @@ a late response cannot replace a newer zone selection.
 Materialized grid faces in `g` that are absent from the room's printed `e` exits
 are concealed-but-known passages. The canvas draws their adjacent half-stubs in
 dashed green; manual `m` passages remain dashed amber, preserving provenance.
+Legacy narrow-tunnel (`pipe`) cells are not concealed merely because `e` is
+empty: their ordinary directions live in the `ch` bitmask and remain solid.
 Directed door attributes may include `open_delay_ms=0..30000` beside an explicit
 `open_cmd`. Map-walk sends the opener, waits on a generation-fenced Go timer
 without blocking the game loop, then sends movement. Cancellation/replacement
