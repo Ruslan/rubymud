@@ -409,7 +409,10 @@ route was prevented only by vetoes. A traversal `phrase` replaces the direction
 command. Door edges can add a preceding opening action; `locked` is reported,
 not an automatic refusal. An edge-specific `open_cmd` wins; otherwise the
 session's room-format profile may supply a template, or no opening command is
-known.
+known. A positive directed `open_delay_ms` means the server must pause after the
+opening action and before traversal. In that case the printed command list is
+diagnostic only and explicitly directs the caller to `mud_map_walk`: flattening
+it into one `mud_send_command` script would discard the timing contract.
 
 ### `mud_map_walk`
 
@@ -510,8 +513,9 @@ direction, missing room, or no active set.
 ### `mud_room_mark_edge`
 
 Arguments: required `zone`, `x`, `y`, `l`, `dir`; optional `session_id`,
-`mark`, `one_way`, `weight`, `phrase`, `door`, `locked`, `open_cmd`, and
-`no_route`. `mark` is `open`, `blocked`, or `auto` and is optional when setting
+`mark`, `one_way`, `weight`, `phrase`, `door`, `locked`, `open_cmd`,
+`open_delay_ms`, and `no_route`. `mark` is `open`, `blocked`, or `auto` and is
+optional when setting
 attributes only. `open` adds a hand-drawn hidden passage; `blocked` negates one;
 `auto` returns the face to derived room exits and drops its attrs. Marks affect
 both directed sides unless `one_way=true`; both neighboring rooms must exist.
@@ -519,8 +523,11 @@ both directed sides unless `one_way=true`; both neighboring rooms must exist.
 Attributes apply to exactly one directed face and persist across re-recording.
 `weight` must be positive and finite (default routing weight is 1); `phrase`
 replaces the route direction command; `door`, `locked`, and `open_cmd` describe
-door handling; `no_route` vetoes routing but leaves traversal valid. Empty
-`phrase` clears it and empty `open_cmd` restores profile fallback. A bare
+door handling. `open_delay_ms=0..30000` is a non-blocking pause after an explicit
+non-empty `open_cmd` and before movement; a positive delay requires `door=true`
+and cannot rely on the profile fallback. `no_route` vetoes routing but leaves
+traversal valid. Empty `phrase` clears it; clearing `open_cmd` also requires
+clearing a positive delay. A bare
 direction is rejected for `phrase` and `open_cmd` because it would corrupt
 tracker movement. The call can combine a mark and attributes, creating separate
 undo entries. It returns a soft error if there is no passage for attributes or
@@ -531,7 +538,7 @@ no neighboring room for a mark.
 Arguments: required source `zone`, `x`, `y`, `l` and complete seam selector
 `target_zone`, `target_tag`, `command`; optional exact occurrence `order`, optional
 `session_id`, and at least one of `weight`, `phrase`, `door`, `locked`, `open_cmd`,
-`no_route`. The selector
+`open_delay_ms`, `no_route`. The selector
 must identify exactly one existing automap seam. Attributes have the same
 directed routing semantics and validation as `mud_room_mark_edge`, but do not
 create or delete seams. Successful writes are manual seam ownership, survive
@@ -546,7 +553,9 @@ jump (`kind=seam`), not a grid direction and not a symbolic legacy zone/tag
 seam. `create` requires `target_zone`, `target_x`, `target_y`, `target_l`, and a
 nonblank raw `command`; the target room must exist and may be in the same zone.
 `update` and `delete` require stable source occurrence `order`; update can patch
-the exact target, command, and any routing attrs without erasing omitted fields.
+the exact target, command, and any routing attrs (including directed
+`open_delay_ms`) without erasing omitted fields. The same positive-delay
+`door + explicit open_cmd` invariant applies.
 Orders are intentionally sparse after deletion. Exact portals are manual-owned,
 survive room re-recording, fork frozen sets, and are reversible with
 `mud_map_undo`; absent endpoints/occurrences are soft errors.

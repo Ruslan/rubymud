@@ -138,6 +138,16 @@ The following row counts were observed in the current `data/mudhost.db` at inspe
   may appear or disappear without changing this exact room's identity. Empty is
   the safe default; this is room+direction metadata, not an edge and not a global
   permission to ignore exits in fingerprints.
+- `map_edges`: authoritative directed topology. `open_delay_ms` is bounded by a
+  SQLite CHECK to `0..30000` and is meaningful only with a directed
+  `door + open_cmd` at the storage boundary. Migration
+  `025b_map_edge_open_delay.sql` intentionally sorts before legacy
+  rematerialization 026.
+- Imported narrow-tunnel rooms commonly have `pipe=1`, `edirs='[]'`, and keep
+  ordinary N/S/E/W connectivity only in the `ch` bitmask (`1/2/4/8`; U/D are
+  `16/32`). An empty `edirs` therefore does **not** prove a hidden passage for a
+  pipe cell. The canvas keeps CH-backed pipe faces solid; only additional graph
+  faces absent from both `edirs` and `ch` receive concealed styling.
 - `room_inhabitants`: room-specific placements (`zone,x,y,l`, `presence_text`, `resident`). The composite FK keeps the entity in the same map set, but there is intentionally no FK to `rooms`: knowledge can survive a temporary room delete/undo. Writes are overlay-only and do not fork a frozen set or advance `topology_revision`.
   Catalogue search keeps ASCII queries in SQLite. SQLite `NOCASE` is
   ASCII-only, so non-ASCII queries stream the ordered compact projection through

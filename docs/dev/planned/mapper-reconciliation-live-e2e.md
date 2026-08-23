@@ -2,14 +2,16 @@
 
 ## Статус
 
-План подготовлен 2026-08-19. Основной live smoke A–G реализован той же датой:
+План подготовлен 2026-08-19. Актуализирован 2026-08-23. Основной live smoke A–G:
 five-room TCP emulator, безопасный storage seed, отдельные SQLite/mudhost,
 Playwright reconciliation, room-NPC create/reuse, MCP/UI synchronization,
 второй круг и restart persistence запускаются командой
-`make e2e-mapper-reconciliation`. Negative scenarios расширенного набора пока
-остаются в backlog ниже. Исходный reconciliation/NPC spec прошёл три clean runs
-подряд без retry; расширенный UI reuse/MCP spec после добавления прошёл полный
-run без retry. Полные Go и UI regression suites также зелёные.
+`make e2e-mapper-reconciliation`. Та же команда сейчас выполняет пять независимых
+browser tests: основной reconciliation/NPC/restart, darkness+provisional
+autorecord, mutable crate exit, реальный Hillo one-way и concealed/delayed hatch
+рядом с legacy pipe. Negative scenarios расширенного набора остаются в backlog
+ниже; session/web unit tests закрывают stale/double-apply. Последний полный run:
+5/5 без retry вместе с production UI и Go build.
 
 Он проверяет observation/conflict и manual reconciliation из
 [`mapper-autorecord-reconciliation.md`](mapper-autorecord-reconciliation.md)
@@ -72,11 +74,20 @@ presentation passage `4–5`. Logical coordinates не меняются; дли�
 OBS должен создать room `2` как provisional и записать двустороннюю пару
 autorecord corridor; one-way остаётся явным свойством прохода.
 
-Третий isolated stack повторяет реальный фрагмент `Хилло` из runtime SQLite:
+One-way isolated stack повторяет реальный фрагмент `Хилло` из runtime SQLite:
 `Вдоль оврага --W--> Лесистое предгорье`, причем целевая комната не печатает и
-физически не принимает обратный `E`. Playwright проверяет рваный half-passage на
-canvas, временный derived reverse route, ручное снятие только обратной грани в
+физически не принимает обратный `E`. Playwright проверяет solid объявленную
+половину и dashed presumed reverse, ручное отрицание только обратной грани в
 edge editor, недоступность обратного маршрута и штатную обработку MUD refusal.
+
+Ещё два isolated stack закрепляют полевые исключения:
+
+- команда `двигать ящик` добавляет mutable `D`; OBS принимает изменившийся exits
+  только после явной маркировки mutating direction и не теряет этаж `-1`;
+- скрытый W/E ведёт `Поворот ↔ Беседка`, а `Беседка D ↔ U Тупик` требует разных
+  opener (`повернуть рычаг`/`нажать кнопку`) и двухсекундной задержки. В той же
+  зоне лежит настоящий imported `pipe=true, edirs=[], ch=N|S`: canvas обязан
+  оставить его сплошным, одновременно сохранив скрытый W/E пунктирным.
 
 ## Компоненты
 
@@ -91,7 +102,8 @@ Test-only Go process на standard library:
 - отвечает стабильной refusal-строкой на невозможное направление;
 - не отправляет room ID, GMCP или MSDP;
 - игнорирует минимальные telnet negotiation bytes;
-- пишет bounded JSONL trace: sequence, from, exact command, to;
+- пишет bounded JSONL trace: sequence, from, exact command, to, moved и
+  `at_unix_milli` для проверки фактического интервала opener → movement;
 - ограничивает input buffer и время бездействия.
 
 Он не расширяет `ruby/test_mud_server.rb`: тот документирован как ручной QA
@@ -137,9 +149,12 @@ cache. Для запуска нужны Go toolchain, Node/npm, `sqlite3` CLI и
 зависимости Chromium; первый `playwright install chromium` может требовать сеть.
 
 Перед navigation fixture задаёт `pane-layout` с `main` и `~map`, затем открывает
-`/?session_id=<id>`. REST используется только для fixture setup/readback:
-connect, ожидание live room и начальный anchor в room `1`. OBS, movement input,
-target selection, Preview и Apply выполняются через настоящие DOM controls.
+`/?session_id=<id>`. В основном reconciliation workflow REST используется только
+для fixture setup/readback: connect, ожидание live room и начальный anchor в
+room `1`; OBS, movement input, target selection, Preview и Apply выполняются
+через настоящие DOM controls. Delayed-hatch test отдельно вызывает публичные
+`map-path` и `map-walk` endpoints, но проверяет прогресс в DOM, команды по TCP
+trace и итоговую зелёную позицию.
 
 Autorecord E2E использует тот же connect/anchor/OBS путь и только читает REST
 state для ожидания завершения записи; создание room/edge происходит через
@@ -252,6 +267,23 @@ room, `source='autorecord'` corridors `1 --E--> 2` и `2 --W--> 1`, затем �
 проходит `W, E` обратно через эту пару и проверяет green position и `recording:0`. Этот сценарий
 не вызывает REST topology write.
 
+## Extended field regressions
+
+Дополнительные browser tests используют отдельную DB каждый и не ослабляют
+основной A–G:
+
+1. Darkness/scan frontier подтверждает, что obscured block не становится новой
+   identity, а видимый повторный проход восстанавливает green.
+2. Mutable crate exit проверяет действие, изменение exits и создание этажа `-1`
+   без ложной другой комнаты.
+3. Hillo one-way проверяет parsed W, dashed presumed reverse E, реальный refusal
+   и ручную blocked-грань.
+4. Concealed hatch проверяет dashed W/E, поиск пути в обе стороны, `waiting_open`,
+   реальные интервалы около 2000 ms перед D/U и отсутствие flatten в безопасном
+   route workflow.
+5. В hatch canvas встроен legacy pipe regression: fixture хранит N/S только в
+   `ch` при пустом `edirs`; pixel assertion требует однородную сплошную линию.
+
 ## Артефакты
 
 При ошибке `${RUN_DIR}/artifacts` содержит:
@@ -281,7 +313,7 @@ credentials и не предназначена для загрузки или п
   отдельные bounded deadlines.
 - Повторный run не переиспользует DB, порты или browser context.
 
-## Repro-first порядок реализации
+## Исторический repro-first порядок реализации
 
 1. Unit-test state table emulator и путь `E E S W N`.
 2. Test seed command: пять rooms/editable active set для reconciliation и
@@ -297,13 +329,15 @@ credentials и не предназначена для загрузки или п
 Стенд готов, когда:
 
 - одна команда запускает весь сценарий из clean checkout;
-- A–G три раза подряд проходят без retry;
+- A–G и четыре extended field regressions проходят одной командой без retry;
 - autorecord smoke три раза подряд создаёт ровно одну provisional room и два
   passable направления, затем проходит по ним обратно без потери green position;
 - до Apply нет topology writes;
 - после Apply существует только exact `5 --N--> 1`, без reverse/ложного face;
 - второй круг и круг после restart заканчиваются green без conflict;
 - screenshot подтверждает relayout и длинный `4–5` passage;
+- pixel assertions одновременно подтверждают dashed concealed W/E и solid
+  CH-backed legacy pipe; это разные семантики, а не общий стиль «не в edirs»;
 - screenshots подтверждают заполнение основных NPC-полей и готовую room-scoped
   карточку; одна сущность, два placements и MCP-правка переживают restart без
   topology revision;

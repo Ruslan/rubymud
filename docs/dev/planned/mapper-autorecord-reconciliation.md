@@ -2,8 +2,9 @@
 
 ## Статус
 
-Карточка открыта; полный loop-reconciliation, solver/drag и server identity ещё
-не реализованы. **Исторический Slice A (presentation foundation, 2026-08-19)**
+Карточка открыта; ручной loop-reconciliation уже реализован в C2, но
+автоматическое замыкание по server identity, solver/drag и cross-zone target
+search ещё не реализованы. **Исторический Slice A (presentation foundation, 2026-08-19)**
 добавил sparse `room_layouts`, effective collision validation,
 fork/delete/zone-move/undo lifecycle, compact slim overrides и перевод canvas
 rendering/hit-testing/follow/marker/selection на presentation coordinates при
@@ -22,8 +23,8 @@ refusal очищает его, а второй шаг до завершения 
 режим. Неоднозначный/частичный transport write, timeout, потеря позиции (`red`), disconnect, смена map set
 и room format останавливают режим. Минимальный mapper toggle называется `OBS`,
 создаёт conflict без спорных writes. C2 ниже теперь разрешает такой conflict
-ручным relink/relayout; provisional writes, durable recovery и полный continuous
-autorecord workflow остаются будущими срезами.
+ручным relink/relayout; E1 ниже добавляет один provisional step, а durable
+recovery, multi-hop pipeline и automatic closure остаются будущими срезами.
 
 **C1 storage/runtime foundation реализован 2026-08-19**: `grid|corridor` делят
 один SQLite directional face; точный направленный
@@ -60,8 +61,9 @@ occupied mismatch остаётся conflict, а односторонность �
 правкой свойств прохода. Stop/map-switch/reconnect и второй преждевременный шаг инвалидируют
 отложенные jobs. `verification_state`, batch и origin сохраняются на комнате;
 UI OBS прямо просит дождаться зелёной клетки. Межсессионного fanout и pipeline
-записей намеренно нет. Полный loop closure,
-server-ID identity, relayout и durable recovery остаются следующими срезами.
+записей намеренно нет. Ручной loop closure/relink/relayout выполняет C2;
+автоматическая server-ID identity, multi-hop pipeline и durable recovery
+остаются следующими срезами.
 
 **E2 осторожный scan frontier реализован 2026-08-21**: только при активном OBS,
 green position и неизвестном печатном выходе mapper один раз отправляет
@@ -87,9 +89,12 @@ topology write не выполняются. Видимый обратный ша
 В reconciliation dialog отдельно доступно явное «Отбросить наблюдение и
 остановить НАБЛ»; Cancel/Escape по-прежнему только скрывают dialog.
 
-Проверка C2 на полном live stack вынесена в
+Проверка C2 и полевых исключений на полном live stack вынесена в
 [`mapper-reconciliation-live-e2e.md`](mapper-reconciliation-live-e2e.md):
-детерминированный five-room TCP MUD, отдельные mudhost/SQLite и headless Chromium.
+детерминированный TCP MUD, отдельные mudhost/SQLite и headless Chromium. Помимо
+five-room loop там есть darkness/scan, mutable crate exit, реальный one-way
+Хилло, скрытый W/E, delayed U/D hatch и legacy CH-backed pipe. Последний обязан
+оставаться сплошным при пустом `edirs`; это не concealed passage.
 
 План выделен из пунктов 2 и 3 общего mapper backlog
 **2026-08-19** после обсуждения замыкания маршрута без стабильного server room ID.
@@ -100,10 +105,11 @@ movement FIFO, `WriteTopology`, undo journal и runtime index нельзя бе�
 расширить одним UI-диалогом. Сначала нужны data/runtime foundations, затем
 session conflict state и только после них continuous recording.
 
-Безопасная ручная команда записи текущей комнаты уже существует. Первый
-testable slice непрерывного autorecord теперь есть; полного
-relayout/reconciliation workflow пока нет. Базовый sparse presentation layer
-уже существует, но ещё не имеет пользовательского preview/apply для solver/drag.
+Безопасная ручная команда записи текущей комнаты и первый testable slice
+непрерывного autorecord существуют. Ручной preview/apply для конкретного
+conflict тоже есть; отсутствует общий solver/drag и автоматический выбор цели.
+Базовый sparse presentation layer уже существует, но ещё не имеет отдельного
+пользовательского layout editor.
 Эта карточка объединяет их в одну пользовательскую функцию: отдельно
 реализовать autorecord без reconciliation опасно, а relayout без фактического
 замыкания графа не решает исходную задачу.
@@ -685,9 +691,11 @@ Continuous toggle нельзя показывать до завершения с
 - Stop всегда доступен и не удаляет уже записанные данные;
 - Settings и mapper toggle показывают одно session state.
 
-## Критерии готовности
+## Критерии готовности общего workflow
 
-Функция считается готовой, когда пользователь может на пустой карте:
+Текущий осторожный single-player срез закрывает пункты 1, 3, 4 и 6–9 ниже для
+одного незавершённого шага. Пункт 2 в форме непрерывной цепочки и пункт 5 ещё
+остаются backlog. Полный workflow считается готовым, когда пользователь может:
 
 1. поставить green anchor и включить autorecord;
 2. пройти новые комнаты, видя их provisional status;
