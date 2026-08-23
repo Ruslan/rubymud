@@ -32,6 +32,14 @@ func TestMCPMapWalkToolsListed(t *testing.T) {
 			t.Errorf("tools/list missing %s", name)
 		}
 	}
+	path, ok := seen["mud_path"]
+	if !ok {
+		t.Fatal("tools/list missing mud_path")
+	}
+	pathDescription := path["description"].(string)
+	if !strings.Contains(pathDescription, "start it with mud_map_walk") || strings.Contains(pathDescription, "mud_map_walk_start") {
+		t.Errorf("mud_path recommends a non-shipped walk tool: %q", pathDescription)
+	}
 	start := seen["mud_map_walk"]["inputSchema"].(map[string]any)
 	if required := start["required"].([]string); len(required) != 1 || required[0] != "to" {
 		t.Errorf("mud_map_walk required = %#v, want [to]", required)

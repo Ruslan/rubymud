@@ -312,7 +312,8 @@ func TestMCPPathWarnsThatDelayedOpeningsNeedServerWalk(t *testing.T) {
 		OpenAction: "повернуть рычаг", OpenDelayMS: 2000, Cells: 1,
 	}}})
 	if isError || !strings.Contains(text, "do NOT send as one script") ||
-		!strings.Contains(text, "Use mud_map_walk_start") ||
+		!strings.Contains(text, "Use mud_map_walk") ||
+		strings.Contains(text, "mud_map_walk_start") ||
 		!strings.Contains(text, "WAIT 2000 ms after opening") {
 		t.Fatalf("delayed MCP path is unsafe or incomplete: %q", text)
 	}

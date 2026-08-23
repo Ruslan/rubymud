@@ -502,7 +502,7 @@ func formatPath(targetDesc string, res mapper.PathResult) (string, bool) {
 	sb.WriteString("\n")
 	if delayedOpenings > 0 {
 		sb.WriteString("Commands (diagnostic only; do NOT send as one script): " + strings.Join(cmds, "; ") + "\n")
-		sb.WriteString(fmt.Sprintf("This route has %d delayed opening(s), %d ms total. Use mud_map_walk_start so the server paces them safely.\n", delayedOpenings, totalOpenDelayMS))
+		sb.WriteString(fmt.Sprintf("This route has %d delayed opening(s), %d ms total. Use mud_map_walk so the server paces them safely.\n", delayedOpenings, totalOpenDelayMS))
 	} else {
 		sb.WriteString("Commands: " + strings.Join(cmds, "; ") + "\n")
 	}

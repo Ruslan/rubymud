@@ -576,7 +576,7 @@ func (s *Server) mcpListTools() any {
 			},
 			map[string]any{
 				"name":        "mud_path",
-				"description": "Route from the current position (or a given 'from') to a target: to_zone (a lowest-cost room in a zone), to:{zone,x,y,l}, or to_hint (a lowest-cost room whose hint contains the text). Output is an ordered list of canonical English direction/seam commands, command count, total weight, seam-crossing flags, pipe-run cell annotations, and known death-trap/door warnings. A route with delayed opening actions marks the list diagnostic-only: start it with mud_map_walk_start so the server preserves pauses; do not flatten it into mud_send_command. Refuses with isError when position is lost (red) — re-anchor with mud_anchor_here first. An omitted session_id defaults to the first session.",
+				"description": "Route from the current position (or a given 'from') to a target: to_zone (a lowest-cost room in a zone), to:{zone,x,y,l}, or to_hint (a lowest-cost room whose hint contains the text). Output is an ordered list of canonical English direction/seam commands, command count, total weight, seam-crossing flags, pipe-run cell annotations, and known death-trap/door warnings. A route with delayed opening actions marks the list diagnostic-only: start it with mud_map_walk so the server preserves pauses; do not flatten it into mud_send_command. Refuses with isError when position is lost (red) — re-anchor with mud_anchor_here first. An omitted session_id defaults to the first session.",
 				"inputSchema": map[string]any{
 					"type": "object",
 					"properties": map[string]any{
