@@ -213,10 +213,10 @@ func BenchmarkBuildIndexCorpus(b *testing.B) {
 	}
 }
 
-// BenchmarkBuildIndexWithEdgesCorpus is the PRODUCTION path since the edge
-// materialization: rooms and map_edges rows both come from SQLite (fingerprints
-// stored, edges stored), and the build only folds the rows onto the rooms. This is
-// the number to compare against BenchmarkBuildIndexCorpusPrehashed — the same work
+// BenchmarkBuildIndexWithEdgesCorpus is the PRODUCTION path since edge
+// materialization: rooms and map_edges rows both come from SQLite and the build
+// recomputes derived fingerprints before folding the rows onto rooms. This is the
+// number to compare against BenchmarkBuildIndexCorpusRehashStored — the same work
 // as before edge materialization, plus attaching ~19k rows.
 func BenchmarkBuildIndexWithEdgesCorpus(b *testing.B) {
 	rooms, drafts := loadCorpusFixture(b)
@@ -234,12 +234,10 @@ func BenchmarkBuildIndexWithEdgesCorpus(b *testing.B) {
 	}
 }
 
-// BenchmarkBuildIndexCorpusPrehashed is the PRODUCTION-shaped variant: rooms read
-// from SQLite carry a stored fingerprint, so BuildIndex does not re-hash
-// hint+desc+exits (which dominates the artifact-shaped benchmark above, where the
-// reference JSON has no fingerprint column). This is the figure to watch for
-// index-build regressions.
-func BenchmarkBuildIndexCorpusPrehashed(b *testing.B) {
+// BenchmarkBuildIndexCorpusRehashStored proves a stored fingerprint does not
+// bypass current normalization. Re-hashing the ~8k-room corpus is intentionally
+// paid only when the immutable runtime index is rebuilt, never in the game loop.
+func BenchmarkBuildIndexCorpusRehashStored(b *testing.B) {
 	rooms, drafts := loadCorpusFixture(b)
 	for i := range rooms {
 		rooms[i].Fingerprint = "fp"

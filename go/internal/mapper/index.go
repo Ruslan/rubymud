@@ -212,9 +212,10 @@ func BuildIndexWithEdges(mapSetID int64, rooms []storage.Room, edges []storage.M
 }
 
 // buildRoomIndex builds the room half of the index (coord/fingerprint/tag maps).
-// It computes/keeps the fingerprint (recomputing from raw fields via the shared
-// mapimport function so resolve matches live events even if the stored value is
-// empty).
+// A stored fingerprint is derived cache data, not room identity authority. Always
+// recompute it from the raw fields via the shared mapimport function so a host
+// upgrade that tightens normalization can immediately match existing SQLite rows
+// without a destructive data migration.
 func buildRoomIndex(mapSetID int64, rooms []storage.Room) *Index {
 	idx := &Index{
 		MapSetID: mapSetID,
@@ -225,10 +226,7 @@ func buildRoomIndex(mapSetID int64, rooms []storage.Room) *Index {
 	}
 	for i := range rooms {
 		r := &rooms[i]
-		fp := r.Fingerprint
-		if fp == "" {
-			fp = mapimport.Fingerprint(r.Hint, r.Desc, r.Exits)
-		}
+		fp := mapimport.Fingerprint(r.Hint, r.Desc, r.Exits)
 		ir := &IndexRoom{
 			Coord:        Coord{Zone: r.Zone, X: r.X, Y: r.Y, L: r.L},
 			Tag:          r.Tag,

@@ -310,6 +310,22 @@ func TestTrackerFingerprintResolveUniqueHint(t *testing.T) {
 	}
 }
 
+func TestTrackerIndexRecomputesStaleStoredFingerprint(t *testing.T) {
+	room := mkRoom("Новое море", -9, 10, 0, 75, "У Нового Побережья",
+		"Вы в Новом море. Дальше на западе виднеются очертания острова Шелси.На\r\nюге раскинулись берега Нового Побережья.", "N E W", chMask("N", "E", "W"))
+	// Fingerprint is derived cache data. Existing SQLite rows may carry a value
+	// produced by an older normalization rule, so an index rebuild must not trust
+	// the persisted value over the room's source fields.
+	room.Fingerprint = "stale-fingerprint-from-older-host"
+
+	tr := NewTracker(buildTestIndex(1, []storage.Room{room}))
+	pos, _ := tr.Reconcile(ev("У Нового Побережья",
+		"Вы в Новом море. Дальше на западе виднеются очертания острова Шелси. На юге раскинулись берега Нового Побережья.", "N E W"))
+	if !pos.Valid || pos.Confidence != Green || pos.Coord != (Coord{"Новое море", -9, 10, 0}) {
+		t.Fatalf("stale stored fingerprint prevented live resync: %+v", pos)
+	}
+}
+
 func TestTrackerFingerprintResolveNonUniqueHintUniqueDesc(t *testing.T) {
 	// Two rooms share a hint but differ in desc => distinct fingerprints => the
 	// event with the matching desc resolves uniquely.

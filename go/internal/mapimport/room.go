@@ -94,6 +94,12 @@ func (r Room) ChMask() int {
 var wordRE = regexp.MustCompile(`[а-яёa-z0-9]+`)
 var parenRE = regexp.MustCompile(`\(([^)]*)\)`)
 var wsRE = regexp.MustCompile(`\s+`)
+var sentenceSpaceReplacer = strings.NewReplacer(
+	". ", ".",
+	"! ", "!",
+	"? ", "?",
+	"… ", "…",
+)
 
 // normExits parses an exits string into (canonical dirs, door dirs).
 // Parenthesised groups are doors.
@@ -287,7 +293,10 @@ func NormExits(exits string) (dirs []string, doors []string) {
 
 // computeFingerprint hashes normalized hint + desc + sorted exit dirs. Door
 // markers/parens are already stripped by normExits (edirs is dir letters only).
-// Text is NFC-normalized, trimmed, whitespace-collapsed, lowercased.
+// Text is NFC-normalized, trimmed, whitespace-collapsed, lowercased. Whitespace
+// immediately after sentence punctuation is ignored: old map imports sometimes
+// joined a wrapped line as "word.Next", while newer game text correctly prints
+// "word. Next". That typography must not turn the same room into a new identity.
 func computeFingerprint(hint, desc string, edirs []string) string {
 	h := normText(hint)
 	d := normText(desc)
@@ -302,10 +311,12 @@ func normText(s string) string {
 	s = norm.NFC.String(s)
 	s = strings.ToLower(s)
 	s = wsRE.ReplaceAllString(s, " ")
+	s = sentenceSpaceReplacer.Replace(s)
 	return strings.TrimSpace(s)
 }
 
 // NormText exposes the exact hint/desc normalization the fingerprint uses (NFC,
-// lowercase, whitespace-collapsed, trimmed) so callers comparing hints match the
-// fingerprint's notion of equality instead of forking a second variant.
+// lowercase, whitespace-collapsed, sentence-spacing-insensitive, trimmed) so
+// callers comparing hints match the fingerprint's notion of equality instead of
+// forking a second variant.
 func NormText(s string) string { return normText(s) }

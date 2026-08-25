@@ -293,6 +293,33 @@ func TestFingerprintDoorMarkersStripped(t *testing.T) {
 	}
 }
 
+func TestFingerprintIgnoresMissingSpaceAfterSentencePunctuation(t *testing.T) {
+	// Real map drift: the imported description joined a wrapped line as
+	// "Шелси.На", while the current server prints the corrected "Шелси. На".
+	// Sentence-separator whitespace is typography, not room identity.
+	stored := Fingerprint(
+		"У Нового Побережья",
+		"Вы в Новом море. Дальше на западе виднеются очертания острова Шелси.На\r\nюге раскинулись берега Нового Побережья.",
+		"N E W",
+	)
+	live := Fingerprint(
+		"У Нового Побережья",
+		"Вы в Новом море. Дальше на западе виднеются очертания острова Шелси. На юге раскинулись берега Нового Побережья.",
+		"N E W",
+	)
+	if stored != live {
+		t.Fatalf("sentence-spacing-only fingerprints differ:\n stored=%s\n live=%s", stored, live)
+	}
+	changed := Fingerprint(
+		"У Нового Побережья",
+		"Вы в Новом море. Дальше на востоке виднеются очертания острова Шелси. На юге раскинулись берега Нового Побережья.",
+		"N E W",
+	)
+	if stored == changed {
+		t.Fatal("semantic description change must still change the fingerprint")
+	}
+}
+
 func TestPipeRoomEmptyHint(t *testing.T) {
 	b := newTPF0("TMudRoom2")
 	b.boolProp("Pipe", true)
