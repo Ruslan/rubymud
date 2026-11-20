@@ -11,15 +11,15 @@ This repository is `rubymud`, a local-first MUD host and browser client.
 ## Domain Documentation
 Read these guides to understand specific project domains:
 
-- **[SQLite & Storage](file:///home/ru/rubymud/docs/agents/sqlite.md)**: Extraction queries, schema overview, and debugging workflow.
-- **[Engine & VM](file:///home/ru/rubymud/docs/agents/vm.md)**: TinTin++ compatibility, command processing pipeline, triggers, and aliases.
-- **[Profiles & Layering](file:///home/ru/rubymud/docs/agents/profiles.md)**: Multiple profile support and rule resolution logic.
-- **[Colors & Overlays](file:///home/ru/rubymud/docs/agents/colors.md)**: ANSI processing and the structured overlay model.
-- **[UI & Frontend](file:///home/ru/rubymud/docs/agents/ui.md)**: Vanilla TS rendering, Svelte 5 settings app, and WebSocket communication.
-- **[Transport Layer](file:///home/ru/rubymud/docs/agents/transport.md)**: Telnet, MCCP2 compression, WebSockets, and session restoration.
-- **[Performance & Batching](file:///home/ru/rubymud/docs/agents/performance.md)**: Low-latency design, backend batching, and UI pruning.
-- **[Testing & Quality](file:///home/ru/rubymud/docs/agents/testing.md)**: TDD approach, repro-first rule, and test layers.
-- **[MCP (Model Context Protocol)](file:///home/ru/rubymud/docs/agents/mcp.md)**: Tools and integration for AI agents.
+- **[SQLite & Storage](docs/agents/sqlite.md)**: Extraction queries, schema overview, and debugging workflow.
+- **[Engine & VM](docs/agents/vm.md)**: TinTin++ compatibility, command processing pipeline, triggers, and aliases.
+- **[Profiles & Layering](docs/agents/profiles.md)**: Multiple profile support and rule resolution logic.
+- **[Colors & Overlays](docs/agents/colors.md)**: ANSI processing and the structured overlay model.
+- **[UI & Frontend](docs/agents/ui.md)**: Vanilla TS rendering, Svelte 5 settings app, and WebSocket communication.
+- **[Transport Layer](docs/agents/transport.md)**: Telnet, MCCP2 compression, WebSockets, and session restoration.
+- **[Performance & Batching](docs/agents/performance.md)**: Low-latency design, backend batching, and UI pruning.
+- **[Testing & Quality](docs/agents/testing.md)**: TDD approach, repro-first rule, and test layers.
+- **[MCP (Model Context Protocol)](docs/agents/mcp.md)**: Tools and integration for AI agents.
 
 ## Critical Principles
 When working on this codebase, you **MUST** follow these rules:
