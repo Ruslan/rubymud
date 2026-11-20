@@ -30,6 +30,10 @@ This ensures that the bug is truly understood and will not regress.
 - Located in `scripts/smoke_test`.
 - Used to verify that the server starts and basic functions (like DB opening) work in a real environment.
 
+### 4. Live E2E
+- `make e2e-mapper-reconciliation`: loopback-only fake MUD, its own temp SQLite and a random port.
+- Any throwaway mudhost runs from `bin/mudhost` on a non-live port against a DB **copy**. Never restart or stop the live `rubymud` systemd unit for a test; that is `make deploy`'s job only (see `AGENTS.md`, Live Service).
+
 ## Best Practices
 - **Mocking**: Use interfaces to mock external dependencies like the database or network.
 - **Table-driven tests**: Preferred for complex logic like command parsing or expression evaluation.

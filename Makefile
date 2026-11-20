@@ -9,8 +9,13 @@ LISTEN ?=
 DB_PATH ?= data/mudhost.db
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || printf 'dev')
 GO_LDFLAGS ?= -X rubymud/go/internal/buildinfo.Version=$(VERSION)
+# Live systemd --user service. It runs a deployed copy (DEPLOY_BIN), never
+# bin/mudhost, so builds and E2E runs cannot change what the live server runs.
+SERVICE ?= rubymud
+DEPLOY_BIN ?= $(HOME)/.local/lib/rubymud/mudhost
+SERVICE_UNIT := $(HOME)/.config/systemd/user/$(SERVICE).service
 
-.PHONY: help run build go-build test tidy db-init db-schema ui docker-build docker-run smoke-tzdata e2e-mapper-reconciliation
+.PHONY: help run build go-build test tidy db-init db-schema ui docker-build docker-run smoke-tzdata e2e-mapper-reconciliation service-install deploy service-logs
 
 help:
 	@printf "Targets:\n"
@@ -26,6 +31,9 @@ help:
 	@printf "  make docker-run                          Run protected local Docker container (requires inherited MUDHOST_BASIC_AUTH_* env)\n"
 	@printf "  make smoke-tzdata                        Verify timezones persist in the alpine runtime image\n"
 	@printf "  make e2e-mapper-reconciliation           Run isolated five-room mapper live E2E\n"
+	@printf "  make service-install                     Install and enable the systemd --user unit\n"
+	@printf "  make deploy                              Build, install to DEPLOY_BIN, restart the live service\n"
+	@printf "  make service-logs                        Follow the live service journal\n"
 
 .PHONY: ui-install
 
@@ -98,3 +106,25 @@ smoke-tzdata:
 # never uses data/mudhost.db.
 e2e-mapper-reconciliation:
 	scripts/e2e_mapper_reconciliation
+
+# Writes the systemd --user unit for this checkout and enables it. Does not
+# start or restart anything; `make deploy` ships the binary and (re)starts it.
+service-install:
+	mkdir -p "$(dir $(SERVICE_UNIT))"
+	sed -e 's|@WORKDIR@|$(CURDIR)|g' -e 's|@BIN@|$(DEPLOY_BIN)|g' \
+		scripts/systemd/rubymud.service.in > "$(SERVICE_UNIT)"
+	systemctl --user daemon-reload
+	systemctl --user enable "$(SERVICE)"
+
+# The only target that touches the live server. The copy is atomic (install to
+# a temp name, then rename) so a crash restart never sees a half-written binary.
+deploy: build
+	mkdir -p "$(dir $(DEPLOY_BIN))"
+	install -m 0755 "$(BIN_DIR)/$(BIN_NAME)" "$(DEPLOY_BIN).new"
+	mv -f "$(DEPLOY_BIN).new" "$(DEPLOY_BIN)"
+	systemctl --user restart "$(SERVICE)"
+	@"$(DEPLOY_BIN)" --version
+	@systemctl --user --no-pager --lines=5 status "$(SERVICE)"
+
+service-logs:
+	journalctl --user -u "$(SERVICE)" -f

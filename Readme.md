@@ -85,6 +85,24 @@ This will:
 
 Open `http://localhost:8080` in your browser.
 
+## Running As A systemd Service
+
+On a Linux host you can keep mudhost running as a systemd **user** service, so it starts at boot and restarts after a crash:
+
+```bash
+loginctl enable-linger "$USER"   # once, so user services run without a login session
+make service-install             # write ~/.config/systemd/user/rubymud.service and enable it
+make deploy                      # build, install the binary, (re)start the service
+make service-logs                # follow the journal
+```
+
+- The service runs a deployed copy of the binary (`DEPLOY_BIN`, default `~/.local/lib/rubymud/mudhost`), not `bin/mudhost`. `make build`, tests and E2E runs rebuild `bin/mudhost` without affecting the running server; only `make deploy` ships a new version.
+- It uses `data/mudhost.db` in the checkout and the listener saved in Settings → Web Access (first-run default is loopback-only).
+- Optional `MUDHOST_*` variables (MCP, basic auth) go in `~/.config/rubymud/env`, one `KEY=value` per line; run `systemctl --user restart rubymud` after editing it.
+- Like `make run`, startup connects the `default` session, so every `make deploy` reconnects the game session.
+- Stop the service (`systemctl --user stop rubymud`) before using `make run`: both want the same listener and database.
+- `SERVICE` and `DEPLOY_BIN` can be overridden on the `make` command line.
+
 ## Docker
 
 You can also run the application using Docker. A multi-stage `Dockerfile` is provided which builds the Go backend and Node.js frontend into a lightweight Alpine image.
@@ -156,6 +174,8 @@ Run Go tests:
 ```bash
 make test
 ```
+
+Tests and E2E runs never touch a running service: the mapper E2E (`make e2e-mapper-reconciliation`) uses its own loopback fake MUD, a temporary database and a random port.
 
 ## Notes
 
