@@ -3,6 +3,7 @@ package mapper
 import (
 	"strconv"
 	"strings"
+	"time"
 
 	"rubymud/go/internal/mapimport"
 )
@@ -65,6 +66,8 @@ type Position struct {
 	//   step 5a hint agrees, exits diverged (🟡 at the assumed cell)
 	//   step 5c predicted cell absent from the map (🟡 at the dead-reckoned coord)
 	// and after Anchor(), where a human explicitly asserts "I am in this cell".
+	// Step 0 (nothing moved: a look with an empty queue) leaves the position, and
+	// with it this flag, exactly as it was.
 	//
 	// False everywhere else: 2-ambiguous, 4 (hint-less), 5b (text veto), 6 (true
 	// loss), and with no index at all.
@@ -75,10 +78,59 @@ type Position struct {
 // concurrent use; the owning session serializes access (parser feed and move
 // detection both run under the session's coordination). It holds the active
 // set's index and the FIFO pending-moves queue.
+// lookReplyWindow bounds how long after a player command a room block may still
+// be read as that command's reply (a look). Past it, the block is read exactly
+// as if nothing had been sent — as a move — which is the safe direction: it can
+// cost a look on a very laggy link its "nothing moved" reading (the pre-rule
+// behaviour: a jump to an identical neighbour or a 🔴), but it can never let a
+// forgotten chat line hold a position the server has since moved. Three seconds
+// is far above a normal round trip (tens to a few hundred milliseconds in the
+// field logs) and well below the pace at which a player is dragged around.
+const lookReplyWindow = 3 * time.Second
+
 type Tracker struct {
 	idx     *Index
 	pos     Position
 	pending []string // canonical direction letters awaiting confirmation
+
+	// lastFP is the fingerprint of the room event that produced the current
+	// position, kept only while that event described the cell (never on 🔴). It lets a repeat of the same block with nothing queued (a look)
+	// be recognised as "nothing moved" even where the map has no room to compare
+	// against — the unrecorded cell «Записать комнату» is about to write. Anything
+	// that moves the position by fiat (anchor, index reset, invalidation) clears it.
+	lastFP string
+
+	// commandSent / commandAt: the player sent a command that is not a queued
+	// move (a look, an action, chat) after the last queued move, at commandAt.
+	// Only a block answering such a command can be a look; one that arrives with
+	// nothing outstanding (following, an escort, a server push) is a move by
+	// definition. Set by NoteCommand; spent by PushMove (the server replies in
+	// order, so the command was answered before the move's block), by the next
+	// block that arrives with nothing queued, and by lookReplyWindow.
+	commandSent bool
+	commandAt   time.Time
+	// answering is commandSent && within lookReplyWindow, fixed once per
+	// reconcile so every rule in one reconcile reads the same answer.
+	answering bool
+
+	// departed is the cell the last consumed queued step left, recorded only
+	// when the block that consumed it answered nothing but that step (no command
+	// sent after its push). Then the server demonstrably accepted the step, so a
+	// look that merely reprints the same block can never put us back there (see
+	// "same block again"). A step consumed by a look's block may be a phantom — a
+	// refusal the tracker did not recognise — and proves nothing.
+	departed   Coord
+	departedOK bool
+
+	// now is the tracker's clock: time.Now unless a test injects one.
+	now func() time.Time
+}
+
+func (t *Tracker) clock() time.Time {
+	if t.now != nil {
+		return t.now()
+	}
+	return time.Now()
 }
 
 // NewTracker builds a tracker over an index (may be nil => everything degrades
@@ -93,6 +145,8 @@ func (t *Tracker) SetIndex(idx *Index) {
 	t.idx = idx
 	t.pos = Position{Confidence: Red, Reason: "index rebuilt — position reset"}
 	t.pending = t.pending[:0]
+	t.lastFP = ""
+	t.departedOK = false
 }
 
 // SetIndexPreservingPosition swaps the index to a rebuilt one (a topology write
@@ -148,6 +202,28 @@ func (t *Tracker) Position() Position { return t.pos }
 func (t *Tracker) Invalidate(reason string) {
 	t.pos = Position{Confidence: Red, Reason: reason}
 	t.pending = t.pending[:0]
+	t.lastFP = ""
+	t.departedOK = false
+}
+
+// NoteCommand records that the player sent a command that is not a queued move
+// — anything written to the game that the move detector did not recognise as a
+// direction. The session calls it from its ordinary-command write path (input,
+// keys, aliases, triggers, MCP); mapper-owned writes (route hops, the scan
+// probe) and telnet negotiation do not, because none of them can be a look.
+//
+// It is the only thing that lets a block arriving with an empty queue be read as
+// "nothing moved", and only while the command is outstanding: sent after the
+// last queued move, not yet answered by a block, and no older than
+// lookReplyWindow. The signal is deliberately coarse inside that window: it
+// cannot tell a look from chat typed while the server is moving the player, nor
+// from a command that moves without being a recognised direction (a typed flee, a
+// multi-word passage command, an unknown abbreviation). Those residual cases
+// land in an identical room as "nothing moved"; everything else about them is
+// unchanged.
+func (t *Tracker) NoteCommand() {
+	t.commandSent = true
+	t.commandAt = t.clock()
 }
 
 // PendingCount returns the number of unconfirmed moves in the FIFO queue.
@@ -175,6 +251,10 @@ func (t *Tracker) PushMove(dir string) {
 		return
 	}
 	t.pending = append(t.pending, dir)
+	// Replies come in order: whatever was sent before this move is answered
+	// before the move's own block, so it can no longer be what a later block
+	// answers. A look typed after the move ("e;см") is noted after this.
+	t.commandSent = false
 	if len(t.pending) > pendingCap {
 		t.pending = t.pending[len(t.pending)-pendingCap:]
 	}
@@ -184,6 +264,10 @@ func (t *Tracker) PushMove(dir string) {
 // / mud_set_active default). It resolves to a known room if one exists at the
 // coord; confidence becomes green and the pending queue is flushed.
 func (t *Tracker) Anchor(c Coord) (Position, bool) {
+	// The anchored cell was asserted, not observed: no earlier block describes it,
+	// and no step led here.
+	t.lastFP = ""
+	t.departedOK = false
 	if t.idx == nil {
 		t.pos = Position{Valid: true, Coord: c, Confidence: Yellow, Reason: "no active map set index",
 			EventDescribesCell: true}
@@ -278,6 +362,68 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 		matchFP = ""
 	}
 	evExits, _ := mapimport.NormExits(ev.Exits)
+	from, queued := t.pos.Coord, len(t.pending)
+	t.answering = t.commandSent && t.clock().Sub(t.commandAt) <= lookReplyWindow
+	defer t.noteEvent(matchFP, from, queued)
+
+	// sameBlock: this block may be a look that reprints the block which put us
+	// on the current cell. If a step put us here and nothing but that step was
+	// outstanding when it was consumed, its cell of departure is off limits to
+	// every search below — the server accepted the step that left it.
+	var except *Coord
+	if t.lookInPlace(matchFP) && matchFP == t.lastFP && t.departedOK {
+		d := t.departed
+		except = &d
+	}
+
+	// 0) NOTHING MOVED. A block that answers a command the player sent (not a
+	//    queued move) and is identical to the MAPPED cell we hold is a look or a
+	//    re-print after an action, and the position stands as it was.
+	//
+	//    Every search below exists to explain a block that is NOT where we are
+	//    (following, teleport, a stale cell), so none of them looks at the current
+	//    cell. Reaching them with a look was harmless only while the room was
+	//    unique in the map: the global resolve happened to land back on it. On a
+	//    map that repeats rooms word for word (a monastery's cells and corridors)
+	//    the same look went 🔴 when an identical cell existed anywhere and jumped
+	//    🟢 into an identical NEIGHBOUR.
+	//
+	//    Only a block that answers an outstanding command counts: one sent after
+	//    the last queued move, not yet answered, at most lookReplyWindow ago. A
+	//    block with nothing outstanding (following, an NPC escort, an automatic
+	//    flee, a server push, or a command long since answered) cannot be a look
+	//    and skips this step: the searches decide it exactly as they always did.
+	//    What remains ambiguous is a block that does answer some command but was
+	//    produced by a move the tracker did not see — chat or a trigger's command
+	//    sent within the window while the server moves the player, or a command
+	//    that moves without being a recognised direction (a typed flee, a
+	//    multi-word passage command, an unknown abbreviation). If that move lands
+	//    in a word-for-word copy of the current cell, it is taken as "nothing
+	//    moved" and the position stays one cell behind; a different room is
+	//    unaffected. See NoteCommand.
+	//
+	//    Only a cell the map HAS can confirm us here. On unrecorded ground the
+	//    coordinate is our own dead-reckoned guess, and a mapped cell matching the
+	//    block is better evidence than that guess — that is how a position pushed
+	//    off course (a step the server refused without the tracker noticing)
+	//    finds its way back. That case keeps the searches below and is decided
+	//    only where they find nothing (see "same block again" before 5.5).
+	//
+	//    A 🔴 position is not a claim that we are there, so it is never revived
+	//    here (lookInPlace excludes it); recovery stays with the fingerprint
+	//    resync and manual anchors.
+	if t.lookInPlace(matchFP) {
+		if current := t.idx.Room(t.pos.Coord); current != nil && matchesFingerprint(current, matchFP) {
+			// An exit diff the position still carries (a mutable hatch that was
+			// open, exits that diverged on arrival) is no longer what the server
+			// prints: the cell now reads exactly as mapped, which is the
+			// confirmation that diff stood in for.
+			if len(t.pos.ExitsAddedLive)+len(t.pos.ExitsRemovedMap) > 0 {
+				t.pos = Position{Valid: true, Coord: current.Coord, Confidence: Green, EventDescribesCell: true}
+			}
+			return
+		}
+	}
 
 	// A room may explicitly declare individual exits as mutable. Only those
 	// directions are allowed to differ while the stable name+description still
@@ -333,7 +479,7 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 	// 2) Following / teleport with an empty queue: search neighbors (incl seams)
 	//    for a cell matching the event.
 	if t.pos.Valid && len(t.pending) == 0 {
-		nb, ambiguous := t.neighborMatch(t.pos.Coord, matchFP, true)
+		nb, ambiguous := t.neighborMatch(t.pos.Coord, matchFP, true, except)
 		if nb != nil {
 			t.pos = Position{Valid: true, Coord: nb.Coord, Confidence: Green, EventDescribesCell: true}
 			return
@@ -363,7 +509,7 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 	//    green-anchor; a non-neighbor unique-hint match is a twin/teleport
 	//    suspicion, handled at 🟡/🔴 below — never 🟢.
 	if ev.Hint != "" && !(t.pos.Valid && len(t.pending) > 0) {
-		if r := t.idx.resolveFingerprint(fp); r != nil {
+		if r := t.idx.resolveFingerprint(fp); r != nil && (except == nil || r.Coord != *except) {
 			t.pos = Position{Valid: true, Coord: r.Coord, Confidence: Green, EventDescribesCell: true}
 			t.pending = t.pending[:0]
 			return
@@ -513,6 +659,16 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 		return
 	}
 
+	// SAME BLOCK AGAIN. Nothing in the map explained this block — no neighbour, no
+	//    unique fingerprint — but it is the very block that put us on this cell, and
+	//    no move is queued: a look on ground the map does not have yet (or whose
+	//    recorded exits differ). Losing the position here would throw away the 🟡
+	//    "edge/cell not in map" state «Записать комнату» writes from and force the
+	//    player to walk out and back in; nothing moved, so nothing changes.
+	if t.lookInPlace(matchFP) && matchFP == t.lastFP {
+		return
+	}
+
 	// 5.5) ADJACENCY FALLBACK. The graph knew of no neighbour matching this event and
 	//    no unique fingerprint resolved it, but the cell next door does match. Take
 	//    it — at 🟡, never 🟢: "I think you are here, the graph does not confirm it."
@@ -534,7 +690,7 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 	//    It runs AFTER the unique-fingerprint resync above on purpose: a unique
 	//    fingerprint is hard evidence and deserves its 🟢; adjacency is a guess.
 	if t.pos.Valid && len(t.pending) == 0 {
-		nb, ambiguous := t.neighborMatch(t.pos.Coord, matchFP, false)
+		nb, ambiguous := t.neighborMatch(t.pos.Coord, matchFP, false, except)
 		if nb != nil {
 			t.pos = Position{Valid: true, Coord: nb.Coord, Confidence: Yellow,
 				Reason:             "assumed " + coordStr(nb.Coord) + " — adjacent and matching, but the map records no way there",
@@ -559,6 +715,56 @@ func (t *Tracker) reconcile(ev RoomEvent) {
 	}
 	t.pos = Position{Valid: false, Confidence: Red, Reason: "no resolve — unknown position"}
 	t.pending = t.pending[:0]
+}
+
+// lookInPlace reports whether this block can be a look at the cell we hold: it
+// answers a command the player sent after the last queued move and within
+// lookReplyWindow, no move is queued, the position rests on a
+// block or an anchor that describes the cell, and the block carries an identity
+// at all.
+//
+// A 🔴 position is never a look target, and needs no check of its own here:
+// every 🔴 the tracker produces clears EventDescribesCell (the lost coord is held
+// for display only). TestTrackerLookInPlaceNeverRevivesALostPosition pins that
+// invariant on the real loss paths.
+func (t *Tracker) lookInPlace(matchFP string) bool {
+	return t.answering && t.pos.Valid && len(t.pending) == 0 &&
+		t.pos.EventDescribesCell && matchFP != ""
+}
+
+// noteEvent runs after every reconcile. It records which block the position now
+// rests on (only a block that describes the held cell — never a 🔴, see
+// lookInPlace — can later stand for "the same block again"), which cell a
+// consumed step left, and whether the outstanding command has been answered: a
+// block that arrived with nothing queued answers it; one consumed as a queued
+// step does not, so "e;см" still reads the second block as a look.
+//
+// A step's departure is recorded only when no command was sent after its push
+// (commandSent is spent by PushMove, so it is set here exactly when one was):
+// otherwise the consuming block may be a look's reply and the step a phantom
+// the server refused in words the tracker does not know.
+//
+// The departure is deliberately NOT cleared when the position changes without a
+// step. It is consulted only when a look reprints the very block the position
+// rests on, and a position reached without a step rests on a MAPPED cell whose
+// own fingerprint is that block — step 0 settles that look before the departure
+// is ever read.
+func (t *Tracker) noteEvent(matchFP string, from Coord, queued int) {
+	if t.pos.Valid && t.pos.EventDescribesCell {
+		t.lastFP = matchFP
+	} else {
+		t.lastFP = ""
+	}
+	if queued > 0 && len(t.pending) == queued-1 {
+		if t.commandSent {
+			t.departedOK = false
+		} else {
+			t.departed, t.departedOK = from, true
+		}
+	}
+	if queued == 0 {
+		t.commandSent = false
+	}
 }
 
 // deniedFace reports whether the face leaving c in dir carries a hand-drawn
@@ -745,7 +951,7 @@ func seamDir(cmd string) string {
 // A cell with no room in the index is never a candidate; when the tracker stands
 // on a cell that is not in the map at all there are no rows to read, so even the
 // graph mode falls back to raw deltas for that one hop.
-func (t *Tracker) neighborMatch(c Coord, fingerprint string, graphOnly bool) (match *IndexRoom, ambiguous bool) {
+func (t *Tracker) neighborMatch(c Coord, fingerprint string, graphOnly bool, except *Coord) (match *IndexRoom, ambiguous bool) {
 	room := t.idx.Room(c)
 	var cands []*IndexRoom
 	// grid neighbors, in a fixed direction order.
@@ -767,6 +973,9 @@ func (t *Tracker) neighborMatch(c Coord, fingerprint string, graphOnly bool) (ma
 				}
 			}
 		}
+		if except != nil && nc == *except {
+			continue
+		}
 		if nb := t.idx.Room(nc); nb != nil && matchesFingerprint(nb, fingerprint) {
 			cands = appendUniqueRoom(cands, nb)
 		}
@@ -775,7 +984,7 @@ func (t *Tracker) neighborMatch(c Coord, fingerprint string, graphOnly bool) (ma
 	// Dead seams have To=nil and are not graph neighbours.
 	if room != nil {
 		for _, e := range room.seams {
-			if e.Passable && e.To != nil {
+			if e.Passable && e.To != nil && (except == nil || *e.To != *except) {
 				if tr := t.idx.Room(*e.To); tr != nil && matchesFingerprint(tr, fingerprint) {
 					cands = appendUniqueRoom(cands, tr)
 				}

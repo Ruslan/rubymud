@@ -246,11 +246,34 @@ func (s *Session) sendCommandWithTrace(command string, source string, publishMCP
 // reaches the wire, so a sequential MUD's scan response can only be discarded
 // through its own boundary and cannot consume the later command's response.
 // Telnet negotiation bytes deliberately do not use this command protocol.
+//
+// It is also where the mapper learns that the player sent something that is not
+// a queued move (a look, an action, chat, a bare Enter): every caller writes such
+// a command, from input, keys, aliases, triggers or MCP alike. The note is taken
+// before the parser gate opens, so a fast response cannot be reconciled first.
 func (s *Session) writeCommandPayload(payload []byte) (int, error) {
 	s.mapWalkIOMu.Lock()
 	defer s.mapWalkIOMu.Unlock()
 	s.cancelMapScanForOutbound()
-	return s.conn.Write(payload)
+	n, err := s.conn.Write(payload)
+	if err == nil && n == len(payload) {
+		s.noteMapCommandSent()
+	}
+	return n, err
+}
+
+// noteMapCommandSent tells the tracker that the next block arriving with an
+// empty move queue may answer a player command (and so may be a look) rather
+// than a move the server made on its own — provided no move is queued after it
+// and the block comes within mapper.lookReplyWindow. Mapper-owned writes (route
+// hops, the scan probe) and the player's scan command, whose reply the capture
+// swallows, never call it. Caller holds mapWalkIOMu, not mapMu.
+func (s *Session) noteMapCommandSent() {
+	s.mapMu.Lock()
+	if s.mapTracker != nil {
+		s.mapTracker.NoteCommand()
+	}
+	s.mapMu.Unlock()
 }
 
 // reserveManualMapMove claims the physical-hop slot before any history or UI

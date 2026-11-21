@@ -264,6 +264,9 @@ func (s *Session) writeManualMapScan(command string) (bool, error) {
 			s.clearMapScanCaptureLocked()
 		}
 	} else if s.mapScanCapture != nil && s.mapScanCapture.token == job.token {
+		// No tracker NoteCommand here, unlike writeCommandPayload: the capture
+		// consumes every reply line up to its boundary, so no room block can
+		// answer this command, and an outstanding note would only go stale.
 		token := job.token
 		s.mapScanTimer = time.AfterFunc(mapScanTimeout, func() { s.expireMapScan(token) })
 	}
