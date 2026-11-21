@@ -4,6 +4,9 @@ set -eu
 ROOT=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 WS_URL=${1:-ws://localhost:8080/ws}
 COMMAND=${2:-look}
+# Total time allowed for the restore handshake, as a Go duration. Restoring a
+# large real database can take a few seconds before the first message arrives.
+SMOKE_TIMEOUT=${SMOKE_TIMEOUT:-15s}
 TMPDIR=$(mktemp -d)
 trap 'rm -rf "$TMPDIR"' EXIT
 
@@ -20,12 +23,16 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 3 {
-		log.Fatalf("usage: ws_smoke_test <ws-url> <command>")
+	if len(os.Args) < 4 {
+		log.Fatalf("usage: ws_smoke_test <ws-url> <command> <timeout>")
 	}
 
 	url := os.Args[1]
 	command := os.Args[2]
+	timeout, err := time.ParseDuration(os.Args[3])
+	if err != nil || timeout <= 0 {
+		log.Fatalf("invalid SMOKE_TIMEOUT %q: want a positive Go duration such as 15s", os.Args[3])
+	}
 
 	conn, _, err := websocket.DefaultDialer.Dial(url, nil)
 	if err != nil {
@@ -37,10 +44,12 @@ func main() {
 
 	seenRestoreBegin := false
 	seenRestoreEnd := false
-	deadline := time.Now().Add(5 * time.Second)
+	// One budget for the whole restore: a single slow read (a large restore
+	// before the first frame) may use all of it.
+	deadline := time.Now().Add(timeout)
 
 	for time.Now().Before(deadline) {
-		if err := conn.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		if err := conn.SetReadDeadline(deadline); err != nil {
 			log.Fatalf("set read deadline: %v", err)
 		}
 
@@ -87,4 +96,4 @@ func indexOf(s, substr string) int {
 EOF
 
 cd "$ROOT/go"
-go run "$TMPDIR/ws_smokecheck.go" "$WS_URL" "$COMMAND"
+go run "$TMPDIR/ws_smokecheck.go" "$WS_URL" "$COMMAND" "$SMOKE_TIMEOUT"
